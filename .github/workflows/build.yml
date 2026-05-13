@@ -1,0 +1,153 @@
+name: Build and Release Windows App
+
+on:
+  push:
+    branches: [ dev ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    env:
+      APP_NAME: TradeMulti
+      MAJOR: 1
+      MINOR: 0
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup MSVC build tools
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Normalize .NET solution platform
+        shell: pwsh
+        run: |
+          echo "Platform=Any CPU" >> $env:GITHUB_ENV
+
+      - name: Generate version
+        shell: pwsh
+        run: |
+          $version="${{ env.MAJOR }}.${{ env.MINOR }}.${{ github.run_number }}"
+          echo "VERSION=$version" >> $env:GITHUB_ENV
+          echo "VERSIONED_EXE=${{ env.APP_NAME }}-$version.exe" >> $env:GITHUB_ENV
+          echo "LATEST_EXE=${{ env.APP_NAME }}-latest.exe" >> $env:GITHUB_ENV
+          echo "VERSIONED_ZIP=${{ env.APP_NAME }}-$version-portable-win-x64.zip" >> $env:GITHUB_ENV
+          echo "LATEST_ZIP=${{ env.APP_NAME }}-latest-portable-win-x64.zip" >> $env:GITHUB_ENV
+          echo "TAG=v$version" >> $env:GITHUB_ENV
+
+      - name: Restore dependencies
+        run: dotnet restore TradeDesktop.sln -p:Platform="Any CPU"
+
+      - name: Build native mt5engine C API DLL (x64)
+        shell: cmd
+        run: |
+          if not exist native-build mkdir native-build
+          cl /nologo /std:c++17 /EHsc /DWIN32 /D_WINDOWS /D_USRDLL /D_WINDLL /DUNICODE /D_UNICODE /I native/mt5engine-capi /c native/mt5engine-capi/engine.cpp /Fo:native-build/engine.obj
+          cl /nologo /std:c++17 /EHsc /DWIN32 /D_WINDOWS /D_USRDLL /D_WINDLL /DUNICODE /D_UNICODE /I native/mt5engine-capi /c native/mt5engine-capi/c_api.cpp /Fo:native-build/c_api.obj
+          link /nologo /DLL /OUT:native-build/mt5engine_capi.dll native-build/engine.obj native-build/c_api.obj user32.lib kernel32.lib comctl32.lib
+
+      - name: Validate native DLL output
+        shell: pwsh
+        run: |
+          if (!(Test-Path "native-build/mt5engine_capi.dll")) {
+            throw "Native DLL not found: native-build/mt5engine_capi.dll"
+          }
+
+      - name: Publish app
+        shell: pwsh
+        run: |
+          dotnet publish TradeDesktop.App/TradeDesktop.App.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            /p:PublishSingleFile=true `
+            /p:IncludeNativeLibrariesForSelfExtract=true `
+            /p:Version=${{ env.VERSION }} `
+            /p:AssemblyVersion=${{ env.VERSION }} `
+            /p:FileVersion=${{ env.VERSION }} `
+            -o publish
+
+      - name: Publish app (portable folder for fallback)
+        shell: pwsh
+        run: |
+          dotnet publish TradeDesktop.App/TradeDesktop.App.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            /p:PublishSingleFile=false `
+            /p:Version=${{ env.VERSION }} `
+            /p:AssemblyVersion=${{ env.VERSION }} `
+            /p:FileVersion=${{ env.VERSION }} `
+            -o publish-portable
+
+      - name: Validate publish outputs
+        shell: pwsh
+        run: |
+          if (!(Test-Path "publish/${{ env.APP_NAME }}.exe")) {
+            throw "Single-file exe not found: publish/${{ env.APP_NAME }}.exe"
+          }
+
+          if (!(Test-Path "publish-portable/${{ env.APP_NAME }}.exe")) {
+            throw "Portable exe not found: publish-portable/${{ env.APP_NAME }}.exe"
+          }
+
+      - name: Bundle native DLL into publish outputs
+        shell: pwsh
+        run: |
+          Copy-Item "native-build/mt5engine_capi.dll" "publish/mt5engine_capi.dll" -Force
+          Copy-Item "native-build/mt5engine_capi.dll" "publish-portable/mt5engine_capi.dll" -Force
+
+      - name: Validate bundled native DLL
+        shell: pwsh
+        run: |
+          if (!(Test-Path "publish/mt5engine_capi.dll")) {
+            throw "Bundled native DLL missing in single-file output folder"
+          }
+
+          if (!(Test-Path "publish-portable/mt5engine_capi.dll")) {
+            throw "Bundled native DLL missing in portable output folder"
+          }
+
+      - name: Prepare release files
+        shell: pwsh
+        run: |
+          Copy-Item "publish/${{ env.APP_NAME }}.exe" "publish/${{ env.VERSIONED_EXE }}"
+          Copy-Item "publish/${{ env.APP_NAME }}.exe" "publish/${{ env.LATEST_EXE }}"
+
+          Compress-Archive -Path "publish-portable/*" -DestinationPath "publish/${{ env.VERSIONED_ZIP }}" -Force
+          Copy-Item "publish/${{ env.VERSIONED_ZIP }}" "publish/${{ env.LATEST_ZIP }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Release ${{ env.VERSION }}
+          body: |
+            Assets:
+            - `${{ env.VERSIONED_EXE }}`: single-file self-contained (native DLL bundled)
+            - `${{ env.VERSIONED_ZIP }}`: portable fallback (non-single-file, includes native DLL)
+
+            If exe does not start on Windows:
+            1) Right click file -> Properties -> Unblock (if present)
+            2) Try portable zip asset
+            3) Check `%LOCALAPPDATA%\TradeDesktop\logs\startup.log`
+            4) Ensure `mt5engine_capi.dll` is in the same folder as exe
+          files: |
+            publish/${{ env.VERSIONED_EXE }}
+            publish/${{ env.LATEST_EXE }}
+            publish/${{ env.VERSIONED_ZIP }}
+            publish/${{ env.LATEST_ZIP }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

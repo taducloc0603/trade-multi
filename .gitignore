@@ -1,0 +1,20 @@
+## Build outputs
+**/bin/
+**/obj/
+
+## User/IDE files
+.vs/
+.vscode/
+*.user
+*.suo
+
+## Logs
+*.log
+
+## Environment/local secrets
+.env
+.env.*
+
+## OS files
+.DS_Store
+Thumbs.db

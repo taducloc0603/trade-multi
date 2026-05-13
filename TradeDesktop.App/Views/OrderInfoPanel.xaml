@@ -1,0 +1,467 @@
+<UserControl x:Class="TradeDesktop.App.Views.OrderInfoPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             d:DesignHeight="220"
+             d:DesignWidth="400">
+    <Border BorderBrush="#EEF1F5"
+            BorderThickness="1"
+            CornerRadius="10"
+            Background="#FAFBFC"
+            Padding="12">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="8" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Text="{Binding PanelHeader}" FontWeight="SemiBold" Foreground="#344054" FontSize="14" />
+
+            <TextBlock Grid.Column="2"
+                       Grid.ColumnSpan="3"
+                       HorizontalAlignment="Right"
+                       TextWrapping="Wrap"
+                       VerticalAlignment="Center">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="#B42318" />
+                        <Setter Property="FontWeight" Value="SemiBold" />
+                        <Setter Property="Text" Value="{Binding StatusMessage}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsLoading}" Value="True">
+                                <Setter Property="Foreground" Value="#475467" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsEmpty}" Value="True">
+                                <Setter Property="Foreground" Value="#B54708" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsMapAvailable}" Value="True">
+                                <Setter Property="Foreground" Value="#067647" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding HasError}" Value="True">
+                                <Setter Property="Foreground" Value="#B42318" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <Border Grid.Row="2"
+                    Grid.ColumnSpan="5"
+                    BorderBrush="#E4E7EC"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Background="White"
+                    Padding="8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="8" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="8" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Records"
+                               FontWeight="SemiBold"
+                               Foreground="#344054">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding UseTradeStructuredColumns}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding UseHistoryStructuredColumns}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+
+                    <Border Grid.Row="2"
+                            BorderBrush="#EEF1F5"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="6"
+                            Background="#FAFBFC">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding UseTradeStructuredColumns}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding UseHistoryStructuredColumns}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="4" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                          VerticalScrollBarVisibility="Auto"
+                                          CanContentScroll="False">
+                                <ScrollViewer.Style>
+                                    <Style TargetType="ScrollViewer">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding UseHistoryStructuredColumns}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ScrollViewer.Style>
+                                <Grid MinWidth="1640">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120" />
+                                        <ColumnDefinition Width="70" />
+                                        <ColumnDefinition Width="90" />
+                                        <ColumnDefinition Width="110" />
+                                        <ColumnDefinition Width="60" />
+                                        <ColumnDefinition Width="70" />
+                                        <ColumnDefinition Width="95" />
+                                        <ColumnDefinition Width="95" />
+                                        <ColumnDefinition Width="80" />
+                                        <ColumnDefinition Width="95" />
+                                        <ColumnDefinition Width="95" />
+                                        <ColumnDefinition Width="95" />
+                                        <ColumnDefinition Width="180" />
+                                        <ColumnDefinition Width="180" />
+                                        <ColumnDefinition Width="180" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock Grid.Column="0" Text="Timestamp" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="1" Text="Count" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="2" Text="Symbol" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="3" Text="Ticket" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="4" Text="Type" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="5" Text="Volume" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="6" Text="Open Price" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="7" Text="Close Price" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="8" Text="Profit" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="9" Text="Fee Spread" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="10" Text="Commission" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="11" Text="SL" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="12" Text="TP" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="13" Text="Open Time" FontWeight="SemiBold" Foreground="#475467" />
+                                    <TextBlock Grid.Column="14" Text="Close Time" FontWeight="SemiBold" Foreground="#475467" />
+                                </Grid>
+                            </ScrollViewer>
+
+                            <ListBox Grid.Row="2"
+                                     ItemsSource="{Binding Records}"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     Foreground="#101828"
+                                     FontFamily="Consolas"
+                                     FontSize="11"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                <ListBox.Style>
+                                    <Style TargetType="ListBox">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding UseHistoryStructuredColumns}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ListBox.Style>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid MinWidth="1640">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="120" />
+                                                <ColumnDefinition Width="70" />
+                                                <ColumnDefinition Width="90" />
+                                                <ColumnDefinition Width="110" />
+                                                <ColumnDefinition Width="60" />
+                                                <ColumnDefinition Width="70" />
+                                                <ColumnDefinition Width="95" />
+                                                <ColumnDefinition Width="95" />
+                                                <ColumnDefinition Width="80" />
+                                                <ColumnDefinition Width="95" />
+                                                <ColumnDefinition Width="95" />
+                                                <ColumnDefinition Width="95" />
+                                                <ColumnDefinition Width="180" />
+                                                <ColumnDefinition Width="180" />
+                                                <ColumnDefinition Width="180" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <TextBlock Grid.Column="0" Text="{Binding Timestamp}" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Count}" />
+                                            <TextBlock Grid.Column="2" Text="{Binding Symbol}" />
+                                            <TextBlock Grid.Column="3" Text="{Binding Ticket}" />
+                                            <TextBlock Grid.Column="4" Text="{Binding Type}" />
+                                            <TextBlock Grid.Column="5" Text="{Binding Volume}" />
+                                            <TextBlock Grid.Column="6" Text="{Binding OpenPrice}" />
+                                            <TextBlock Grid.Column="7" Text="{Binding ClosePrice}" />
+                                            <TextBlock Grid.Column="8" Text="{Binding Profit}" />
+                                            <TextBlock Grid.Column="9" Text="{Binding FeeSpread}" />
+                                            <TextBlock Grid.Column="10" Text="{Binding Commission}" />
+                                            <TextBlock Grid.Column="11" Text="{Binding Sl}" />
+                                            <TextBlock Grid.Column="12" Text="{Binding Tp}" />
+                                            <TextBlock Grid.Column="13" Text="{Binding OpenTime}" />
+                                            <TextBlock Grid.Column="14" Text="{Binding CloseTime}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+
+                            <ListBox Grid.Row="2"
+                                     ItemsSource="{Binding Records}"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     Foreground="#101828"
+                                     FontFamily="Consolas"
+                                     FontSize="11"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                <ListBox.Style>
+                                    <Style TargetType="ListBox">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding UseSummaryRecords}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ListBox.Style>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Row="4">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding UseTradeStructuredColumns}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding UseHistoryStructuredColumns}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <ItemsControl ItemsSource="{Binding LeftItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <DockPanel Margin="0,0,0,2">
+                                        <TextBlock DockPanel.Dock="Left"
+                                                   Width="84"
+                                                   Text="{Binding Label}"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="#475467" />
+                                        <TextBlock Text="{Binding Value}"
+                                                   Foreground="#101828"
+                                                   TextWrapping="Wrap" />
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <ItemsControl Grid.Column="2" ItemsSource="{Binding RightItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <DockPanel Margin="0,0,0,2">
+                                        <TextBlock DockPanel.Dock="Left"
+                                                   Width="84"
+                                                   Text="{Binding Label}"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="#475467" />
+                                        <TextBlock Text="{Binding Value}"
+                                                   Foreground="#101828"
+                                                   TextWrapping="Wrap" />
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Grid>
+
+                    <Border Grid.Row="0"
+                            Grid.RowSpan="5"
+                            BorderBrush="#EEF1F5"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="6"
+                            Background="#FAFBFC">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding UseHistoryStructuredColumns}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Auto">
+                        <Grid>
+                            <DataGrid ItemsSource="{Binding HistoryRows}"
+                                      AutoGenerateColumns="False"
+                                      IsReadOnly="True"
+                                      CanUserAddRows="False"
+                                      CanUserDeleteRows="False"
+                                      CanUserReorderColumns="False"
+                                      CanUserResizeRows="False"
+                                      CanUserSortColumns="False"
+                                      EnableColumnVirtualization="False"
+                                      EnableRowVirtualization="False"
+                                      HeadersVisibility="Column"
+                                      GridLinesVisibility="Horizontal"
+                                      RowHeaderWidth="0"
+                                      BorderThickness="0"
+                                      Background="Transparent"
+                                      Foreground="#101828"
+                                      FontFamily="Consolas"
+                                      FontSize="11"
+                                      MinHeight="48"
+                                      ScrollViewer.CanContentScroll="False"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                      ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                                <DataGrid.ColumnHeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="FontWeight" Value="SemiBold" />
+                                        <Setter Property="Foreground" Value="#475467" />
+                                        <Setter Property="Background" Value="#FAFBFC" />
+                                    </Style>
+                                </DataGrid.ColumnHeaderStyle>
+
+                                <DataGrid.Columns>
+                                <DataGridTextColumn Header="STT" Binding="{Binding Stt}" Width="55" />
+                                    <DataGridTextColumn Header="Close EA Time Local" Binding="{Binding CloseEaTimeLocal}" Width="180" />
+                                    <DataGridTextColumn Header="PairId" Binding="{Binding PairId}" Width="170" />
+                                    <DataGridTextColumn Header="Ticket" Binding="{Binding Ticket}" Width="110" />
+                                    <DataGridTextColumn Header="Profit" Binding="{Binding Profit}" Width="95" />
+                                    <DataGridTextColumn Header="Symbol" Binding="{Binding Symbol}" Width="90" />
+                                    <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="60" />
+                                    <DataGridTextColumn Header="Volume" Binding="{Binding Volume}" Width="70" />
+                                    <DataGridTextColumn Header="Open Slippage" Binding="{Binding OpenSlippage}" Width="110" />
+                                    <DataGridTextColumn Header="Close Slippage" Binding="{Binding CloseSlippage}" Width="110" />
+                                    <DataGridTextColumn Header="Open execution" Binding="{Binding OpenExecution}" Width="130" />
+                                    <DataGridTextColumn Header="Close execution" Binding="{Binding CloseExecution}" Width="130" />
+                                    <DataGridTextColumn Header="Profit ($)" Binding="{Binding FeeSpread}" Width="95" />
+                                    <DataGridTextColumn Header="Open Price" Binding="{Binding OpenPrice}" Width="95" />
+                                    <DataGridTextColumn Header="Close Price" Binding="{Binding ClosePrice}" Width="95" />
+                                    <DataGridTextColumn Header="Timestamp" Binding="{Binding Timestamp}" Width="120" />
+                                    <DataGridTextColumn Header="Count" Binding="{Binding Count}" Width="70" />
+                                    <DataGridTextColumn Header="Commission" Binding="{Binding Commission}" Width="95" />
+                                    <DataGridTextColumn Header="SL" Binding="{Binding Sl}" Width="95" />
+                                    <DataGridTextColumn Header="TP" Binding="{Binding Tp}" Width="95" />
+                                    <DataGridTextColumn Header="Open Time" Binding="{Binding OpenTime}" Width="180" />
+                                    <DataGridTextColumn Header="Close Time" Binding="{Binding CloseTime}" Width="180" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                        </ScrollViewer>
+                    </Border>
+
+                    <Border Grid.Row="0"
+                            Grid.RowSpan="5"
+                            BorderBrush="#EEF1F5"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="6"
+                            Background="#FAFBFC">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding UseTradeStructuredColumns}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Auto">
+                        <DataGrid ItemsSource="{Binding TradeRows}"
+                                  AutoGenerateColumns="False"
+                                  IsReadOnly="True"
+                                  CanUserAddRows="False"
+                                  CanUserDeleteRows="False"
+                                  CanUserReorderColumns="False"
+                                  CanUserResizeRows="False"
+                                  CanUserSortColumns="False"
+                                  EnableColumnVirtualization="False"
+                                  EnableRowVirtualization="False"
+                                  HeadersVisibility="Column"
+                                  GridLinesVisibility="Horizontal"
+                                  RowHeaderWidth="0"
+                                  BorderThickness="0"
+                                  Background="Transparent"
+                                  Foreground="#101828"
+                                  FontFamily="Consolas"
+                                  FontSize="11"
+                                  MinHeight="48"
+                                  ScrollViewer.CanContentScroll="False"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                  ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                            <DataGrid.ColumnHeaderStyle>
+                                <Style TargetType="DataGridColumnHeader">
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                    <Setter Property="Foreground" Value="#475467" />
+                                    <Setter Property="Background" Value="#FAFBFC" />
+                                </Style>
+                            </DataGrid.ColumnHeaderStyle>
+
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="STT" Binding="{Binding Stt}" Width="55" />
+                                <DataGridTextColumn Header="Open EA Time Local" Binding="{Binding OpenEaTimeLocal}" Width="180" />
+                                <DataGridTextColumn Header="PairId" Binding="{Binding PairId}" Width="170" />
+                                <DataGridTextColumn Header="Ticket" Binding="{Binding Ticket}" Width="110" />
+                                <DataGridTextColumn Header="Profit" Binding="{Binding Profit}" Width="95" />
+                                <DataGridTextColumn Header="Symbol" Binding="{Binding Symbol}" Width="90" />
+                                <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="60" />
+                                <DataGridTextColumn Header="Volume" Binding="{Binding Lot}" Width="80" />
+                                <DataGridTextColumn Header="Slippage" Binding="{Binding Slippage}" Width="95" />
+                                <DataGridTextColumn Header="Open execution" Binding="{Binding OpenExecution}" Width="130" />
+                                <DataGridTextColumn Header="Profit ($)" Binding="{Binding FeeSpread}" Width="95" />
+                                <DataGridTextColumn Header="Price" Binding="{Binding Price}" Width="95" />
+                                <DataGridTextColumn Header="Timestamp" Binding="{Binding Timestamp}" Width="120" />
+                                <DataGridTextColumn Header="Count" Binding="{Binding Count}" Width="70" />
+                                <DataGridTextColumn Header="SL" Binding="{Binding Sl}" Width="95" />
+                                <DataGridTextColumn Header="TP" Binding="{Binding Tp}" Width="95" />
+                                <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="180" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        </ScrollViewer>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</UserControl>
