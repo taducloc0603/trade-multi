@@ -198,7 +198,7 @@ public sealed class OrderPanelStatusViewModel : ObservableObject
         ReplaceRecords(Array.Empty<OrderRecordItemViewModel>());
         ReplaceFields(Array.Empty<OrderInfoFieldViewModel>(), Array.Empty<OrderInfoFieldViewModel>());
         ReplaceHistoryRows(Array.Empty<HistoryRowViewModel>());
-        UpdateTradeRowsInPlace(rows);
+        ReplaceTradeRows(rows);
     }
 
     public void SetHistoryData(IEnumerable<HistoryRowViewModel> rows)
@@ -255,68 +255,6 @@ public sealed class OrderPanelStatusViewModel : ObservableObject
         foreach (var row in rows)
         {
             TradeRows.Add(row);
-        }
-    }
-
-    // Tầng 2b: cập nhật TradeRows in-place theo reference identity.
-    // Vì DashboardViewModel cache TradeRowViewModel theo ticket, các instance giữ nguyên
-    // qua các tick → ReferenceEquals đủ để diff Add/Remove/Move mà không tạo Reset event.
-    private void UpdateTradeRowsInPlace(IEnumerable<TradeRowViewModel> rows)
-    {
-        var newList = rows as IList<TradeRowViewModel> ?? rows.ToList();
-
-        for (var i = TradeRows.Count - 1; i >= 0; i--)
-        {
-            var current = TradeRows[i];
-            var stillPresent = false;
-            for (var j = 0; j < newList.Count; j++)
-            {
-                if (ReferenceEquals(newList[j], current))
-                {
-                    stillPresent = true;
-                    break;
-                }
-            }
-
-            if (!stillPresent)
-            {
-                TradeRows.RemoveAt(i);
-            }
-        }
-
-        for (var i = 0; i < newList.Count; i++)
-        {
-            var target = newList[i];
-
-            if (i >= TradeRows.Count)
-            {
-                TradeRows.Add(target);
-                continue;
-            }
-
-            if (ReferenceEquals(TradeRows[i], target))
-            {
-                continue;
-            }
-
-            var foundAt = -1;
-            for (var j = i + 1; j < TradeRows.Count; j++)
-            {
-                if (ReferenceEquals(TradeRows[j], target))
-                {
-                    foundAt = j;
-                    break;
-                }
-            }
-
-            if (foundAt >= 0)
-            {
-                TradeRows.Move(foundAt, i);
-            }
-            else
-            {
-                TradeRows.Insert(i, target);
-            }
         }
     }
 }

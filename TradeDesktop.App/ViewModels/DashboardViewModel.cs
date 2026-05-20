@@ -71,7 +71,7 @@ public sealed class DashboardViewModel : ObservableObject
     private string _lastExternalCloseGuardBlockReason = string.Empty;
     private string _lastSkipSignalLogSignature = string.Empty;
     private DateTime _lastSkipSignalLogAtUtc;
-    private const int ExternalPartialCloseStreakRequired = 2;
+    private const int ExternalPartialCloseStreakRequired = 4;
     private const string GapCooldownSkipReason = "GAP_COOLDOWN_ACTIVE";
     private bool _externalPartialCloseInFlight = false;
     private double? _lastLoggedLatencyA;
@@ -92,7 +92,7 @@ public sealed class DashboardViewModel : ObservableObject
     private const long AlertExecutionThresholdMs = 1000;
     private bool _isAutoOpenPausedByInvariant;
     private int _invariantClearStreak;
-    private const int InvariantClearPollsRequired = 5;
+    private const int InvariantClearPollsRequired = 10;
     private TradingFlowPhase _lastLoggedPhase = TradingFlowPhase.WaitingOpen;
     private TradingOpenMode _lastLoggedOpenMode = TradingOpenMode.None;
     private TradingPositionSide _lastLoggedPositionSide = TradingPositionSide.None;
@@ -102,32 +102,16 @@ public sealed class DashboardViewModel : ObservableObject
     private SharedMapReadResult<TradeSharedRecord>? _latestTradeLeftResult;
     private SharedMapReadResult<TradeSharedRecord>? _latestTradeRightResult;
 
-    private static readonly TimeSpan OrderInfoPollInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan OrderInfoPollInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan OpenPartialRecheckDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan SkipSignalLogThrottleInterval = TimeSpan.FromMilliseconds(500);
-    private const int StableBothFlatPollsRequired = 2;
+    private const int StableBothFlatPollsRequired = 4;
 
-    // UI render throttle (Tầng 1): tách tần suất UI ra khỏi tần suất logic.
-    // Logic chạy mỗi tick (50ms), UI render tối đa mỗi UiRenderInterval.
-    private static readonly TimeSpan UiRenderInterval = TimeSpan.FromMilliseconds(200);
-    private DateTime _lastUiRenderAtUtc = DateTime.MinValue;
-    // Skip-if-unchanged (Tầng 3a): hash snapshot + trade timestamps để tránh render khi không có gì đổi.
-    private decimal? _lastRenderedBidA;
-    private decimal? _lastRenderedAskA;
-    private decimal? _lastRenderedBidB;
-    private decimal? _lastRenderedAskB;
-    private ulong _lastRenderedTradeLeftTs;
-    private ulong _lastRenderedTradeRightTs;
-    // Force render flag: bật khi state machine chuyển phase để không bị trễ.
-    private bool _forceNextUiRender;
-
-    // Stable identity cache (Tầng 2b): giữ instance TradeRowViewModel ổn định theo ticket
-    // để WPF không re-template row và để PropertyChanged đẩy diff thay vì Reset.
-    private readonly Dictionary<ulong, TradeRowViewModel> _tradeRowCacheLeft = [];
-    private readonly Dictionary<ulong, TradeRowViewModel> _tradeRowCacheRight = [];
-
-    // Cap SignalLogItems (Tầng 3b): tránh leak khi log dài giờ.
-    private const int SignalLogItemsMaxCount = 500;
+    // UI render throttle: snapshot event fires every 50ms (logic path),
+    // but heavy UI rebuild (BindDashboardMetrics + RefreshTradeRowsFromSnapshot)
+    // only runs at this minimum interval to keep CPU low when a position is open.
+    private const long SnapshotUiRenderMinIntervalMs = 200;
+    private long _lastSnapshotUiRenderTickMs;
 
     private sealed record PendingOpenRequest(
         string PairId,
@@ -660,6 +644,15 @@ public sealed class DashboardViewModel : ObservableObject
         _tradeSessionFileLogger.Log("Trading logic start confirmed by user");
 
         ResetTradingLogicState();
+        // Wipe display state on Start only — Stop giữ nguyên để xem P&L cuối session
+        _sttByPairId.Clear();
+        _nextStt = 1;
+        _profitSnapshotByTicket.Clear();
+        TradeRealtimeProfitRows.Clear();
+        HistoryRealtimeProfitRows.Clear();
+        HistoryRealtimeProfitSummary = "0.00 | 0.00 $";
+        HistoryTab.LeftPanel.SetEmpty();
+        HistoryTab.RightPanel.SetEmpty();
         IsTradingLogicEnabled = true;
         SyncTradingFlowWithLivePairState(GetLivePairTradeStateStrict());
         _lastLoggedPhase = _tradingFlowEngine.CurrentPhase;
@@ -706,23 +699,16 @@ public sealed class DashboardViewModel : ObservableObject
                         _tradeSessionFileLogger.Log(line);
                     }
                 }
-            }
-            else
-            {
-                foreach (var item in e.NewItems)
-                {
-                    if (item is string line && !string.IsNullOrWhiteSpace(line))
-                    {
-                        _tradeSessionFileLogger.Log(line);
-                    }
-                }
+
+                return;
             }
 
-            // Tầng 3b: cap số lượng item trong UI để tránh memory leak & chậm khi log nhiều giờ.
-            // Mỗi Insert(0, ...) shift O(N); cap giữ N ≤ SignalLogItemsMaxCount.
-            while (SignalLogItems.Count > SignalLogItemsMaxCount)
+            foreach (var item in e.NewItems)
             {
-                SignalLogItems.RemoveAt(SignalLogItems.Count - 1);
+                if (item is string line && !string.IsNullOrWhiteSpace(line))
+                {
+                    _tradeSessionFileLogger.Log(line);
+                }
             }
         }
         catch (Exception ex)
@@ -2189,12 +2175,6 @@ public sealed class DashboardViewModel : ObservableObject
         _isStaleA = false;
         _isStaleB = false;
         _lastPerfSummaryAtUtc = DateTime.MinValue;
-        _sttByPairId.Clear();
-        _nextStt = 1;
-        _profitSnapshotByTicket.Clear();
-        TradeRealtimeProfitRows.Clear();
-        HistoryRealtimeProfitRows.Clear();
-        HistoryRealtimeProfitSummary = "0.00 | 0.00 $";
         OnPropertyChanged(nameof(CurrentPositionText));
         OnPropertyChanged(nameof(CurrentPhaseText));
         RaiseManualOpenCanExecuteChanged();
@@ -2440,6 +2420,16 @@ public sealed class DashboardViewModel : ObservableObject
                     ApplyHistoryResult(HistoryTab.RightPanel, historyRightResult, point);
                 }
 
+                // FIX (post-close wait race): collect close-retry actions BEFORE
+                // SyncTradingFlowWithLivePairState. CollectPendingCloseRetryActions has a
+                // side effect: when both legs confirmed closed it calls
+                // TryBeginWaitAfterCloseFromPending → BeginWaitAfterClose, which transitions
+                // engine WaitingClose → WaitingOpen with CurrentWaitSeconds set from config.
+                // If sync runs first and sees BothFlat, it calls ForceWaitingOpen() that wipes
+                // CurrentWaitSeconds = 0 and BeginWaitAfterClose's guard then returns early —
+                // a new signal can open immediately after close, ignoring start/end_wait_time.
+                closeRetryActions = CollectPendingCloseRetryActions();
+
                 RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(livePairStateFromPoll));
                 SyncTradingFlowWithLivePairState(livePairStateFromPoll);
 
@@ -2460,7 +2450,6 @@ public sealed class DashboardViewModel : ObservableObject
                 TryDetectAndHandleExternalPartialClose(livePairStateFromPoll);
 
                 timeoutActions = CollectPendingOpenTimeoutActions();
-                closeRetryActions = CollectPendingCloseRetryActions();
             });
 
             if (timeoutActions.Count > 0)
@@ -3217,6 +3206,19 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
+        // Pending auto open in flight → engine phase là nguồn sự thật. MMF chưa
+        // đủ dữ kiện để correct phase/side (1 leg có thể xuất hiện trước leg kia
+        // hàng giây khi execution chậm). Không sync để tránh:
+        //  - Ép phase WaitingClose -> WaitingOpen khi cả 2 leg chưa confirm (BothFlat thoáng qua).
+        //  - Suy side sai từ TradeType của 1 leg đơn (OnlyAOpen/OnlyBOpen) khiến
+        //    CurrentOpenMode bị đảo ngược chiều so với trigger gốc.
+        // Pending có cơ chế resolve riêng: MarkOpenPairLegConfirmed (cả 2 confirm)
+        // hoặc CollectPendingOpenTimeoutActions (timeout). Sau resolve, sync resume.
+        if (TryGetUnresolvedAutoPendingOpenPairId(out _))
+        {
+            return;
+        }
+
         if (pairState == LivePairTradeState.BothFlat)
         {
             if (_tradingFlowEngine.CurrentPhase != TradingFlowPhase.WaitingOpen)
@@ -3331,6 +3333,79 @@ public sealed class DashboardViewModel : ObservableObject
         var leftRecords = _latestTradeLeftResult?.Records ?? (IReadOnlyList<TradeSharedRecord>)[];
         var rightRecords = _latestTradeRightResult?.Records ?? (IReadOnlyList<TradeSharedRecord>)[];
         return leftRecords.Concat(rightRecords).Any(r => _pairIdByTicket.ContainsKey(r.Ticket));
+    }
+
+    /// <summary>
+    /// Silent variant: cùng predicate với <see cref="HasUnresolvedAutoPendingOpenCycle"/>
+    /// nhưng KHÔNG ghi log. Dùng cho các call site high-frequency (mỗi poll) để tránh
+    /// spam log và tránh log message sai context ("Auto open blocked").
+    /// </summary>
+    private bool TryGetUnresolvedAutoPendingOpenPairId(out string? blockingPairId)
+    {
+        foreach (var state in _pendingOpenPairById.Values)
+        {
+            if (!state.IsAutoFlow)
+            {
+                continue;
+            }
+
+            if (state.IsResolved || state.TimeoutCloseTriggered)
+            {
+                continue;
+            }
+
+            if (state.OpenConfirmedA && state.OpenConfirmedB)
+            {
+                continue;
+            }
+
+            blockingPairId = state.PairId;
+            return true;
+        }
+
+        blockingPairId = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Trả về true nếu có ít nhất 1 pending open (auto hoặc manual) chưa confirm
+    /// đủ 2 leg VÀ vẫn còn trong window OpenPendingTimeoutMs của chính nó. Dùng
+    /// cho external-close watchdog để không đóng nhầm leg vừa mở khi leg còn lại
+    /// đang chờ execution. Sau window, primary timeout handler
+    /// (CollectPendingOpenTimeoutActions) tiếp quản.
+    /// </summary>
+    private bool TryGetPendingOpenInTimeoutWindow(out string? blockingPairId)
+    {
+        var now = DateTimeOffset.Now;
+        foreach (var state in _pendingOpenPairById.Values)
+        {
+            if (state.IsResolved || state.TimeoutCloseTriggered)
+            {
+                continue;
+            }
+
+            if (state.OpenConfirmedA && state.OpenConfirmedB)
+            {
+                continue;
+            }
+
+            var timeoutMs = Math.Max(0, state.OpenPendingTimeoutMs);
+            if (timeoutMs <= 0)
+            {
+                continue;
+            }
+
+            if (now - state.CreatedAtLocal >= TimeSpan.FromMilliseconds(timeoutMs))
+            {
+                continue;
+            }
+
+            blockingPairId = state.PairId;
+            return true;
+        }
+
+        blockingPairId = null;
+        return false;
     }
 
     /// <summary>
@@ -3538,6 +3613,19 @@ public sealed class DashboardViewModel : ObservableObject
         {
             _externalPartialCloseStreak = 0;
             _lastExternalCloseGuardBlockReason = string.Empty;
+            return;
+        }
+
+        // Guard 6 (đặt sớm): có pending open (auto hoặc manual) đang chờ confirm
+        // cả 2 leg VÀ còn trong window OpenPendingTimeoutMs. Trong giai đoạn này,
+        // MMF state OnlyAOpen/OnlyBOpen KHÔNG đồng nghĩa "EA đóng 1 leg externally"
+        // — nó chỉ phản ánh việc 1 leg xác nhận trước (execution chậm). Nếu hành
+        // động ở đây, hệ thống sẽ đóng nhầm leg vừa mở. Hết window thì
+        // CollectPendingOpenTimeoutActions xử lý timeout/compensation riêng.
+        if (TryGetPendingOpenInTimeoutWindow(out var pendingPairId))
+        {
+            _externalPartialCloseStreak = 0;
+            LogExternalCloseGuardBlockOnce($"Guard6: pendingOpen in flight, within timeout window ({pendingPairId})");
             return;
         }
 
@@ -4047,29 +4135,17 @@ public sealed class DashboardViewModel : ObservableObject
         AccumulateTradeProfitRows(TradeTab.LeftPanel.TradeRows, sumByStt);
         AccumulateTradeProfitRows(TradeTab.RightPanel.TradeRows, sumByStt);
 
-        var ordered = sumByStt.OrderBy(x => x.Key).ToList();
+        var rebuilt = sumByStt
+            .OrderBy(x => x.Key)
+            .Select(x => new TradePairRealtimeProfitRowViewModel(
+                stt: x.Key.ToString(CultureInfo.InvariantCulture),
+                profitRealtime: x.Value.ToString("0.00", CultureInfo.InvariantCulture)))
+            .ToList();
 
-        // Tầng 2a: in-place update để tránh Clear()+Add() gây Reset + N Add events.
-        for (var i = 0; i < ordered.Count; i++)
+        TradeRealtimeProfitRows.Clear();
+        foreach (var row in rebuilt)
         {
-            var sttText = ordered[i].Key.ToString(CultureInfo.InvariantCulture);
-            var profitText = ordered[i].Value.ToString("0.00", CultureInfo.InvariantCulture);
-
-            if (i < TradeRealtimeProfitRows.Count)
-            {
-                var existing = TradeRealtimeProfitRows[i];
-                existing.Stt = sttText;
-                existing.ProfitRealtime = profitText;
-            }
-            else
-            {
-                TradeRealtimeProfitRows.Add(new TradePairRealtimeProfitRowViewModel(sttText, profitText));
-            }
-        }
-
-        while (TradeRealtimeProfitRows.Count > ordered.Count)
-        {
-            TradeRealtimeProfitRows.RemoveAt(TradeRealtimeProfitRows.Count - 1);
+            TradeRealtimeProfitRows.Add(row);
         }
     }
 
@@ -4157,31 +4233,18 @@ public sealed class DashboardViewModel : ObservableObject
         HistoryRealtimeProfitSummary =
             $"{totalProfit.ToString("0.00", CultureInfo.InvariantCulture)} | {totalProfitDollar.ToString("0.00", CultureInfo.InvariantCulture)} $";
 
-        var ordered = sumByStt.OrderBy(x => x.Key).ToList();
+        var rebuilt = sumByStt
+            .OrderBy(x => x.Key)
+            .Select(x => new HistoryPairProfitRowViewModel(
+                stt: x.Key.ToString(CultureInfo.InvariantCulture),
+                profit: x.Value.Profit.ToString("0.00", CultureInfo.InvariantCulture),
+                profitDollar: x.Value.ProfitDollar.ToString("0.00", CultureInfo.InvariantCulture)))
+            .ToList();
 
-        // Tầng 2a: in-place update để tránh Clear()+Add() gây Reset + N Add events.
-        for (var i = 0; i < ordered.Count; i++)
+        HistoryRealtimeProfitRows.Clear();
+        foreach (var row in rebuilt)
         {
-            var sttText = ordered[i].Key.ToString(CultureInfo.InvariantCulture);
-            var profitText = ordered[i].Value.Profit.ToString("0.00", CultureInfo.InvariantCulture);
-            var profitDollarText = ordered[i].Value.ProfitDollar.ToString("0.00", CultureInfo.InvariantCulture);
-
-            if (i < HistoryRealtimeProfitRows.Count)
-            {
-                var existing = HistoryRealtimeProfitRows[i];
-                existing.Stt = sttText;
-                existing.Profit = profitText;
-                existing.ProfitDollar = profitDollarText;
-            }
-            else
-            {
-                HistoryRealtimeProfitRows.Add(new HistoryPairProfitRowViewModel(sttText, profitText, profitDollarText));
-            }
-        }
-
-        while (HistoryRealtimeProfitRows.Count > ordered.Count)
-        {
-            HistoryRealtimeProfitRows.RemoveAt(HistoryRealtimeProfitRows.Count - 1);
+            HistoryRealtimeProfitRows.Add(row);
         }
     }
 
@@ -4504,25 +4567,15 @@ public sealed class DashboardViewModel : ObservableObject
         _knownHistoryTicketsByMap[key] = currentTickets;
     }
 
-    private IReadOnlyList<TradeRowViewModel> BuildTradeRows(
+    private IEnumerable<TradeRowViewModel> BuildTradeRows(
         IReadOnlyList<TradeSharedRecord> records,
         int count,
         ulong timestamp,
         DashboardMetrics? snapshot,
         bool isExchangeA,
         int point)
-    {
-        // Tầng 2b: dùng cache theo ticket để giữ instance ổn định.
-        // Khi cùng ticket: cập nhật property trên instance cũ → WPF chỉ fire PropertyChanged
-        // thay vì re-template row mới.
-        var rowCache = isExchangeA ? _tradeRowCacheLeft : _tradeRowCacheRight;
-        var rows = new List<TradeRowViewModel>(records.Count);
-        var seenTickets = new HashSet<ulong>();
-
-        foreach (var record in records)
+        => records.Select(record =>
         {
-            seenTickets.Add(record.Ticket);
-
             _openExecutionMsByTicket.TryGetValue(record.Ticket, out var openExecutionMsValue);
             var openExecutionMs = _openExecutionMsByTicket.ContainsKey(record.Ticket) ? openExecutionMsValue : (long?)null;
             _openRequestByTicket.TryGetValue(record.Ticket, out var openRequest);
@@ -4530,87 +4583,25 @@ public sealed class DashboardViewModel : ObservableObject
             var stt = ResolveStt(pairId);
             var tradeOpenSlippage = CalculateTradeOpenSlippage(record, point);
 
-            var timestampText = FormatRawTimestamp(timestamp);
-            var countText = count.ToString(CultureInfo.InvariantCulture);
-            var symbolText = record.Symbol;
-            var ticketText = record.Ticket.ToString(CultureInfo.InvariantCulture);
-            var typeText = FormatTradeType(record.TradeType);
-            var lotText = FormatLot(record.Lot);
-            var priceText = FormatPrice(record.Price);
-            var slText = FormatPrice(record.Sl);
-            var tpText = FormatPrice(record.Tp);
-            var slippageText = FormatTradeOpenSlippageDebug(record, openRequest, point, tradeOpenSlippage);
-            var profitText = FormatProfit(CalculateTradeProfit(record, snapshot, isExchangeA, point));
-            var feeSpreadText = ResolveTradeProfitSnapshot(record.Ticket, record.Profit);
-            var timeText = FormatTradeTime(record.TimeMsc);
-            var openEaTimeLocalText = FormatEaLocalTime(record.OpenEaTimeLocal);
-            var openExecutionText = FormatOpenExecutionDebug(record.OpenEaTimeLocal, openRequest?.AppOpenRequestRawMs, openExecutionMs);
-
-            if (rowCache.TryGetValue(record.Ticket, out var cached))
-            {
-                cached.Stt = stt;
-                cached.PairId = pairId;
-                cached.Timestamp = timestampText;
-                cached.Count = countText;
-                cached.Symbol = symbolText;
-                cached.Ticket = ticketText;
-                cached.Type = typeText;
-                cached.Lot = lotText;
-                cached.Price = priceText;
-                cached.Sl = slText;
-                cached.Tp = tpText;
-                cached.Slippage = slippageText;
-                cached.Profit = profitText;
-                cached.FeeSpread = feeSpreadText;
-                cached.Time = timeText;
-                cached.OpenEaTimeLocal = openEaTimeLocalText;
-                cached.OpenExecution = openExecutionText;
-                rows.Add(cached);
-            }
-            else
-            {
-                var newRow = new TradeRowViewModel(
-                    stt: stt,
-                    pairId: pairId,
-                    timestamp: timestampText,
-                    count: countText,
-                    symbol: symbolText,
-                    ticket: ticketText,
-                    type: typeText,
-                    lot: lotText,
-                    price: priceText,
-                    sl: slText,
-                    tp: tpText,
-                    slippage: slippageText,
-                    profit: profitText,
-                    feeSpread: feeSpreadText,
-                    time: timeText,
-                    openEaTimeLocal: openEaTimeLocalText,
-                    openExecution: openExecutionText);
-                rowCache[record.Ticket] = newRow;
-                rows.Add(newRow);
-            }
-        }
-
-        // Evict cache entries của ticket đã không còn trong snapshot này.
-        if (rowCache.Count > seenTickets.Count)
-        {
-            var toRemove = new List<ulong>();
-            foreach (var key in rowCache.Keys)
-            {
-                if (!seenTickets.Contains(key))
-                {
-                    toRemove.Add(key);
-                }
-            }
-            foreach (var key in toRemove)
-            {
-                rowCache.Remove(key);
-            }
-        }
-
-        return rows;
-    }
+            return new TradeRowViewModel(
+                stt: stt,
+                pairId: pairId,
+                timestamp: FormatRawTimestamp(timestamp),
+                count: count.ToString(CultureInfo.InvariantCulture),
+                symbol: record.Symbol,
+                ticket: record.Ticket.ToString(CultureInfo.InvariantCulture),
+                type: FormatTradeType(record.TradeType),
+                lot: FormatLot(record.Lot),
+                price: FormatPrice(record.Price),
+                sl: FormatPrice(record.Sl),
+                tp: FormatPrice(record.Tp),
+                slippage: FormatTradeOpenSlippageDebug(record, openRequest, point, tradeOpenSlippage),
+                profit: FormatProfit(CalculateTradeProfit(record, snapshot, isExchangeA, point)),
+                feeSpread: ResolveTradeProfitSnapshot(record.Ticket, record.Profit),
+                time: FormatTradeTime(record.TimeMsc),
+                openEaTimeLocal: FormatEaLocalTime(record.OpenEaTimeLocal),
+                openExecution: FormatOpenExecutionDebug(record.OpenEaTimeLocal, openRequest?.AppOpenRequestRawMs, openExecutionMs));
+        });
 
     private string ResolveTradeProfitSnapshot(ulong ticket, double currentProfit)
     {
@@ -5171,18 +5162,18 @@ public sealed class DashboardViewModel : ObservableObject
             _runtimeConfigState.UpdateDashboardMetrics(metrics);
             IsLoading = false;
 
-            // Tầng 1+3a: chỉ render UI khi đã quá UiRenderInterval VÀ có thay đổi thực sự.
-            // Logic path (LogLatency, ProcessSnapshot, SignalEntryGuard, DispatchSignalTrade)
-            // luôn chạy mỗi tick để không làm trễ phản ứng giao dịch.
-            var shouldRenderUi = ShouldRenderUiNow(metrics);
-            if (shouldRenderUi)
+            // Throttle UI-heavy work; diagnostics and logic still run every tick.
+            var nowTickMs = Environment.TickCount64;
+            var canRenderUi = (nowTickMs - _lastSnapshotUiRenderTickMs) >= SnapshotUiRenderMinIntervalMs;
+            if (canRenderUi)
             {
+                _lastSnapshotUiRenderTickMs = nowTickMs;
                 BindDashboardMetrics(metrics);
             }
             LogLatencyAnomalyIfNeeded(metrics);
             LogStaleTickIfNeeded(metrics);
             LogPerfSummaryIfDue(metrics);
-            if (shouldRenderUi)
+            if (canRenderUi)
             {
                 RefreshTradeRowsFromSnapshot(metrics, _runtimeConfigState.CurrentPoint);
             }
@@ -5221,8 +5212,11 @@ public sealed class DashboardViewModel : ObservableObject
                     CoolDownGapTick: _runtimeConfigState.CurrentCoolDownGapTick));
             LogFlowTransitionIfChanged("process-snapshot");
 
-            OnPropertyChanged(nameof(CurrentPositionText));
-            OnPropertyChanged(nameof(CurrentPhaseText));
+            if (canRenderUi)
+            {
+                OnPropertyChanged(nameof(CurrentPositionText));
+                OnPropertyChanged(nameof(CurrentPhaseText));
+            }
 
             if (trigger is null || !trigger.Triggered)
             {
@@ -5361,66 +5355,6 @@ public sealed class DashboardViewModel : ObservableObject
         _lastLoggedPhase = phase;
         _lastLoggedOpenMode = openMode;
         _lastLoggedPositionSide = side;
-        // Force UI refresh ngay sau state transition để Bid/Ask/CurrentPosition/Phase không bị trễ.
-        _forceNextUiRender = true;
-    }
-
-    // Quyết định có render UI tick này không (Tầng 1 + Tầng 3a).
-    // Trả về true khi: bị force render, HOẶC đã quá UiRenderInterval VÀ có thay đổi thực sự.
-    private bool ShouldRenderUiNow(DashboardMetrics metrics)
-    {
-        var nowUtc = DateTime.UtcNow;
-
-        if (_forceNextUiRender)
-        {
-            _forceNextUiRender = false;
-            _lastUiRenderAtUtc = nowUtc;
-            CaptureLastRenderedSnapshot(metrics);
-            return true;
-        }
-
-        if (nowUtc - _lastUiRenderAtUtc < UiRenderInterval)
-        {
-            return false;
-        }
-
-        var bidA = metrics.ExchangeA.Bid;
-        var askA = metrics.ExchangeA.Ask;
-        var bidB = metrics.ExchangeB.Bid;
-        var askB = metrics.ExchangeB.Ask;
-        var leftTs = _latestTradeLeftResult?.Timestamp ?? 0UL;
-        var rightTs = _latestTradeRightResult?.Timestamp ?? 0UL;
-
-        var unchanged = _lastRenderedBidA == bidA
-            && _lastRenderedAskA == askA
-            && _lastRenderedBidB == bidB
-            && _lastRenderedAskB == askB
-            && _lastRenderedTradeLeftTs == leftTs
-            && _lastRenderedTradeRightTs == rightTs;
-
-        if (unchanged)
-        {
-            return false;
-        }
-
-        _lastUiRenderAtUtc = nowUtc;
-        _lastRenderedBidA = bidA;
-        _lastRenderedAskA = askA;
-        _lastRenderedBidB = bidB;
-        _lastRenderedAskB = askB;
-        _lastRenderedTradeLeftTs = leftTs;
-        _lastRenderedTradeRightTs = rightTs;
-        return true;
-    }
-
-    private void CaptureLastRenderedSnapshot(DashboardMetrics metrics)
-    {
-        _lastRenderedBidA = metrics.ExchangeA.Bid;
-        _lastRenderedAskA = metrics.ExchangeA.Ask;
-        _lastRenderedBidB = metrics.ExchangeB.Bid;
-        _lastRenderedAskB = metrics.ExchangeB.Ask;
-        _lastRenderedTradeLeftTs = _latestTradeLeftResult?.Timestamp ?? 0UL;
-        _lastRenderedTradeRightTs = _latestTradeRightResult?.Timestamp ?? 0UL;
     }
 
     private void TryLogGapCooldownSkipSignal()
