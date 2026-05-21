@@ -331,3 +331,144 @@ Chạy app:
 ```bash
 dotnet run --project TradeDesktop.App/TradeDesktop.App.csproj
 ```
+
+---
+
+## 13) Portfolio Coordinator — multi-slot architecture
+
+File chính: `TradeDesktop.Application/Services/Portfolio/PortfolioCoordinator.cs`
+
+### 13.1 Khái niệm
+
+Phase 0-7 refactor: từ single-slot `TradingFlowEngine` (Section 5) → multi-slot
+`PortfolioCoordinator`. Mỗi lệnh = 1 `PositionSlot` độc lập với `CloseSignalEngine` riêng,
+profit tracking riêng, lifecycle riêng.
+
+`TradingFlowEngine` cũ vẫn tồn tại (`[Obsolete]`) cho legacy `TradingFlowEngineTests`.
+DI registration: `ITradingFlowEngine` → `PortfolioCoordinatorAdapter` (Application/DI line 23).
+
+### 13.2 PositionSlot lifecycle
+
+```
+PendingOpen → Live → PendingClose → Closed
+     │         │           │
+     │         │           └── MMF confirm cả 2 leg close
+     │         └── Close signal trigger + execution dispatched
+     └── MMF confirm cả 2 leg open
+```
+
+Fields chính:
+- `SlotId : int` — monotonic, unique trong session, không recycle.
+- `PairId : string` — format `"AUTO-{SlotId:D4}-{rawMs}"`.
+- `Side / OpenMode` — Buy/Sell và GapBuy/GapSell.
+- `TicketA, TicketB : ulong?` — ticket MT4/MT5 sau MMF confirm.
+- `OpenConfirmedAtUtc` — lúc MMF confirm cả 2 leg open.
+- `HoldingSeconds` — random `[StartTimeHold..EndTimeHold]` per slot.
+- `CloseSignalEngine` — instance riêng, KHÔNG share giữa slots.
+- `LastProfitSnapshot` — profit hiện tại từ MMF poll (dùng cho Rule D).
+
+### 13.3 Business rules
+
+| Rule | Spec |
+|------|------|
+| **A — Quota** | Max 7 tổng, max 4 Buy, max 4 Sell. Đếm cả `PendingOpen + Live + PendingClose`. |
+| **B — Cooldown** | Random `Uniform(GlobalCooldownMinSec, MaxSec)` sau mỗi OPEN/CLOSE confirm. Khóa toàn hệ thống. |
+| **C — Opposite-side lock** | Hardcode 300s sau OPEN. Chỉ block OPEN opposite-side. Same-side refresh timer. KHÔNG block CLOSE. |
+| **D — Priority close** | Khi nhiều slot trigger close cùng tick, slot có `LastProfitSnapshot` cao nhất được close. Losers giữ window. |
+
+Rule A + C check trong `CanOpenNewSlot(side, out reason)`. Rule B check trong `CanCloseNow(out reason)`.
+Rule D pick trong `ProcessSnapshot` close path: `OrderByDescending(slot.LastProfitSnapshot ?? double.MinValue).First()`.
+
+### 13.4 Cap config
+
+Mặc định Phase 0: `MaxTotalOpens=1, MaxBuy=1, MaxSell=1` để giữ behavior production identical
+với single-slot. Phase 5 sẽ load từ DB column `current_slots` (đã có code-side
+`SlotPersistence.Serialize/Deserialize` ready, DB migration deferred).
+
+ViewModel push config xuống coordinator qua `SyncPortfolioCoordinatorConfig()`:
+- Gọi từ constructor + sau mỗi `ApplyRuntimeConfig()`.
+- Map `RuntimeConfigState.CurrentMaxTotal/Buy/SellOpens` → `coordinator.UpdateQuotaConfig`.
+- Map `CurrentStartWaitTime/EndWaitTime` → `coordinator.UpdateCooldownConfig`.
+
+### 13.5 ProcessSnapshot flow (mỗi tick 50ms)
+
+```
+1. Cache lastSeen* hold range cho close-gate fallback.
+2. Resolve effectiveNow với wall-clock tolerance.
+3. Check global cooldown (Rule B) → return Empty nếu active.
+4. OPEN path:
+   - Quota A allow → openSignalEngine.ProcessSnapshot → trigger.
+   - Loop triggers, skip nếu CanOpenNewSlot fail (logs skip reason).
+   - Return PortfolioSnapshotResult(OpenTrigger: trigger).
+5. CLOSE path (nếu open path không return):
+   - Loop Live slots, skip slot IsCloseExecutionPending hoặc holding chưa elapsed.
+   - Per-slot slot.CloseSignalEngine.ProcessSnapshot → eligibleCloses.
+   - Pick winner (Rule D), MarkCloseTriggered, reset engines.
+   - Return PortfolioSnapshotResult(CloseTarget: slot, CloseTrigger: trigger).
+6. Else return Empty.
+```
+
+### 13.6 Race protection (Phase 3)
+
+- **Layer 1 — Quota lock**: `AllocatePendingOpenSlot` dùng `lock(_allocateLock)` quanh
+  `CanOpenNewSlot + AllocateNewSlot` để 2 callers concurrent không vượt quota.
+- **Layer 2 — Per-side debounce**: `_lastAutoOpenBuyAtLocal` + `_lastAutoOpenSellAtLocal`
+  (DashboardViewModel). Buy không cản Sell và ngược lại.
+- **Layer 3 — Per-side in-flight lock**: `_autoOpenInFlightBuy` + `_autoOpenInFlightSell`
+  Interlocked, plus global `_autoOpenInFlight` để defend-in-depth.
+- **Layer 4 — Multi-slot watchdog**: `EvaluateAndApplyAutoOpenInvariantWatchdog` formula
+  `toolCount > coordinator.LiveCount` hoặc `coordinator counts > cap`.
+
+### 13.7 Persistence (Phase 5)
+
+Code-side ready:
+- `SlotPersistence.Serialize(liveSlots) : string` — JSON cho DB JSONB column.
+- `SlotPersistence.Deserialize(json) : IReadOnlyList<RecoveredSlotData>`.
+- `coordinator.RecoverSlotsFromPersisted(slots)`: restore slots, set next SlotId, kick startup cooldown, restore LastOpenSide.
+
+Deferred (Infrastructure work):
+- DB schema `current_slots JSONB` migration.
+- `SupabaseConfigRepository.SaveCurrentSlotsAsync` + load.
+- ViewModel periodic save + recovery flow on startup.
+
+### 13.8 Close routing (Phase 4)
+
+`SelectCloseCandidateForTicket(targetTicket, exchange, mapName, hwnd)` — ticket-precise
+RowIndex lookup. KHÔNG fallback row 0 nếu ticket missing. Đảm bảo close đúng slot trong
+multi-slot mode (cap>1). `AutoCloseOrderAsync(trigger, targetSlot)` nhận slot từ
+`DispatchCloseTriggerAsync` → ticket-precise selection.
+
+Legacy `SelectCloseCandidateForExchange` (first-tool-opened) còn `[Obsolete]` cho manual
+close + history paths (cap=1 không có vấn đề).
+
+### 13.9 Monitoring (Phase 7)
+
+`coordinator.GetMetrics() : PortfolioMetrics`:
+- Current live/pending counts (Buy/Sell/total/pendingOpen/pendingClose).
+- Monotonic counters: `TotalOpensAllTime`, `TotalClosesAllTime`.
+- Skip counters: `QuotaSkipCount`, `OppositeLockSkipCount`, `CooldownSkipCount`.
+
+### 13.10 Acceptance invariants
+
+Hệ thống luôn phải thỏa các invariants (verified qua integration tests):
+
+1. **Quota**: `LiveBuyCount ≤ MaxBuyOpens ∧ LiveSellCount ≤ MaxSellOpens ∧ LiveAndPendingTotalCount ≤ MaxTotalOpens`.
+2. **Cooldown**: giữa 2 confirm consecutive (open hoặc close), `elapsed ≥ GlobalCooldownMinSec ∧ ≤ MaxSec` (cộng MMF tolerance).
+3. **Opposite-lock**: nếu OPEN side X tại `T`, không OPEN side ¬X trong `[T, T+300s]` (CLOSE bypass).
+4. **Close priority**: slot được close phải có `LastProfitSnapshot ≥` mọi slot khác trong eligibleCloses.
+5. **Slot isolation**: mỗi slot có CloseSignalEngine riêng, không share window state.
+6. **Recovery**: sau app restart load persisted slots, GlobalActionLockUntilUtc active `[3,125]s` từ restart time.
+7. **No quota leak**: abort path (timeout / failure) phải release slot khỏi coordinator.
+
+### 13.11 Phase status
+
+Phase 0-7 đã thực thi (code + tests). Phase 8 (docs) is this section.
+
+Code-side hoàn toàn ready cho cap=7 production. Activation phụ thuộc:
+- DB schema migration (Phase 5 deferred).
+- `SupabaseConfigRepository.LoadAsync` thêm fields `max_total_opens`, `current_slots`, etc.
+- ViewModel recovery flow on startup + periodic save 5s.
+- XAML UI updates: status bar wider, manual button hide, Active Slots panel, OrderInfoPanel group.
+
+Production behavior vẫn cap=1 (RuntimeConfigState defaults = 1) cho tới khi DB load.
+

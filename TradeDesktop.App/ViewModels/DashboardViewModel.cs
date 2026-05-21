@@ -12,6 +12,7 @@ using TradeDesktop.App.State;
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
+using TradeDesktop.Application.Services.Portfolio;
 using TradeDesktop.Domain.Models;
 
 namespace TradeDesktop.App.ViewModels;
@@ -23,6 +24,7 @@ public sealed class DashboardViewModel : ObservableObject
     private readonly IConfigService _configService;
     private readonly IDashboardMetricsMapper _dashboardMetricsMapper;
     private readonly ITradingFlowEngine _tradingFlowEngine;
+    private readonly IPortfolioCoordinator _portfolioCoordinator;
     private readonly ITradeInstructionFactory _tradeInstructionFactory;
     private readonly ITradeSignalLogBuilder _tradeSignalLogBuilder;
     private readonly IMachineIdentityService _machineIdentityService;
@@ -62,8 +64,13 @@ public sealed class DashboardViewModel : ObservableObject
     private int _manualSlot;
     private int _autoSlot;
     private int _autoOpenInFlight;
+    private int _autoOpenInFlightBuy;
+    private int _autoOpenInFlightSell;
     private int _autoCloseInFlight;
     private DateTimeOffset? _lastAutoOpenClickAtLocal;
+    // Phase 3: per-side debounce — Buy không cản Sell và ngược lại.
+    private DateTimeOffset? _lastAutoOpenBuyAtLocal;
+    private DateTimeOffset? _lastAutoOpenSellAtLocal;
     private const int AutoOpenDebounceMs = 1500;
     private int _closeBothFlatPollStreak;
     private int _externalPartialCloseStreak = 0;
@@ -312,6 +319,7 @@ public sealed class DashboardViewModel : ObservableObject
         IExchangePairReader exchangePairReader,
         IDashboardMetricsMapper dashboardMetricsMapper,
         ITradingFlowEngine tradingFlowEngine,
+        IPortfolioCoordinator portfolioCoordinator,
         ITradeInstructionFactory tradeInstructionFactory,
         ITradeSignalLogBuilder tradeSignalLogBuilder,
         IMachineIdentityService machineIdentityService,
@@ -327,6 +335,8 @@ public sealed class DashboardViewModel : ObservableObject
         _configService = configService;
         _dashboardMetricsMapper = dashboardMetricsMapper;
         _tradingFlowEngine = tradingFlowEngine;
+        _portfolioCoordinator = portfolioCoordinator;
+        SyncPortfolioCoordinatorConfig();
         _tradeInstructionFactory = tradeInstructionFactory;
         _tradeSignalLogBuilder = tradeSignalLogBuilder;
         _machineIdentityService = machineIdentityService;
@@ -956,6 +966,41 @@ public sealed class DashboardViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Phase 1 entry point cho open dispatch. Tách khỏi DispatchSignalTradeAsync để
+    /// có chỗ xử lý slot allocation. AutoBuyAsync/AutoSellAsync giữ signature cũ;
+    /// pairId vẫn build từ _autoSlot bên trong các method đó cho backward compat.
+    /// Coordinator slot allocation xảy ra inside AutoBuyAsync/AutoSellAsync sau khi
+    /// build pairId — đảm bảo pairId của ViewModel và coordinator slot match.
+    /// </summary>
+    private Task DispatchOpenTriggerAsync(GapSignalTriggerResult trigger)
+        => DispatchSignalTradeAsync(trigger);
+
+    /// <summary>
+    /// Phase 4: close dispatch uses slot.TicketA/B for ticket-precise RowIndex lookup.
+    /// Slot already marked PendingClose by coordinator.ProcessSnapshot.
+    /// </summary>
+    private async Task DispatchCloseTriggerAsync(PositionSlot targetSlot, GapSignalTriggerResult trigger)
+    {
+        try
+        {
+            await AutoCloseOrderAsync(trigger, targetSlot);
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[VM][ERROR] Auto close error: {ex}");
+            _tradingFlowEngine.AbortPendingCloseExecution();
+            LogFlowTransitionIfChanged("close-aborted-by-exception");
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            {
+                OnPropertyChanged(nameof(CurrentPositionText));
+                OnPropertyChanged(nameof(CurrentPhaseText));
+                SignalLogItems.Insert(0,
+                    $"    - [{DateTime.Now:HH:mm:ss.fff}] Auto close error: {ex.Message}");
+            });
+        }
+    }
+
     private async Task AutoBuyAsync(GapSignalTriggerResult trigger)
     {
         if (_isAutoOpenPausedByInvariant)
@@ -968,8 +1013,13 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
-        if (Interlocked.CompareExchange(ref _autoOpenInFlight, 1, 0) != 0)
+        // Phase 3: per-side in-flight lock — Buy không cản Sell và ngược lại.
+        // Old global lock _autoOpenInFlight still kept for backward compat (e.g., Reset paths).
+        if (Interlocked.CompareExchange(ref _autoOpenInFlightBuy, 1, 0) != 0
+            || Interlocked.CompareExchange(ref _autoOpenInFlight, 1, 0) != 0)
         {
+            // Release Buy-side flag if global failed to avoid stuck state.
+            Interlocked.Exchange(ref _autoOpenInFlightBuy, 0);
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
                 SignalLogItems.Insert(0,
@@ -998,15 +1048,16 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
-            if (_lastAutoOpenClickAtLocal.HasValue
-                && (DateTimeOffset.Now - _lastAutoOpenClickAtLocal.Value).TotalMilliseconds < AutoOpenDebounceMs
+            // Phase 3: per-side debounce.
+            if (_lastAutoOpenBuyAtLocal.HasValue
+                && (DateTimeOffset.Now - _lastAutoOpenBuyAtLocal.Value).TotalMilliseconds < AutoOpenDebounceMs
                 && !HasAnyToolOpenedTicketInLatestResults())
             {
                 System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 {
                     SignalLogItems.Insert(0,
-                        $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: debounce window " +
-                        $"({AutoOpenDebounceMs}ms) since last click at {_lastAutoOpenClickAtLocal.Value:HH:mm:ss.fff}");
+                        $"    - [{DateTime.Now:HH:mm:ss.fff}] Open Buy blocked: debounce window " +
+                        $"({AutoOpenDebounceMs}ms) since last Buy click at {_lastAutoOpenBuyAtLocal.Value:HH:mm:ss.fff}");
                 });
                 return;
             }
@@ -1031,7 +1082,21 @@ public sealed class DashboardViewModel : ObservableObject
             CapturePendingOpenRequestFromTrigger(TradeTab.LeftPanel.TargetMapName, trigger, isExchangeA: true, tradeType: 0, appOpenRequestTimeLocal, appOpenRequestRawMs, slot);
             CapturePendingOpenRequestFromTrigger(TradeTab.RightPanel.TargetMapName, trigger, isExchangeA: false, tradeType: 1, appOpenRequestTimeLocal, appOpenRequestRawMs, slot);
 
+            // Phase 1: allocate coordinator slot AFTER pending captured. If quota full, abort.
+            var coordinatorSlot = _portfolioCoordinator.AllocatePendingOpenSlot(pairId, trigger);
+            if (coordinatorSlot is null)
+            {
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                {
+                    SignalLogItems.Insert(0,
+                        $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: portfolio quota full");
+                });
+                return;
+            }
+            SafeVmLog($"[SLOT][INFO] Slot {coordinatorSlot.SlotId} allocated: pairId={pairId} side=Buy mode=GapBuy");
+
             _lastAutoOpenClickAtLocal = DateTimeOffset.Now;
+            _lastAutoOpenBuyAtLocal = DateTimeOffset.Now;
 
             var delayOpenAMs = Math.Max(0, _runtimeConfigState.CurrentDelayOpenAMs);
             var delayOpenBMs = Math.Max(0, _runtimeConfigState.CurrentDelayOpenBMs);
@@ -1067,6 +1132,7 @@ public sealed class DashboardViewModel : ObservableObject
                 {
                     state.IsResolved = true;
                 }
+                _portfolioCoordinator.AbortPendingOpen(pairId);
             }
 
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
@@ -1095,12 +1161,14 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 state.IsResolved = true;
             }
+            _portfolioCoordinator.AbortPendingOpen(pairId);
 
             throw;
         }
         finally
         {
             Interlocked.Exchange(ref _autoOpenInFlight, 0);
+            Interlocked.Exchange(ref _autoOpenInFlightBuy, 0);
         }
     }
 
@@ -1116,8 +1184,11 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
-        if (Interlocked.CompareExchange(ref _autoOpenInFlight, 1, 0) != 0)
+        // Phase 3: per-side in-flight lock — Sell không cản Buy và ngược lại.
+        if (Interlocked.CompareExchange(ref _autoOpenInFlightSell, 1, 0) != 0
+            || Interlocked.CompareExchange(ref _autoOpenInFlight, 1, 0) != 0)
         {
+            Interlocked.Exchange(ref _autoOpenInFlightSell, 0);
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
                 SignalLogItems.Insert(0,
@@ -1146,15 +1217,16 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
-            if (_lastAutoOpenClickAtLocal.HasValue
-                && (DateTimeOffset.Now - _lastAutoOpenClickAtLocal.Value).TotalMilliseconds < AutoOpenDebounceMs
+            // Phase 3: per-side debounce.
+            if (_lastAutoOpenSellAtLocal.HasValue
+                && (DateTimeOffset.Now - _lastAutoOpenSellAtLocal.Value).TotalMilliseconds < AutoOpenDebounceMs
                 && !HasAnyToolOpenedTicketInLatestResults())
             {
                 System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 {
                     SignalLogItems.Insert(0,
-                        $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: debounce window " +
-                        $"({AutoOpenDebounceMs}ms) since last click at {_lastAutoOpenClickAtLocal.Value:HH:mm:ss.fff}");
+                        $"    - [{DateTime.Now:HH:mm:ss.fff}] Open Sell blocked: debounce window " +
+                        $"({AutoOpenDebounceMs}ms) since last Sell click at {_lastAutoOpenSellAtLocal.Value:HH:mm:ss.fff}");
                 });
                 return;
             }
@@ -1179,7 +1251,21 @@ public sealed class DashboardViewModel : ObservableObject
             CapturePendingOpenRequestFromTrigger(TradeTab.LeftPanel.TargetMapName, trigger, isExchangeA: true, tradeType: 1, appOpenRequestTimeLocal, appOpenRequestRawMs, slot);
             CapturePendingOpenRequestFromTrigger(TradeTab.RightPanel.TargetMapName, trigger, isExchangeA: false, tradeType: 0, appOpenRequestTimeLocal, appOpenRequestRawMs, slot);
 
+            // Phase 1: allocate coordinator slot AFTER pending captured. If quota full, abort.
+            var coordinatorSlot = _portfolioCoordinator.AllocatePendingOpenSlot(pairId, trigger);
+            if (coordinatorSlot is null)
+            {
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                {
+                    SignalLogItems.Insert(0,
+                        $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: portfolio quota full");
+                });
+                return;
+            }
+            SafeVmLog($"[SLOT][INFO] Slot {coordinatorSlot.SlotId} allocated: pairId={pairId} side=Sell mode=GapSell");
+
             _lastAutoOpenClickAtLocal = DateTimeOffset.Now;
+            _lastAutoOpenSellAtLocal = DateTimeOffset.Now;
 
             var delayOpenAMs = Math.Max(0, _runtimeConfigState.CurrentDelayOpenAMs);
             var delayOpenBMs = Math.Max(0, _runtimeConfigState.CurrentDelayOpenBMs);
@@ -1215,6 +1301,7 @@ public sealed class DashboardViewModel : ObservableObject
                 {
                     state.IsResolved = true;
                 }
+                _portfolioCoordinator.AbortPendingOpen(pairId);
             }
 
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
@@ -1243,16 +1330,23 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 state.IsResolved = true;
             }
+            _portfolioCoordinator.AbortPendingOpen(pairId);
 
             throw;
         }
         finally
         {
             Interlocked.Exchange(ref _autoOpenInFlight, 0);
+            Interlocked.Exchange(ref _autoOpenInFlightSell, 0);
         }
     }
 
-    private async Task AutoCloseOrderAsync(GapSignalTriggerResult trigger)
+    /// <summary>
+    /// Phase 4: AutoCloseOrderAsync now accepts an optional targetSlot. When provided,
+    /// uses ticket-precise selection via SelectCloseCandidateForTicket. Otherwise falls
+    /// back to legacy first-tool-opened (used by manual close + recovery).
+    /// </summary>
+    private async Task AutoCloseOrderAsync(GapSignalTriggerResult trigger, PositionSlot? targetSlot = null)
     {
         if (Interlocked.CompareExchange(ref _autoCloseInFlight, 1, 0) != 0)
         {
@@ -1268,15 +1362,39 @@ public sealed class DashboardViewModel : ObservableObject
         {
             var slot = Math.Max(0, _autoSlot - 1);
             _closeConfirmBySlot.Remove(slot);
-            var selectA = SelectCloseCandidateForExchange(
-                exchangeLabel: "A",
-                tradeMapName: TradeTab.LeftPanel.TargetMapName,
-                tradeHwnd: _runtimeConfigState.CurrentTradeHwndA);
 
-            var selectB = SelectCloseCandidateForExchange(
-                exchangeLabel: "B",
-                tradeMapName: TradeTab.RightPanel.TargetMapName,
-                tradeHwnd: _runtimeConfigState.CurrentTradeHwndB);
+            // Phase 4: if coordinator provided a specific slot, lookup by ticket.
+            // Otherwise legacy first-tool-opened picker.
+            CloseSelectionResult selectA;
+            CloseSelectionResult selectB;
+            if (targetSlot?.TicketA is { } ticketA && targetSlot?.TicketB is { } ticketB)
+            {
+                selectA = SelectCloseCandidateForTicket(
+                    targetTicket: ticketA,
+                    exchangeLabel: "A",
+                    tradeMapName: TradeTab.LeftPanel.TargetMapName,
+                    tradeHwnd: _runtimeConfigState.CurrentTradeHwndA);
+                selectB = SelectCloseCandidateForTicket(
+                    targetTicket: ticketB,
+                    exchangeLabel: "B",
+                    tradeMapName: TradeTab.RightPanel.TargetMapName,
+                    tradeHwnd: _runtimeConfigState.CurrentTradeHwndB);
+                SafeVmLog(
+                    $"[CLOSE_SELECT][INFO] Slot {targetSlot!.SlotId} resolved: " +
+                    $"A.row={selectA.Request?.RowIndex} ticket={ticketA}, " +
+                    $"B.row={selectB.Request?.RowIndex} ticket={ticketB}");
+            }
+            else
+            {
+                selectA = SelectCloseCandidateForExchange(
+                    exchangeLabel: "A",
+                    tradeMapName: TradeTab.LeftPanel.TargetMapName,
+                    tradeHwnd: _runtimeConfigState.CurrentTradeHwndA);
+                selectB = SelectCloseCandidateForExchange(
+                    exchangeLabel: "B",
+                    tradeMapName: TradeTab.RightPanel.TargetMapName,
+                    tradeHwnd: _runtimeConfigState.CurrentTradeHwndB);
+            }
 
             var appCloseRequestTimeLocal = DateTimeOffset.Now;
             var appCloseRequestRawMs = Environment.TickCount64;
@@ -1519,6 +1637,70 @@ public sealed class DashboardViewModel : ObservableObject
         return null;
     }
 
+    /// <summary>
+    /// Phase 4: Resolve current RowIndex of a SPECIFIC ticket in MMF.
+    /// Multi-slot close routing must lookup by slot.TicketA/B, NOT pick "first tool-opened"
+    /// which closes wrong slot when 2+ slots cùng side.
+    /// </summary>
+    private CloseSelectionResult SelectCloseCandidateForTicket(
+        ulong targetTicket,
+        string exchangeLabel,
+        string tradeMapName,
+        string tradeHwnd)
+    {
+        var result = ReadTradesWithMmfLog(tradeMapName);
+
+        if (!result.IsMapAvailable)
+        {
+            return new CloseSelectionResult(
+                Request: null, Status: CloseSelectionStatus.MapNotFound,
+                TradeType: null, TradeMapName: tradeMapName, Symbol: null, Volume: null,
+                DiagnosticMessage: $"Close {exchangeLabel} skipped: map not found ({tradeMapName})");
+        }
+
+        if (!result.IsParseSuccess)
+        {
+            return new CloseSelectionResult(
+                Request: null, Status: CloseSelectionStatus.ParseError,
+                TradeType: null, TradeMapName: tradeMapName, Symbol: null, Volume: null,
+                DiagnosticMessage: $"Close {exchangeLabel} skipped: parse error ({result.ErrorMessage ?? "unknown"})");
+        }
+
+        // Find SPECIFIC ticket — do NOT fallback to first-tool-opened.
+        for (var i = 0; i < result.Records.Count; i++)
+        {
+            if (result.Records[i].Ticket != targetTicket) continue;
+
+            // Defense check: ticket must be tool-opened.
+            if (!_pairIdByTicket.ContainsKey(result.Records[i].Ticket))
+            {
+                SafeVmLog(
+                    $"[CLOSE_SELECT][WARN] Ticket {targetTicket} found at row {i} but not tool-opened — skipping");
+                return new CloseSelectionResult(
+                    Request: null, Status: CloseSelectionStatus.NoOpenTrade,
+                    TradeType: null, TradeMapName: tradeMapName, Symbol: null, Volume: null,
+                    DiagnosticMessage: $"Close {exchangeLabel} skipped: ticket {targetTicket} found but not tool-opened");
+            }
+
+            var trade = result.Records[i];
+            return new CloseSelectionResult(
+                Request: new ManualCloseRequest(exchangeLabel, tradeHwnd, trade.Ticket, i),
+                Status: CloseSelectionStatus.Candidate,
+                TradeType: trade.TradeType, TradeMapName: tradeMapName,
+                Symbol: trade.Symbol, Volume: trade.Lot,
+                DiagnosticMessage: null);
+        }
+
+        SafeVmLog(
+            $"[CLOSE_SELECT][ERROR] Ticket {targetTicket} NOT found in {exchangeLabel} MMF " +
+            $"(records={result.Records.Count}). Close will skip; signal may retry next tick.");
+        return new CloseSelectionResult(
+            Request: null, Status: CloseSelectionStatus.NoOpenTrade,
+            TradeType: null, TradeMapName: tradeMapName, Symbol: null, Volume: null,
+            DiagnosticMessage: $"Close {exchangeLabel} skipped: ticket {targetTicket} not found in MMF");
+    }
+
+    [Obsolete("Phase 4: prefer SelectCloseCandidateForTicket for multi-slot routing. Kept for manual close + recovery fallback.")]
     private CloseSelectionResult SelectCloseCandidateForExchange(string exchangeLabel, string tradeMapName, string tradeHwnd)
     {
         var result = ReadTradesWithMmfLog(tradeMapName);
@@ -2325,7 +2507,29 @@ public sealed class DashboardViewModel : ObservableObject
         HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsComplete);
         RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict()));
 
+        SyncPortfolioCoordinatorConfig();
         RefreshOrderInfoTabs();
+    }
+
+    /// <summary>
+    /// Phase 1: push quota + cooldown config từ RuntimeConfigState xuống coordinator.
+    /// Gọi từ constructor và sau mỗi runtime config update (DB load, user change).
+    /// Phase 1 cap=1 default; Phase 5 sẽ load real values từ DB.
+    /// </summary>
+    private void SyncPortfolioCoordinatorConfig()
+    {
+        if (_portfolioCoordinator is null) return;
+
+        _portfolioCoordinator.UpdateQuotaConfig(
+            maxTotal: _runtimeConfigState.CurrentMaxTotalOpens,
+            maxBuy: _runtimeConfigState.CurrentMaxBuyOpens,
+            maxSell: _runtimeConfigState.CurrentMaxSellOpens);
+
+        // Phase 1: dùng StartWaitTime/EndWaitTime hiện có làm cooldown range
+        // để adapter CurrentWaitSeconds vẫn match TradingFlowEngine.BeginWaitAfterClose.
+        _portfolioCoordinator.UpdateCooldownConfig(
+            minSec: _runtimeConfigState.CurrentStartWaitTime,
+            maxSec: _runtimeConfigState.CurrentEndWaitTime);
     }
 
     private void RefreshOrderInfoTabs()
@@ -2700,7 +2904,24 @@ public sealed class DashboardViewModel : ObservableObject
         var toolRowsB = CountToolOpenedRows(tradeRightResult);
         var liveAutoPairCount = CountLiveAutoPairCount(tradeLeftResult, tradeRightResult);
 
-        var hasInvariantViolation = liveAutoPairCount > 1 || toolRowsA > 1 || toolRowsB > 1;
+        // Phase 3: multi-slot watchdog formula. Vi phạm nếu:
+        //   - Tool tickets trên mỗi sàn vượt số slot tracking trong coordinator
+        //   - Hoặc total slot vượt cap config
+        //   - Hoặc side counts vượt per-side cap
+        // Ở cap=1: coordinatorActiveCount ≤ 1 → toolA>1 hoặc toolB>1 → vi phạm (giống logic cũ).
+        var coordinatorActiveCount = _portfolioCoordinator.LiveCount + _portfolioCoordinator.PendingCount;
+        var quotaTotalViolation = coordinatorActiveCount > _runtimeConfigState.CurrentMaxTotalOpens;
+        var quotaSideViolation =
+            _portfolioCoordinator.LiveBuyCount > _runtimeConfigState.CurrentMaxBuyOpens
+            || _portfolioCoordinator.LiveSellCount > _runtimeConfigState.CurrentMaxSellOpens;
+        var toolOverTrackingViolation =
+            toolRowsA > coordinatorActiveCount || toolRowsB > coordinatorActiveCount;
+
+        var hasInvariantViolation =
+            quotaTotalViolation
+            || quotaSideViolation
+            || toolOverTrackingViolation
+            || liveAutoPairCount > _runtimeConfigState.CurrentMaxTotalOpens;
         if (!hasInvariantViolation)
         {
             if (_isAutoOpenPausedByInvariant)
@@ -2731,8 +2952,12 @@ public sealed class DashboardViewModel : ObservableObject
 
         _isAutoOpenPausedByInvariant = true;
         SafeVmLog(
-            $"[WATCHDOG][WARN] Invariant violation: multiple live auto pairs detected " +
-            $"(toolA={toolRowsA},toolB={toolRowsB},autoPairs={liveAutoPairCount}). state=PAUSED");
+            $"[WATCHDOG][WARN] Invariant violation detected: " +
+            $"toolA={toolRowsA},toolB={toolRowsB},autoPairs={liveAutoPairCount}, " +
+            $"slotsActive={coordinatorActiveCount}/{_runtimeConfigState.CurrentMaxTotalOpens}, " +
+            $"liveBuy={_portfolioCoordinator.LiveBuyCount}/{_runtimeConfigState.CurrentMaxBuyOpens}, " +
+            $"liveSell={_portfolioCoordinator.LiveSellCount}/{_runtimeConfigState.CurrentMaxSellOpens}. " +
+            $"state=PAUSED");
     }
 
     private static int GetOpenRowCount(SharedMapReadResult<TradeSharedRecord> tradeResult)
@@ -2901,6 +3126,9 @@ public sealed class DashboardViewModel : ObservableObject
         foreach (var action in actions)
         {
             await CloseOpenedLegByTimeoutAsync(action, cancellationToken);
+            // Phase 1: cleanup coordinator slot to release quota.
+            _portfolioCoordinator.AbortPendingOpen(action.PairId);
+            SafeVmLog($"[SLOT][WARN] Slot pending open aborted by timeout: pairId={action.PairId}");
         }
     }
 
@@ -3413,6 +3641,17 @@ public sealed class DashboardViewModel : ObservableObject
     /// </summary>
     private bool HasUnresolvedAutoPendingOpenCycle(out string? blockingPairId)
     {
+        // Phase 1: prefer coordinator quota check (covers pending + live + cap config).
+        // Fall back to legacy _pendingOpenPairById iteration for safety net.
+        if (_portfolioCoordinator.LiveAndPendingTotalCount >= _runtimeConfigState.CurrentMaxTotalOpens)
+        {
+            var pending = _portfolioCoordinator.PendingOpenSlots.FirstOrDefault();
+            blockingPairId = pending?.PairId
+                ?? _portfolioCoordinator.LiveSlots.FirstOrDefault()?.PairId;
+            SafeVmLog($"[CYCLE][WARN] Auto open blocked by quota: total={_portfolioCoordinator.LiveAndPendingTotalCount}/{_runtimeConfigState.CurrentMaxTotalOpens} blockingPairId={blockingPairId}");
+            return true;
+        }
+
         foreach (var state in _pendingOpenPairById.Values)
         {
             if (!state.IsAutoFlow)
@@ -4125,6 +4364,13 @@ public sealed class DashboardViewModel : ObservableObject
 
         var rows = BuildTradeRows(appGeneratedRecords, appGeneratedRecords.Count, result.Timestamp, snapshot, isExchangeA, point);
         panel.SetTradeData(rows);
+
+        // Phase 1: forward per-ticket profit to coordinator (Phase 2 Rule D uses LastProfitSnapshot).
+        foreach (var record in appGeneratedRecords)
+        {
+            _portfolioCoordinator.UpdateProfit(record.Ticket, record.Profit);
+        }
+
         RebuildTradeRealtimeProfitRows();
     }
 
@@ -4434,6 +4680,17 @@ public sealed class DashboardViewModel : ObservableObject
         {
             state.IsResolved = true;
             SafeVmLog($"[CYCLE][INFO] Pending open resolved: pairId={pendingRequest.PairId} ticketA={state.OpenedTicketA} ticketB={state.OpenedTicketB}");
+
+            // Phase 1: notify coordinator so slot transitions PendingOpen → Live and tickets are stored.
+            if (state.IsAutoFlow && state.OpenedTicketA.HasValue && state.OpenedTicketB.HasValue)
+            {
+                _portfolioCoordinator.MarkSlotOpenConfirmed(
+                    pendingRequest.PairId,
+                    state.OpenedTicketA.Value,
+                    state.OpenedTicketB.Value,
+                    DateTime.UtcNow);
+                SafeVmLog($"[SLOT][INFO] Slot open confirmed: pairId={pendingRequest.PairId} ticketA={state.OpenedTicketA.Value} ticketB={state.OpenedTicketB.Value}");
+            }
 
             // Persist current tickets to Supabase for recovery on restart
             if (state.OpenedTicketA.HasValue && state.OpenedTicketB.HasValue)
@@ -5184,7 +5441,9 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
-            var trigger = _tradingFlowEngine.ProcessSnapshot(
+            // Phase 1: business decision flows through PortfolioCoordinator directly.
+            // Adapter (_tradingFlowEngine) only used for legacy scalar reads (CurrentPhase, etc.).
+            var portfolioResult = _portfolioCoordinator.ProcessSnapshot(
                 new GapSignalSnapshot(
                     metrics.TimestampUtc,
                     metrics.ExchangeA.Bid,
@@ -5210,6 +5469,11 @@ public sealed class DashboardViewModel : ObservableObject
                     OpenGapTick: _runtimeConfigState.CurrentOpenGapTick,
                     CloseGapTick: _runtimeConfigState.CurrentCloseGapTick,
                     CoolDownGapTick: _runtimeConfigState.CurrentCoolDownGapTick));
+
+            // Reduce 3-field result to single trigger for legacy guard code path below.
+            // For close trigger, also capture the target slot (Phase 1 cap=1: at most 1 slot).
+            var trigger = portfolioResult.OpenTrigger ?? portfolioResult.CloseTrigger;
+            var closeTargetSlot = portfolioResult.CloseTargetSlot;
             LogFlowTransitionIfChanged("process-snapshot");
 
             if (canRenderUi)
@@ -5321,7 +5585,14 @@ public sealed class DashboardViewModel : ObservableObject
             }
 
             // Auto-execute trade from signal trigger
-            _ = DispatchSignalTradeAsync(trigger);
+            if (trigger.Action == GapSignalAction.Open)
+            {
+                _ = DispatchOpenTriggerAsync(trigger);
+            }
+            else if (trigger.Action == GapSignalAction.Close && closeTargetSlot is not null)
+            {
+                _ = DispatchCloseTriggerAsync(closeTargetSlot, trigger);
+            }
         });
     }
 
@@ -5438,24 +5709,67 @@ public sealed class DashboardViewModel : ObservableObject
             return "NONE";
         }
 
-        return _tradingFlowEngine.CurrentPositionSide switch
-        {
-            TradingPositionSide.Buy => "BUY",
-            TradingPositionSide.Sell => "SELL",
-            _ => "NONE"
-        };
+        // Phase 6: multi-slot counters từ coordinator.
+        var buy = _portfolioCoordinator.LiveBuyCount;
+        var sell = _portfolioCoordinator.LiveSellCount;
+        var total = _portfolioCoordinator.LiveAndPendingTotalCount;
+        var maxBuy = _runtimeConfigState.CurrentMaxBuyOpens;
+        var maxSell = _runtimeConfigState.CurrentMaxSellOpens;
+        var maxTotal = _runtimeConfigState.CurrentMaxTotalOpens;
+
+        // Cap=1 production: counters cap=1, still useful info.
+        return $"Buy {buy}/{maxBuy} | Sell {sell}/{maxSell} | Total {total}/{maxTotal}";
     }
 
     private string ResolveCurrentPhaseText()
     {
+        // Phase 6: countdown for cooldown + opposite-lock status.
+        var now = DateTime.UtcNow;
+
+        // Priority 1: global cooldown active.
+        if (_portfolioCoordinator.GlobalActionLockUntilUtc is { } lockUntil
+            && lockUntil > now)
+        {
+            var remaining = (int)Math.Ceiling((lockUntil - now).TotalSeconds);
+            return $"COOLDOWN {remaining}s";
+        }
+
+        // Priority 2: opposite-side lock window.
+        if (_portfolioCoordinator.LastOpenConfirmedAtUtc is { } lastOpenAt
+            && _portfolioCoordinator.LastOpenConfirmedSide != TradingPositionSide.None)
+        {
+            var elapsedSec = (now - lastOpenAt).TotalSeconds;
+            if (elapsedSec < PortfolioCoordinator.OppositeSideLockSeconds)
+            {
+                var remaining = PortfolioCoordinator.OppositeSideLockSeconds - (int)elapsedSec;
+                var lockedSide = _portfolioCoordinator.LastOpenConfirmedSide == TradingPositionSide.Buy
+                    ? "Sell" : "Buy";
+                return $"READY (no {lockedSide} for {remaining}s)";
+            }
+        }
+
+        // Priority 3: quota full.
+        if (_portfolioCoordinator.LiveAndPendingTotalCount >= _runtimeConfigState.CurrentMaxTotalOpens)
+        {
+            return "QUOTA FULL";
+        }
+
+        // Priority 4: legacy engine state (fallback for single-slot semantics).
         var phase = _tradingFlowEngine.CurrentPhase;
         return phase switch
         {
             TradingFlowPhase.WaitingCloseFromGapBuy => "WAITING CLOSE (GAP_SELL)",
             TradingFlowPhase.WaitingCloseFromGapSell => "WAITING CLOSE (GAP_BUY)",
-            _ => "WAITING OPEN"
+            _ => "READY"
         };
     }
+
+    /// <summary>
+    /// Phase 6: hide manual Buy/Sell/Close buttons khi multi-slot enabled.
+    /// XAML binds Visibility=Collapsed via BoolToVisibilityConverter.
+    /// Hardcoded false; future toggle qua feature flag nếu cần debug.
+    /// </summary>
+    public bool IsManualTradeButtonsVisible => false;
 
     private void BindDashboardMetrics(DashboardMetrics metrics)
     {

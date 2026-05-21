@@ -10,6 +10,9 @@
     <RootNamespace>TradeDesktop.App</RootNamespace>
     <!-- Required for reliable WPF single-file startup on target machines -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Phase 4: legacy SelectCloseCandidateForExchange has [Obsolete] for documentation;
+         intentional callers remain (manual close + recovery fallback). Suppress warning. -->
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

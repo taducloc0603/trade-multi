@@ -3,6 +3,7 @@ using TradeDesktop.Application.Models;
 
 namespace TradeDesktop.Application.Services;
 
+[Obsolete("Use IPortfolioCoordinator + PortfolioCoordinatorAdapter. Kept for reference in Phase 0 and legacy unit tests.")]
 public sealed class TradingFlowEngine(
     IOpenSignalEngine openSignalEngine,
     ICloseSignalEngine closeSignalEngine) : ITradingFlowEngine

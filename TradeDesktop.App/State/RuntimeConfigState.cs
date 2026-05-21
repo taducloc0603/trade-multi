@@ -38,6 +38,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentOpenGapTick { get; private set; }
     public int CurrentCloseGapTick { get; private set; }
     public int CurrentCoolDownGapTick { get; private set; }
+
+    // Phase 1: multi-slot quota config (default 1 — single slot behavior).
+    // Phase 5 sẽ load từ DB; trước đó default đảm bảo behavior identical Phase 0.
+    public int CurrentMaxTotalOpens { get; private set; } = 1;
+    public int CurrentMaxBuyOpens { get; private set; } = 1;
+    public int CurrentMaxSellOpens { get; private set; } = 1;
+
     public string CurrentMapName1 { get; private set; } = string.Empty;
     public string CurrentMapName2 { get; private set; } = string.Empty;
     public string CurrentPlatformA { get; private set; } = "mt5";

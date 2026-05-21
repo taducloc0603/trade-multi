@@ -43,6 +43,7 @@ public partial class App : System.Windows.Application
                         .AddInfrastructure(configuration);
 
                     services.AddSingleton<ITradeSessionFileLogger, TradeSessionFileLogger>();
+                    services.AddSingleton<ISlotLogger, SlotLogger>();
                     services.AddHttpClient<ITelegramNotifier, TelegramNotifier>();
                     services.AddSingleton<RuntimeConfigState>();
                     services.AddSingleton<IMt5ManualTradeService, Mt5ManualTradeService>();

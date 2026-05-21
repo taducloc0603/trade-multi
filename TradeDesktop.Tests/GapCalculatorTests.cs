@@ -88,6 +88,8 @@ public sealed class GapCalculatorTests
         public int CurrentOpenGapTick => 0;
         public int CurrentCloseGapTick => 0;
         public int CurrentCoolDownGapTick => 0;
+        public int CurrentOpenPriceFreezeMs => 0;
+        public int CurrentClosePriceFreezeMs => 0;
         public string CurrentMapName1 => "A";
         public string CurrentMapName2 => "B";
         public DashboardMetrics? CurrentDashboardMetrics => null;

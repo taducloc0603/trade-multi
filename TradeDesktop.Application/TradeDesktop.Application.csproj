@@ -12,6 +12,9 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- CS0618: TradingFlowEngine is intentionally [Obsolete] (Phase 0 §0.2) but still
+         registered for legacy reference. Suppress to keep build warning-free. -->
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
   </PropertyGroup>
 
 </Project>
