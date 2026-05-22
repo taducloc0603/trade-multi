@@ -561,7 +561,8 @@ public sealed class DashboardViewModel : ObservableObject
 
     public string TradingLogicStatusText => IsTradingLogicEnabled ? "Running" : "Stopped";
     public Brush TradingLogicStatusBrush => IsTradingLogicEnabled ? Brushes.ForestGreen : Brushes.Gray;
-    public string CurrentPositionText => ResolveCurrentPositionText();
+    public string CurrentPositionTextA => ResolveCurrentPositionText(isExchangeA: true);
+    public string CurrentPositionTextB => ResolveCurrentPositionText(isExchangeA: false);
     public string CurrentPhaseText => ResolveCurrentPhaseText();
     public bool IsOpenGapBuyEnabled
     {
@@ -778,7 +779,7 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 _tradingFlowEngine.ForceWaitingClose(TradingPositionSide.Buy);
                 LogFlowTransitionIfChanged("force-waiting-close-side=buy");
-                OnPropertyChanged(nameof(CurrentPositionText));
+                RaiseCurrentPositionTextChanged();
                 OnPropertyChanged(nameof(CurrentPhaseText));
             }
         }
@@ -839,7 +840,7 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 _tradingFlowEngine.ForceWaitingClose(TradingPositionSide.Sell);
                 LogFlowTransitionIfChanged("force-waiting-close-side=sell");
-                OnPropertyChanged(nameof(CurrentPositionText));
+                RaiseCurrentPositionTextChanged();
                 OnPropertyChanged(nameof(CurrentPhaseText));
             }
         }
@@ -958,7 +959,7 @@ public sealed class DashboardViewModel : ObservableObject
 
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
-                OnPropertyChanged(nameof(CurrentPositionText));
+                RaiseCurrentPositionTextChanged();
                 OnPropertyChanged(nameof(CurrentPhaseText));
                 SignalLogItems.Insert(0,
                     $"    - [{DateTime.Now:HH:mm:ss.fff}] Auto trade error: {ex.Message}");
@@ -993,7 +994,7 @@ public sealed class DashboardViewModel : ObservableObject
             LogFlowTransitionIfChanged("close-aborted-by-exception");
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
-                OnPropertyChanged(nameof(CurrentPositionText));
+                RaiseCurrentPositionTextChanged();
                 OnPropertyChanged(nameof(CurrentPhaseText));
                 SignalLogItems.Insert(0,
                     $"    - [{DateTime.Now:HH:mm:ss.fff}] Auto close error: {ex.Message}");
@@ -1496,7 +1497,7 @@ public sealed class DashboardViewModel : ObservableObject
                     hasCloseSuccessBoth,
                     immediateFlatObserved);
 
-                OnPropertyChanged(nameof(CurrentPositionText));
+                RaiseCurrentPositionTextChanged();
                 OnPropertyChanged(nameof(CurrentPhaseText));
             });
         }
@@ -2335,7 +2336,7 @@ public sealed class DashboardViewModel : ObservableObject
         _isStaleA = false;
         _isStaleB = false;
         _lastPerfSummaryAtUtc = DateTime.MinValue;
-        OnPropertyChanged(nameof(CurrentPositionText));
+        RaiseCurrentPositionTextChanged();
         OnPropertyChanged(nameof(CurrentPhaseText));
         RaiseManualOpenCanExecuteChanged();
     }
@@ -2582,12 +2583,14 @@ public sealed class DashboardViewModel : ObservableObject
                 {
                     _latestTradeLeftResult = tradeLeftResult;
                     ApplyTradeResult(TradeTab.LeftPanel, tradeLeftResult, snapshot, isExchangeA: true, point);
+                    OnPropertyChanged(nameof(CurrentPositionTextA));
                 }
 
                 if (shouldApplyTradeRight)
                 {
                     _latestTradeRightResult = tradeRightResult;
                     ApplyTradeResult(TradeTab.RightPanel, tradeRightResult, snapshot, isExchangeA: false, point);
+                    OnPropertyChanged(nameof(CurrentPositionTextB));
                 }
 
                 if (shouldApplyHistoryLeft)
@@ -3178,6 +3181,17 @@ public sealed class DashboardViewModel : ObservableObject
         var actions = new List<PendingCloseRetryAction>();
         var now = DateTimeOffset.Now;
 
+        // Dọn entries đã resolved từ vòng trước — chống _pendingClosePairById grow vô hạn
+        // trong long session. PairId unique theo TickCount64 nên reuse pairId không xảy ra.
+        var resolvedKeys = _pendingClosePairById
+            .Where(kv => kv.Value.IsResolved)
+            .Select(kv => kv.Key)
+            .ToList();
+        foreach (var key in resolvedKeys)
+        {
+            _pendingClosePairById.Remove(key);
+        }
+
         foreach (var state in _pendingClosePairById.Values)
         {
             if (state.IsResolved)
@@ -3319,6 +3333,13 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
+        // Khi active cycle đã null, main close flow đã trigger BeginWaitAfterClose từ trước —
+        // pending close finalize ở đây chỉ là safety-net polling, không cần log noise.
+        if (_activeAutoCycle is null)
+        {
+            return;
+        }
+
         if (!IsPendingCloseStateForActiveCycle(state))
         {
             SignalLogItems.Insert(0,
@@ -3347,7 +3368,7 @@ public sealed class DashboardViewModel : ObservableObject
         SignalLogItems.Insert(0,
             SignalLogFormatter.FormatRandomWaitingTime(closeCompletedAtLocal, waitSeconds));
         ClearActiveAutoCycleOnCloseFinalize();
-        OnPropertyChanged(nameof(CurrentPositionText));
+        RaiseCurrentPositionTextChanged();
         OnPropertyChanged(nameof(CurrentPhaseText));
     }
 
@@ -3429,7 +3450,7 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 _tradingFlowEngine.ForceWaitingOpen();
                 LogFlowTransitionIfChanged("sync-force-waiting-open-both-flat");
-                OnPropertyChanged(nameof(CurrentPositionText));
+                RaiseCurrentPositionTextChanged();
                 OnPropertyChanged(nameof(CurrentPhaseText));
             }
 
@@ -3470,7 +3491,7 @@ public sealed class DashboardViewModel : ObservableObject
                             $"source=SyncTradingFlow");
                         _tradingFlowEngine.ForceWaitingOpen();
                         LogFlowTransitionIfChanged("sync-force-waiting-open-tool-flat");
-                        OnPropertyChanged(nameof(CurrentPositionText));
+                        RaiseCurrentPositionTextChanged();
                         OnPropertyChanged(nameof(CurrentPhaseText));
                     }
                 }
@@ -3490,7 +3511,7 @@ public sealed class DashboardViewModel : ObservableObject
         {
             _tradingFlowEngine.ForceWaitingClose(side);
             LogFlowTransitionIfChanged($"sync-force-waiting-close-side={side}");
-            OnPropertyChanged(nameof(CurrentPositionText));
+            RaiseCurrentPositionTextChanged();
             OnPropertyChanged(nameof(CurrentPhaseText));
             return;
         }
@@ -3499,7 +3520,7 @@ public sealed class DashboardViewModel : ObservableObject
         {
             _tradingFlowEngine.ForceWaitingClose(side);
             LogFlowTransitionIfChanged($"sync-force-waiting-close-correct-side={side}");
-            OnPropertyChanged(nameof(CurrentPositionText));
+            RaiseCurrentPositionTextChanged();
             OnPropertyChanged(nameof(CurrentPhaseText));
         }
     }
@@ -3705,7 +3726,7 @@ public sealed class DashboardViewModel : ObservableObject
             SignalLogFormatter.FormatRandomWaitingTime(closeCompletedAtLocal, waitSeconds));
         ClearActiveAutoCycleOnCloseFinalize();
         _closeBothFlatPollStreak = 0;
-        OnPropertyChanged(nameof(CurrentPositionText));
+        RaiseCurrentPositionTextChanged();
         OnPropertyChanged(nameof(CurrentPhaseText));
         return true;
     }
@@ -3743,7 +3764,7 @@ public sealed class DashboardViewModel : ObservableObject
             SignalLogFormatter.FormatRandomWaitingTime(closeCompletedAtLocal, waitSeconds));
         ClearActiveAutoCycleOnCloseFinalize();
         _closeBothFlatPollStreak = 0;
-        OnPropertyChanged(nameof(CurrentPositionText));
+        RaiseCurrentPositionTextChanged();
         OnPropertyChanged(nameof(CurrentPhaseText));
         return true;
     }
@@ -4089,7 +4110,7 @@ public sealed class DashboardViewModel : ObservableObject
                     _activeAutoCloseRecoveryCycle = null;
                 }
 
-                OnPropertyChanged(nameof(CurrentPositionText));
+                RaiseCurrentPositionTextChanged();
                 OnPropertyChanged(nameof(CurrentPhaseText));
             });
         }
@@ -4790,7 +4811,7 @@ public sealed class DashboardViewModel : ObservableObject
                         var waitSeconds = _tradingFlowEngine.CurrentWaitSeconds;
                         SignalLogItems.Insert(0,
                             SignalLogFormatter.FormatRandomWaitingTime(closeCompletedAtLocal, waitSeconds));
-                        OnPropertyChanged(nameof(CurrentPositionText));
+                        RaiseCurrentPositionTextChanged();
                         OnPropertyChanged(nameof(CurrentPhaseText));
                     }
                 }
@@ -5454,7 +5475,7 @@ public sealed class DashboardViewModel : ObservableObject
 
             if (canRenderUi)
             {
-                OnPropertyChanged(nameof(CurrentPositionText));
+                RaiseCurrentPositionTextChanged();
                 OnPropertyChanged(nameof(CurrentPhaseText));
             }
 
@@ -5495,7 +5516,7 @@ public sealed class DashboardViewModel : ObservableObject
                     LogFlowTransitionIfChanged("open-aborted-by-guard");
                 }
 
-                OnPropertyChanged(nameof(CurrentPositionText));
+                RaiseCurrentPositionTextChanged();
                 OnPropertyChanged(nameof(CurrentPhaseText));
 
                 return;
@@ -5511,7 +5532,7 @@ public sealed class DashboardViewModel : ObservableObject
                 // Rollback to WaitingOpen when user toggle disables this open side.
                 _tradingFlowEngine.AbortPendingOpenExecution();
                 LogFlowTransitionIfChanged("open-aborted-by-toggle");
-                OnPropertyChanged(nameof(CurrentPositionText));
+                RaiseCurrentPositionTextChanged();
                 OnPropertyChanged(nameof(CurrentPhaseText));
 
                 SignalLogItems.Insert(0,
@@ -5531,7 +5552,7 @@ public sealed class DashboardViewModel : ObservableObject
 
                     _tradingFlowEngine.AbortPendingOpenExecution();
                     LogFlowTransitionIfChanged("open-aborted-by-qualifying");
-                    OnPropertyChanged(nameof(CurrentPositionText));
+                    RaiseCurrentPositionTextChanged();
                     OnPropertyChanged(nameof(CurrentPhaseText));
                     return;
                 }
@@ -5551,7 +5572,7 @@ public sealed class DashboardViewModel : ObservableObject
 
                     _tradingFlowEngine.AbortPendingCloseExecution();
                     LogFlowTransitionIfChanged("close-aborted-by-qualifying");
-                    OnPropertyChanged(nameof(CurrentPositionText));
+                    RaiseCurrentPositionTextChanged();
                     OnPropertyChanged(nameof(CurrentPhaseText));
                     return;
                 }
@@ -5678,23 +5699,48 @@ public sealed class DashboardViewModel : ObservableObject
         }
     }
 
-    private string ResolveCurrentPositionText()
+    private string ResolveCurrentPositionText(bool isExchangeA)
     {
         if (!IsTradingLogicEnabled)
         {
             return "NONE";
         }
 
-        // Phase 6: multi-slot counters từ coordinator.
-        var buy = _portfolioCoordinator.LiveBuyCount;
-        var sell = _portfolioCoordinator.LiveSellCount;
-        var total = _portfolioCoordinator.LiveAndPendingTotalCount;
+        // Đếm trực tiếp từ MMF physical trades trên từng sàn (TradeType: 0=Buy, 1=Sell)
+        // — phản ánh đúng số lệnh đang mở trên sàn, kể cả orphan/external opens.
+        var records = isExchangeA
+            ? _latestTradeLeftResult?.Records
+            : _latestTradeRightResult?.Records;
+        var buy = records?.Count(r => r.TradeType == 0) ?? 0;
+        var sell = records?.Count(r => r.TradeType == 1) ?? 0;
+        var total = buy + sell;
         var maxBuy = _runtimeConfigState.CurrentMaxBuyOpens;
         var maxSell = _runtimeConfigState.CurrentMaxSellOpens;
         var maxTotal = _runtimeConfigState.CurrentMaxTotalOpens;
 
-        // Cap=1 production: counters cap=1, still useful info.
-        return $"Buy {buy}/{maxBuy} | Sell {sell}/{maxSell} | Total {total}/{maxTotal}";
+        var text = $"Buy {buy}/{maxBuy} | Sell {sell}/{maxSell} | Total {total}/{maxTotal}";
+
+        // Quota Rule A vẫn áp dụng global (coordinator-slot based). Phần FULL ở đây
+        // là UI hint dựa trên MMF physical count theo sàn, không can thiệp block logic.
+        if (total >= maxTotal)
+        {
+            text += $" — FULL (Total {total}/{maxTotal})";
+        }
+        else if (buy >= maxBuy)
+        {
+            text += $" — FULL (Buy {buy}/{maxBuy})";
+        }
+        else if (sell >= maxSell)
+        {
+            text += $" — FULL (Sell {sell}/{maxSell})";
+        }
+        return text;
+    }
+
+    private void RaiseCurrentPositionTextChanged()
+    {
+        OnPropertyChanged(nameof(CurrentPositionTextA));
+        OnPropertyChanged(nameof(CurrentPositionTextB));
     }
 
     private string ResolveCurrentPhaseText()
@@ -5932,6 +5978,32 @@ public sealed class DashboardViewModel : ObservableObject
                 TicketA = ticketA,
                 TicketB = ticketB
             };
+
+            // Register slot vào coordinator để toolRowsX == coordinatorActiveCount.
+            // Nếu không có, invariant watchdog sẽ thấy `toolRowsX (1) > coordinatorActiveCount (0)`
+            // → pause auto-open vĩnh viễn sau recovery (CLAUDE.md §5).
+            if (_portfolioCoordinator.GetSlotByTicket(ticketA) is null
+                && _portfolioCoordinator.GetSlotByTicket(ticketB) is null)
+            {
+                var recordA = tradeResultA.Records.First(r => r.Ticket == ticketA);
+                var side = recordA.TradeType == 0
+                    ? TradingPositionSide.Buy
+                    : TradingPositionSide.Sell;
+                var openMode = side == TradingPositionSide.Buy
+                    ? TradingOpenMode.GapBuy
+                    : TradingOpenMode.GapSell;
+
+                _portfolioCoordinator.RegisterSyncedSlot(
+                    pairId: recoveryPairId,
+                    side: side,
+                    openMode: openMode,
+                    ticketA: ticketA,
+                    ticketB: ticketB,
+                    openConfirmedAtUtc: DateTime.UtcNow,
+                    holdingSeconds: Math.Max(0, _tradingFlowEngine.CurrentHoldingSeconds));
+
+                SafeVmLog($"[RECOVERY][INFO] Registered coordinator slot: pairId={recoveryPairId} side={side} mode={openMode} ticketA={ticketA} ticketB={ticketB}");
+            }
 
             SafeVmLog($"[RECOVERY][INFO] Recovered tickets from previous session: ticketA={ticketA} ticketB={ticketB} pairId={recoveryPairId}");
         }

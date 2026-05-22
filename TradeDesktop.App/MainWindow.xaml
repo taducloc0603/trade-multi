@@ -5,7 +5,7 @@
         xmlns:views="clr-namespace:TradeDesktop.App.Views"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="Trade Desktop Dashboard"
+        Title="Trade Multi Desktop Dashboard"
         Height="790"
         Width="1240"
         MinHeight="700"
@@ -228,6 +228,8 @@
                             <TextBlock Grid.Column="4" Text="GAP SELL" FontWeight="SemiBold" Foreground="#344054" VerticalAlignment="Center" />
                             <TextBlock Grid.Column="6" Text="{Binding GapSell}" Foreground="#101828" VerticalAlignment="Center" />
 
+                            <!-- Phase 6: manual BUY/SELL/CLOSE buttons disabled in multi-slot mode.
+                                 Auto flow goes through PortfolioCoordinator.ProcessSnapshot — these commands are unreachable from UI.
                             <Button Grid.Column="8"
                                     Content="BUY"
                                     Width="68"
@@ -237,7 +239,7 @@
                                     Background="#D92D20"
                                     BorderBrush="#D92D20"
                                     BorderThickness="1"
-                                    Visibility="{Binding HasManualTradeHwndConfig, Converter={StaticResource BoolToVisibilityConverter}}"
+                                    Visibility="{Binding IsManualTradeButtonsVisible, Converter={StaticResource BoolToVisibilityConverter}}"
                                     Command="{Binding BuyCommand}" />
 
                             <Button Grid.Column="10"
@@ -249,7 +251,7 @@
                                     Background="#12B76A"
                                     BorderBrush="#12B76A"
                                     BorderThickness="1"
-                                    Visibility="{Binding HasManualTradeHwndConfig, Converter={StaticResource BoolToVisibilityConverter}}"
+                                    Visibility="{Binding IsManualTradeButtonsVisible, Converter={StaticResource BoolToVisibilityConverter}}"
                                     Command="{Binding SellCommand}" />
 
                             <Button Grid.Column="12"
@@ -261,8 +263,9 @@
                                     Background="#667085"
                                     BorderBrush="#667085"
                                     BorderThickness="1"
-                                    Visibility="{Binding HasManualTradeHwndConfig, Converter={StaticResource BoolToVisibilityConverter}}"
+                                    Visibility="{Binding IsManualTradeButtonsVisible, Converter={StaticResource BoolToVisibilityConverter}}"
                                     Command="{Binding CloseOrderCommand}" />
+                            -->
                         </Grid>
 
                         <TextBlock Grid.Row="6"
@@ -320,6 +323,8 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="4" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="4" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <TextBlock FontWeight="SemiBold" Foreground="#344054">
@@ -333,11 +338,16 @@
                             </StackPanel>
 
                             <StackPanel Grid.Row="4" Orientation="Horizontal">
-                                <TextBlock Text="Current Position: " FontWeight="SemiBold" Foreground="#344054" />
-                                <TextBlock Text="{Binding CurrentPositionText, Mode=OneWay}" Foreground="#101828" />
+                                <TextBlock Text="Current Position A: " FontWeight="SemiBold" Foreground="#344054" />
+                                <TextBlock Text="{Binding CurrentPositionTextA, Mode=OneWay}" Foreground="#101828" />
                             </StackPanel>
 
                             <StackPanel Grid.Row="6" Orientation="Horizontal">
+                                <TextBlock Text="Current Position B: " FontWeight="SemiBold" Foreground="#344054" />
+                                <TextBlock Text="{Binding CurrentPositionTextB, Mode=OneWay}" Foreground="#101828" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="8" Orientation="Horizontal">
                                 <TextBlock Text="Current Phase: " FontWeight="SemiBold" Foreground="#344054" />
                                 <TextBlock Text="{Binding CurrentPhaseText, Mode=OneWay}" Foreground="#101828" />
                             </StackPanel>
