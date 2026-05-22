@@ -218,6 +218,18 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _logger?.Log(
             $"[SLOT][OPEN_CONFIRMED] slot={slot.SlotId} side={slot.Side} " +
             $"ticketA={ticketA} ticketB={ticketB} cooldown={cooldownSec}s");
+
+        if (cooldownSec > 0)
+        {
+            _logger?.Log(
+                $"[SLOT][WAITING] Block ALL open/close trong {cooldownSec}s " +
+                $"(đến {_state.GlobalActionLockUntilUtc:HH:mm:ss} UTC) — reason=after OPEN_CONFIRMED slot={slot.SlotId}");
+        }
+        var oppositeLockUntilUtc = confirmedAtUtc.AddSeconds(OppositeSideLockSeconds);
+        var oppositeSide = slot.Side == TradingPositionSide.Buy ? TradingPositionSide.Sell : TradingPositionSide.Buy;
+        _logger?.Log(
+            $"[SLOT][WAITING] Block OPEN {oppositeSide} trong {OppositeSideLockSeconds}s " +
+            $"(đến {oppositeLockUntilUtc:HH:mm:ss} UTC) — reason=opposite-side lock sau OPEN {slot.Side}");
     }
 
     public void MarkSlotCloseTriggered(string pairId, DateTime triggeredAtUtc)
@@ -250,6 +262,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _logger?.Log(
             $"[SLOT][CLOSE_CONFIRMED] slot={slot.SlotId} side={slot.Side} " +
             $"profit={slot.LastProfitSnapshot:F2} cooldown={cooldownSec}s");
+
+        if (cooldownSec > 0)
+        {
+            _logger?.Log(
+                $"[SLOT][WAITING] Block ALL open/close trong {cooldownSec}s " +
+                $"(đến {_state.GlobalActionLockUntilUtc:HH:mm:ss} UTC) — reason=after CLOSE_CONFIRMED slot={slot.SlotId}");
+        }
     }
 
     public PositionSlot RegisterSyncedSlot(
@@ -471,6 +490,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _logger?.Log(
             $"[SLOT][RECOVERY] Done: restored={_state.Slots.Count} slots, " +
             $"appStartCooldown={startupCooldownSec}s");
+
+        if (startupCooldownSec > 0)
+        {
+            _logger?.Log(
+                $"[SLOT][WAITING] Block ALL open/close trong {startupCooldownSec}s " +
+                $"(đến {_state.GlobalActionLockUntilUtc:HH:mm:ss} UTC) — reason=app restart cooldown");
+        }
     }
 
     // ===== Helpers =====

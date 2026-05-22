@@ -1062,17 +1062,6 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
-            var pairState = ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict());
-            if (pairState != LivePairTradeState.BothFlat)
-            {
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                {
-                    SignalLogItems.Insert(0,
-                        $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: live pair not flat ({FormatLivePairTradeState(pairState)})");
-                });
-                return;
-            }
-
             BeginActiveAutoCycle(slot, appOpenRequestTimeLocal, appOpenRequestRawMs);
 
             _openConfirmBySlot.Remove(slot);
@@ -1227,17 +1216,6 @@ public sealed class DashboardViewModel : ObservableObject
                     SignalLogItems.Insert(0,
                         $"    - [{DateTime.Now:HH:mm:ss.fff}] Open Sell blocked: debounce window " +
                         $"({AutoOpenDebounceMs}ms) since last Sell click at {_lastAutoOpenSellAtLocal.Value:HH:mm:ss.fff}");
-                });
-                return;
-            }
-
-            var pairState = ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict());
-            if (pairState != LivePairTradeState.BothFlat)
-            {
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                {
-                    SignalLogItems.Insert(0,
-                        $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: live pair not flat ({FormatLivePairTradeState(pairState)})");
                 });
                 return;
             }
@@ -2525,11 +2503,9 @@ public sealed class DashboardViewModel : ObservableObject
             maxBuy: _runtimeConfigState.CurrentMaxBuyOpens,
             maxSell: _runtimeConfigState.CurrentMaxSellOpens);
 
-        // Phase 1: dùng StartWaitTime/EndWaitTime hiện có làm cooldown range
-        // để adapter CurrentWaitSeconds vẫn match TradingFlowEngine.BeginWaitAfterClose.
-        _portfolioCoordinator.UpdateCooldownConfig(
-            minSec: _runtimeConfigState.CurrentStartWaitTime,
-            maxSec: _runtimeConfigState.CurrentEndWaitTime);
+        // Hardcode tạm: start_wait_time=3, end_wait_time=10 (sẽ chuyển sang DB Supabase sau).
+        // Opposite-side lock 5p vẫn hardcode trong PortfolioCoordinator.OppositeSideLockSeconds=300.
+        _portfolioCoordinator.UpdateCooldownConfig(minSec: 3, maxSec: 10);
     }
 
     private void RefreshOrderInfoTabs()
