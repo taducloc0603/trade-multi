@@ -25,6 +25,8 @@ public interface IPortfolioCoordinator
     DateTime? LastOpenConfirmedAtUtc { get; }
     TradingPositionSide LastOpenConfirmedSide { get; }
     TradingFlowSkipDiagnostic? LastSkipDiagnostic { get; }
+    int GlobalCooldownMinSec { get; }
+    int GlobalCooldownMaxSec { get; }
 
     // === Phase 7 metrics (monitoring) ===
     PortfolioMetrics GetMetrics();
@@ -39,6 +41,10 @@ public interface IPortfolioCoordinator
     void MarkSlotOpenConfirmed(string pairId, ulong ticketA, ulong ticketB, DateTime confirmedAtUtc);
     void MarkSlotCloseTriggered(string pairId, DateTime triggeredAtUtc);
     void MarkSlotCloseConfirmed(string pairId, DateTime confirmedAtUtc);
+
+    // Phase 8: kick global cooldown trực tiếp (cho path không qua slot lifecycle:
+    // external close của lệnh mồ côi, cleanup orphan, ...).
+    void KickGlobalCooldown(DateTime triggeredAtUtc, string reasonSuffix);
 
     // Recovery (Phase 5) + manual flow (Phase 1)
     PositionSlot RegisterSyncedSlot(

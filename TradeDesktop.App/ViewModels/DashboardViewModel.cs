@@ -1393,6 +1393,18 @@ public sealed class DashboardViewModel : ObservableObject
             CapturePendingCloseRequestFromTrigger(selectA, trigger, isExchangeA: true, appCloseRequestTimeLocal, appCloseRequestRawMs, slot);
             CapturePendingCloseRequestFromTrigger(selectB, trigger, isExchangeA: false, appCloseRequestTimeLocal, appCloseRequestRawMs, slot);
 
+            // Phase 8: kick cooldown ngay tại close dispatch (trước router).
+            // Đảm bảo min 3-10s giữa close này và trade event tiếp theo.
+            if (targetSlot is not null)
+            {
+                _portfolioCoordinator.MarkSlotCloseTriggered(targetSlot.PairId, DateTime.UtcNow);
+            }
+            else
+            {
+                // Legacy path không có targetSlot — vẫn kick cooldown global.
+                _portfolioCoordinator.KickGlobalCooldown(DateTime.UtcNow, "after CLOSE_DISPATCH (legacy)");
+            }
+
             var closeResult = await _tradeExecutionRouter.ClosePairAsync(
                 new TradeClosePairRequest(
                     LegA: selectA.Request is null
@@ -3351,8 +3363,8 @@ public sealed class DashboardViewModel : ObservableObject
         var closeCompletedAtLocal = closeCompletedAtUtc.ToLocalTime();
         _tradingFlowEngine.BeginWaitAfterClose(
             closeCompletedAtUtc,
-            _runtimeConfigState.CurrentStartWaitTime,
-            _runtimeConfigState.CurrentEndWaitTime);
+            _portfolioCoordinator.GlobalCooldownMinSec,
+            _portfolioCoordinator.GlobalCooldownMaxSec);
         LogFlowTransitionIfChanged("begin-wait-after-close-from-pending");
 
         if (_tradingFlowEngine.ClosedAtUtc != closeCompletedAtUtc)
@@ -3708,8 +3720,8 @@ public sealed class DashboardViewModel : ObservableObject
         var closeCompletedAtLocal = closeCompletedAtUtc.ToLocalTime();
         _tradingFlowEngine.BeginWaitAfterClose(
             closeCompletedAtUtc,
-            _runtimeConfigState.CurrentStartWaitTime,
-            _runtimeConfigState.CurrentEndWaitTime);
+            _portfolioCoordinator.GlobalCooldownMinSec,
+            _portfolioCoordinator.GlobalCooldownMaxSec);
         LogFlowTransitionIfChanged($"finalize-close-flow source={source}");
 
         if (_tradingFlowEngine.ClosedAtUtc != closeCompletedAtUtc)
@@ -3748,8 +3760,8 @@ public sealed class DashboardViewModel : ObservableObject
         var closeCompletedAtLocal = closeCompletedAtUtc.ToLocalTime();
         _tradingFlowEngine.BeginWaitAfterClose(
             closeCompletedAtUtc,
-            _runtimeConfigState.CurrentStartWaitTime,
-            _runtimeConfigState.CurrentEndWaitTime);
+            _portfolioCoordinator.GlobalCooldownMinSec,
+            _portfolioCoordinator.GlobalCooldownMaxSec);
         LogFlowTransitionIfChanged($"finalize-close-flow(cached) source={source}");
 
         if (_tradingFlowEngine.ClosedAtUtc != closeCompletedAtUtc)
@@ -4090,6 +4102,9 @@ public sealed class DashboardViewModel : ObservableObject
                         Action: TradeLegAction.Close,
                         DelayMs: 0,
                         RowIndex: selection.Request.RowIndex));
+
+            // Phase 8: kick cooldown ngay tại close dispatch (consistency với auto path chính).
+            _portfolioCoordinator.KickGlobalCooldown(DateTime.UtcNow, "after CLOSE_DISPATCH external-leg");
 
             var closeResult = await _tradeExecutionRouter.ClosePairAsync(closeRequest);
 
@@ -4802,8 +4817,8 @@ public sealed class DashboardViewModel : ObservableObject
                     var closeCompletedAtLocal = closeCompletedAtUtc.ToLocalTime();
                     _tradingFlowEngine.BeginWaitAfterClose(
                         closeCompletedAtUtc,
-                        _runtimeConfigState.CurrentStartWaitTime,
-                        _runtimeConfigState.CurrentEndWaitTime);
+                        _portfolioCoordinator.GlobalCooldownMinSec,
+                        _portfolioCoordinator.GlobalCooldownMaxSec);
                     LogFlowTransitionIfChanged("history-close-confirm-both-legs");
 
                     if (_tradingFlowEngine.ClosedAtUtc == closeCompletedAtUtc)

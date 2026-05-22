@@ -58,12 +58,15 @@ public sealed class CooldownRuleTests
         for (var i = 0; i < 20; i++)
         {
             var pairId = $"p{i}";
+            // Phase 8: cooldown được set tại allocate (dispatch time), không phải confirm.
+            // Capture dispatchTime ngay trước allocate để đo elapsed chính xác.
+            var dispatchTime = DateTime.UtcNow;
             coordinator.AllocatePendingOpenSlot(pairId, Trigger());
-            var confirmedAt = new DateTime(2026, 5, 21, 10, i, 0, DateTimeKind.Utc);
+            var confirmedAt = dispatchTime.AddMilliseconds(500);
             coordinator.MarkSlotOpenConfirmed(pairId, (ulong)(i * 2 + 1), (ulong)(i * 2 + 2), confirmedAt);
 
-            var elapsedSec = (coordinator.GlobalActionLockUntilUtc!.Value - confirmedAt).TotalSeconds;
-            Assert.InRange(elapsedSec, 3, 125);
+            var elapsedSec = (coordinator.GlobalActionLockUntilUtc!.Value - dispatchTime).TotalSeconds;
+            Assert.InRange(elapsedSec, 3, 126);
 
             coordinator.MarkSlotCloseTriggered(pairId, confirmedAt.AddSeconds(125));
             coordinator.MarkSlotCloseConfirmed(pairId, confirmedAt.AddSeconds(125));
@@ -83,19 +86,25 @@ public sealed class CooldownRuleTests
     }
 
     [Fact]
-    public void CooldownStartsFromConfirmTime_NotDispatchTime()
+    public void CooldownStartsFromDispatchTime_NotConfirmTime()
     {
+        // Phase 8: cooldown bắt đầu tại dispatch (AllocatePendingOpenSlot), không phải confirm.
+        // User intent: min 3-10s giữa bất kỳ 2 trade events — race window dispatch→confirm
+        // (~500ms broker latency) phải được bảo vệ.
         var coordinator = CreateCoordinator();
         coordinator.UpdateCooldownConfig(minSec: 10, maxSec: 10);
         var trigger = Trigger();
+
+        var dispatchTime = DateTime.UtcNow;
         coordinator.AllocatePendingOpenSlot("p1", trigger);
 
-        // Wait a few seconds (simulate execution latency), then confirm with EARLIER time.
-        var confirmedAt = DateTime.UtcNow.AddSeconds(-5);
+        // Confirm với EARLIER time — không được rút ngắn lock (MAX semantics).
+        var confirmedAt = dispatchTime.AddSeconds(-5);
         coordinator.MarkSlotOpenConfirmed("p1", 1, 2, confirmedAt);
 
-        // Lock should end at confirmedAt + 10s, not utcNow + 10s.
-        Assert.Equal(confirmedAt.AddSeconds(10), coordinator.GlobalActionLockUntilUtc);
+        // Lock = dispatchTime + 10s (allocate-time), KHÔNG phải confirmedAt + 10s.
+        var elapsed = (coordinator.GlobalActionLockUntilUtc!.Value - dispatchTime).TotalSeconds;
+        Assert.InRange(elapsed, 9.5, 10.5);
     }
 
     [Fact]

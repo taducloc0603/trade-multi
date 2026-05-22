@@ -84,18 +84,23 @@ public sealed class PortfolioCoordinatorTests
     [Fact]
     public void MarkSlotCloseConfirmed_TransitionsToClosed_AndKicksCooldown()
     {
+        // Phase 8: cooldown kicked tại CLOSE DISPATCH (MarkSlotCloseTriggered), không phải confirm.
         var coordinator = CreateCoordinator();
         coordinator.UpdateCooldownConfig(minSec: 5, maxSec: 5);
         var slot = coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
         coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
-        coordinator.MarkSlotCloseTriggered("p1", DateTime.UtcNow);
 
-        var confirmedAt = new DateTime(2026, 5, 21, 10, 0, 30, DateTimeKind.Utc);
+        var triggerTime = DateTime.UtcNow;
+        coordinator.MarkSlotCloseTriggered("p1", triggerTime);
+
+        var confirmedAt = triggerTime.AddSeconds(1);
         coordinator.MarkSlotCloseConfirmed("p1", confirmedAt);
 
         Assert.Equal(PositionSlotStatus.Closed, slot!.Status);
         Assert.NotNull(coordinator.GlobalActionLockUntilUtc);
-        Assert.Equal(confirmedAt.AddSeconds(5), coordinator.GlobalActionLockUntilUtc);
+        // Lock = triggerTime + 5s (MAX với allocate lock — triggerTime > allocate).
+        var elapsed = (coordinator.GlobalActionLockUntilUtc!.Value - triggerTime).TotalSeconds;
+        Assert.InRange(elapsed, 4.5, 5.5);
     }
 
     [Fact]

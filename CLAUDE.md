@@ -48,10 +48,13 @@ DB integration deferred).
 - Implementation: `coordinator.CanOpenNewSlot(side, out reason)`.
 
 ### Rule B — Global cooldown
-- Sau mỗi OPEN/CLOSE confirm, random `Uniform(GlobalCooldownMin, Max)` seconds.
-- Cooldown bắt đầu từ **MMF confirm time**, không phải tool click time.
-- Khoá toàn hệ thống — không slot nào được open/close.
-- Implementation: `coordinator.CanCloseNow(out reason)` + check trong ProcessSnapshot top.
+- Sau mỗi OPEN/CLOSE dispatch (Phase 8 trở đi — KHÔNG còn theo confirm time), random `Uniform(GlobalCooldownMin, Max)` seconds.
+- Cooldown bắt đầu từ **DISPATCH time** (lúc tool gửi request đến router/broker), KHÔNG phải confirm time.
+- MAX semantics: cooldown lock chỉ extend, không rút ngắn. Confirm sau dispatch không reset lock.
+- Khoá toàn hệ thống — không slot nào được open/close trong window này.
+- Implementation: `coordinator.AllocatePendingOpenSlot` và `MarkSlotCloseTriggered` đều gọi `KickGlobalCooldown` để set `GlobalActionLockUntilUtc`. ViewModel `KickGlobalCooldown` cho path không qua slot lifecycle (external close).
+- Hardcode min=3, max=10 trong `DashboardViewModel.SyncPortfolioCoordinatorConfig` (sẽ chuyển sang DB sau).
+- **Phase 8 motivation**: pre-Phase 8 cooldown set tại confirm → race window dispatch→confirm (~500ms broker latency) cho phép 2 trade events được dispatch gần như đồng thời. User intent: min 3-10s giữa BẤT KỲ 2 trade events.
 
 ### Rule C — Opposite-side OPEN lock 5 phút
 - **Hardcode 300 giây** (`PortfolioCoordinator.OppositeSideLockSeconds`).
