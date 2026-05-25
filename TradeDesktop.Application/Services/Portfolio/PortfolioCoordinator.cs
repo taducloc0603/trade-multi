@@ -295,12 +295,21 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var slot = _state.GetSlotByPairId(pairId);
         if (slot is null) return;
 
+        // Slot có thể đã được ProcessSnapshot chuyển sang PendingClose ở line ~179
+        // (slot.MarkCloseTriggered set Status=PendingClose immediately). Idempotent
+        // skip nếu đã PendingClose — KHÔNG bỏ qua KickGlobalCooldown bên dưới.
         if (slot.Status != PositionSlotStatus.PendingClose)
         {
             slot.MarkCloseTriggered(triggeredAtUtc);
-            // Phase 8: kick cooldown ngay tại CLOSE DISPATCH (same semantic as OPEN).
-            KickGlobalCooldown(triggeredAtUtc, $"after CLOSE_DISPATCH slot={slot.SlotId}");
         }
+
+        // Phase 8: cooldown kick PHẢI chạy mỗi lần dispatch close, ngay cả khi slot
+        // đã được ProcessSnapshot pre-mark PendingClose. MAX semantics đảm bảo lock
+        // chỉ extend, không rút ngắn — gọi nhiều lần an toàn.
+        // Đây là cooldown anchor cho close path (mirror OPEN dispatch tại
+        // AllocatePendingOpenSlot). Bỏ kick này → close không block tick kế tiếp →
+        // open có thể dispatch đồng thời với close (vi phạm Rule B).
+        KickGlobalCooldown(triggeredAtUtc, $"after CLOSE_DISPATCH slot={slot.SlotId}");
     }
 
     public void MarkSlotCloseConfirmed(string pairId, DateTime confirmedAtUtc)

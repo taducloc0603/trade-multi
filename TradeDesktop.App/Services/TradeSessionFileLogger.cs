@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -6,6 +7,8 @@ namespace TradeDesktop.App.Services;
 
 public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
 {
+    private static readonly TimeSpan DrainShutdownTimeout = TimeSpan.FromSeconds(5);
+
     private readonly object _sync = new();
     private StreamWriter? _writer;
     private DateTimeOffset? _sessionStartedAt;
@@ -15,6 +18,8 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     private long _maxFileSizeBytes = 50L * 1024 * 1024;
     private int _rotationIndex;
     private TradeLogLevel _minLevel = TradeLogLevel.Info;
+    private BlockingCollection<string>? _writeQueue;
+    private Task? _drainTask;
 
     public bool IsSessionActive
     {
@@ -31,6 +36,12 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
 
     public void StartSession(DateTimeOffset startedAtLocal, string hostName)
     {
+        // Drain any leftover queue from a previous session before re-initializing
+        // so messages are not lost across restarts.
+        DrainAndCloseQueue();
+
+        BlockingCollection<string>? queueToStart = null;
+
         lock (_sync)
         {
             try
@@ -71,70 +82,97 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 WriteLineCore($"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] ===== TRADE SESSION START =====");
                 WriteLineCore($"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] Host: {hostName}");
                 WriteLineCore($"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] File: {filePath}");
+
+                _writeQueue = new BlockingCollection<string>();
+                queueToStart = _writeQueue;
             }
             catch (Exception ex)
             {
                 SafeDebug($"StartSession failed: {ex}");
             }
         }
+
+        if (queueToStart is not null)
+        {
+            _drainTask = Task.Factory.StartNew(
+                () => DrainQueue(queueToStart),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
+        }
     }
 
     public void Log(TradeLogLevel level, string message)
     {
-        lock (_sync)
+        var queue = _writeQueue;
+        if (queue is null || queue.IsAddingCompleted)
         {
-            try
-            {
-                if (_writer is null)
-                {
-                    return;
-                }
+            return;
+        }
 
-                if (level < _minLevel)
-                {
-                    return;
-                }
+        if (level < _minLevel)
+        {
+            return;
+        }
 
-                var timestamp = DateTimeOffset.Now;
-                var line = $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {message}";
-                WriteLineCore(line);
-            }
-            catch (Exception ex)
-            {
-                SafeDebug($"Log(level) failed: {ex}");
-            }
+        try
+        {
+            var timestamp = DateTimeOffset.Now;
+            var line = $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {message}";
+            queue.Add(line);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Queue was disposed concurrently with stop; drop silently.
+        }
+        catch (InvalidOperationException)
+        {
+            // Queue was completed between the IsAddingCompleted check and Add; drop silently.
+        }
+        catch (Exception ex)
+        {
+            SafeDebug($"Log(level) enqueue failed: {ex}");
         }
     }
 
     public void Log(string message)
     {
-        lock (_sync)
+        var queue = _writeQueue;
+        if (queue is null || queue.IsAddingCompleted)
         {
-            try
-            {
-                if (_writer is null)
-                {
-                    return;
-                }
+            return;
+        }
 
-                if (InferLevelFromMessage(message) < _minLevel)
-                {
-                    return;
-                }
+        if (InferLevelFromMessage(message) < _minLevel)
+        {
+            return;
+        }
 
-                var timestamp = DateTimeOffset.Now;
-                var line = $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {message}";
-                WriteLineCore(line);
-            }
-            catch (Exception ex)
-            {
-                SafeDebug($"Log failed: {ex}");
-            }
+        try
+        {
+            var timestamp = DateTimeOffset.Now;
+            var line = $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {message}";
+            queue.Add(line);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Queue was disposed concurrently with stop; drop silently.
+        }
+        catch (InvalidOperationException)
+        {
+            // Queue was completed between the IsAddingCompleted check and Add; drop silently.
+        }
+        catch (Exception ex)
+        {
+            SafeDebug($"Log enqueue failed: {ex}");
         }
     }
 
     public void StopSession(DateTimeOffset stoppedAtLocal)
     {
+        // Drain pending log messages first so they land in the file before the session footer.
+        DrainAndCloseQueue();
+
         lock (_sync)
         {
             try
@@ -145,6 +183,84 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
             {
                 SafeDebug($"StopSession failed: {ex}");
             }
+        }
+    }
+
+    private void DrainQueue(BlockingCollection<string> queue)
+    {
+        try
+        {
+            foreach (var line in queue.GetConsumingEnumerable())
+            {
+                try
+                {
+                    lock (_sync)
+                    {
+                        WriteLineCore(line);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    SafeDebug($"DrainQueue write failed: {ex}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            SafeDebug($"DrainQueue failed: {ex}");
+        }
+    }
+
+    private void DrainAndCloseQueue()
+    {
+        BlockingCollection<string>? queue;
+        Task? task;
+
+        lock (_sync)
+        {
+            queue = _writeQueue;
+            task = _drainTask;
+            _writeQueue = null;
+            _drainTask = null;
+        }
+
+        if (queue is null)
+        {
+            return;
+        }
+
+        try
+        {
+            queue.CompleteAdding();
+        }
+        catch (ObjectDisposedException)
+        {
+            // already disposed
+        }
+        catch (Exception ex)
+        {
+            SafeDebug($"DrainAndCloseQueue complete-adding failed: {ex}");
+        }
+
+        if (task is not null)
+        {
+            try
+            {
+                task.Wait(DrainShutdownTimeout);
+            }
+            catch (Exception ex)
+            {
+                SafeDebug($"DrainAndCloseQueue wait failed: {ex}");
+            }
+        }
+
+        try
+        {
+            queue.Dispose();
+        }
+        catch
+        {
+            // ignored
         }
     }
 

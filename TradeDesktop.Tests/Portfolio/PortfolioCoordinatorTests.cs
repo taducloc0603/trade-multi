@@ -104,6 +104,34 @@ public sealed class PortfolioCoordinatorTests
     }
 
     [Fact]
+    public void MarkSlotCloseTriggered_WhenSlotAlreadyPendingClose_StillKicksCooldown()
+    {
+        // Regression Phase 8: ProcessSnapshot (line ~179) pre-mark slot PendingClose
+        // via slot.MarkCloseTriggered trước khi caller dispatch close. Khi
+        // AutoCloseOrderAsync gọi coordinator.MarkSlotCloseTriggered tại dispatch time,
+        // status đã PendingClose. Trước fix: status guard bao luôn KickGlobalCooldown
+        // → close không kích cooldown → tick kế tiếp dispatch OPEN đồng thời (Rule B vi phạm,
+        // production observed: OPEN+CLOSE cùng millisecond).
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateCooldownConfig(minSec: 5, maxSec: 5);
+        var slot = coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+
+        // Mô phỏng ProcessSnapshot line 179: slot pre-mark PendingClose.
+        var triggerTime = new DateTime(2026, 5, 21, 10, 0, 30, DateTimeKind.Utc);
+        slot!.MarkCloseTriggered(triggerTime);
+        Assert.Equal(PositionSlotStatus.PendingClose, slot.Status);
+
+        // Caller dispatch close → coordinator.MarkSlotCloseTriggered.
+        coordinator.MarkSlotCloseTriggered("p1", triggerTime);
+
+        Assert.NotNull(coordinator.GlobalActionLockUntilUtc);
+        // Lock phải được extend tới triggerTime + 5s (MAX so với allocate lock).
+        var elapsed = (coordinator.GlobalActionLockUntilUtc!.Value - triggerTime).TotalSeconds;
+        Assert.InRange(elapsed, 4.5, 5.5);
+    }
+
+    [Fact]
     public void AbortPendingOpen_RemovesSlot()
     {
         var coordinator = CreateCoordinator();

@@ -496,7 +496,8 @@ public sealed class DashboardViewModel : ObservableObject
         private set => SetProperty(ref _lastSignalText, value);
     }
 
-    public ObservableCollection<string> SignalLogItems { get; } = [];
+    private const int MaxSignalLogItems = 500;
+    public ObservableCollection<string> SignalLogItems { get; } = new CappedObservableCollection<string>(MaxSignalLogItems);
     public ObservableCollection<TradePairRealtimeProfitRowViewModel> TradeRealtimeProfitRows { get; } = [];
     public ObservableCollection<HistoryPairProfitRowViewModel> HistoryRealtimeProfitRows { get; } = [];
     public string HistoryRealtimeProfitSummary
