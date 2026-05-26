@@ -76,7 +76,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CoolDownGapTick: row.CoolDownGapTick,
             IsShowConfig: row.IsShowConfig,
             CurrentTickA: row.CurrentTickA ?? string.Empty,
-            CurrentTickB: row.CurrentTickB ?? string.Empty);
+            CurrentTickB: row.CurrentTickB ?? string.Empty,
+            CurrentSlots: row.CurrentSlotsJson);
     }
 
     public async Task<bool> UpdateCurrentTicksAsync(
@@ -119,6 +120,57 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
             throw new HttpRequestException(
                 $"Supabase UpdateCurrentTicksAsync thất bại. Status={(int)response.StatusCode}, Body={errorBody}");
+        }
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        using var doc = JsonDocument.Parse(body);
+        return doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0;
+    }
+
+    public async Task<bool> UpdateCurrentSlotsAsync(
+        string hostName,
+        string currentSlotsJson,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured())
+        {
+            throw new InvalidOperationException("Thiếu SUPABASE_URL hoặc SUPABASE_KEY/SUPABASE_ANON_KEY.");
+        }
+
+        if (string.IsNullOrWhiteSpace(hostName))
+        {
+            return false;
+        }
+
+        var normalizedHostName = NormalizeHostName(hostName);
+        using var slotsDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(currentSlotsJson) ? "[]" : currentSlotsJson);
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            current_slots = slotsDoc.RootElement
+        });
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Patch,
+            $"{_supabaseUrl}/rest/v1/configs?hostname=eq.{Uri.EscapeDataString(normalizedHostName)}")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+
+        AddAuthHeaders(request);
+        request.Headers.TryAddWithoutValidation("Prefer", "return=representation");
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException(
+                $"Supabase UpdateCurrentSlotsAsync thất bại. Status={(int)response.StatusCode}, Body={errorBody}");
         }
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -242,6 +294,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("is_show_config", out var isShowConfigElement);
         first.TryGetProperty("current_tick_a", out var currentTickAElement);
         first.TryGetProperty("current_tick_b", out var currentTickBElement);
+        first.TryGetProperty("current_slots", out var currentSlotsElement);
 
         // DB column name is lowercase: hostname
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
@@ -291,7 +344,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             PlatformB = platformBElement.ValueKind == JsonValueKind.String ? platformBElement.GetString() : null,
             IsShowConfig = isShowConfigElement.ValueKind == JsonValueKind.Number && isShowConfigElement.TryGetInt32(out var isShowConfig) ? isShowConfig : 0,
             CurrentTickA = currentTickAElement.ValueKind == JsonValueKind.String ? currentTickAElement.GetString() : null,
-            CurrentTickB = currentTickBElement.ValueKind == JsonValueKind.String ? currentTickBElement.GetString() : null
+            CurrentTickB = currentTickBElement.ValueKind == JsonValueKind.String ? currentTickBElement.GetString() : null,
+            CurrentSlots = currentSlotsElement.ValueKind is JsonValueKind.Array or JsonValueKind.Object
+                ? currentSlotsElement.Clone()
+                : default
         };
     }
 
@@ -360,6 +416,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("is_show_config", out var isShowConfigElement);
         first.TryGetProperty("current_tick_a", out var currentTickAElement);
         first.TryGetProperty("current_tick_b", out var currentTickBElement);
+        first.TryGetProperty("current_slots", out var currentSlotsElement);
 
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
         if (!hasHostName)
@@ -407,7 +464,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             PlatformB = platformBElement.ValueKind == JsonValueKind.String ? platformBElement.GetString() : null,
             IsShowConfig = isShowConfigElement.ValueKind == JsonValueKind.Number && isShowConfigElement.TryGetInt32(out var isShowConfig) ? isShowConfig : 0,
             CurrentTickA = currentTickAElement.ValueKind == JsonValueKind.String ? currentTickAElement.GetString() : null,
-            CurrentTickB = currentTickBElement.ValueKind == JsonValueKind.String ? currentTickBElement.GetString() : null
+            CurrentTickB = currentTickBElement.ValueKind == JsonValueKind.String ? currentTickBElement.GetString() : null,
+            CurrentSlots = currentSlotsElement.ValueKind is JsonValueKind.Array or JsonValueKind.Object
+                ? currentSlotsElement.Clone()
+                : default
         };
     }
 
@@ -570,5 +630,12 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("current_tick_b")]
         public string? CurrentTickB { get; set; }
+
+        [JsonPropertyName("current_slots")]
+        public JsonElement CurrentSlots { get; set; }
+
+        public string CurrentSlotsJson => CurrentSlots.ValueKind is JsonValueKind.Array or JsonValueKind.Object
+            ? CurrentSlots.GetRawText()
+            : string.Empty;
     }
 }

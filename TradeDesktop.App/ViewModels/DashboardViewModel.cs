@@ -268,6 +268,14 @@ public sealed class DashboardViewModel : ObservableObject
         string? Symbol,
         double? Volume);
 
+    private sealed record ResyncedOpenSlot(
+        int SlotId,
+        string PairId,
+        TradingPositionSide Side,
+        TradingOpenMode OpenMode,
+        TradeSharedRecord RecordA,
+        TradeSharedRecord RecordB);
+
     private string _runtimeSummary = string.Empty;
     private string _dbInlineData = string.Empty;
     private bool _isDbInlineDataVisible;
@@ -634,11 +642,11 @@ public sealed class DashboardViewModel : ObservableObject
         RaiseManualOpenCanExecuteChanged();
     }
 
-    private Task StartTradingLogicAsync()
+    private async Task StartTradingLogicAsync()
     {
         if (IsTradingLogicEnabled)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         var confirm = System.Windows.MessageBox.Show(
@@ -649,7 +657,7 @@ public sealed class DashboardViewModel : ObservableObject
 
         if (confirm != System.Windows.MessageBoxResult.Yes)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         _tradeSessionFileLogger.StartSession(DateTimeOffset.Now, _normalizedHostName);
@@ -665,15 +673,17 @@ public sealed class DashboardViewModel : ObservableObject
         HistoryRealtimeProfitSummary = "0.00 | 0.00 $";
         HistoryTab.LeftPanel.SetEmpty();
         HistoryTab.RightPanel.SetEmpty();
+        LastSignalText = "-";
+        SignalLogItems.Clear();
+
+        await ResyncOpenTradesAsync();
+
         IsTradingLogicEnabled = true;
         SyncTradingFlowWithLivePairState(GetLivePairTradeStateStrict());
         _lastLoggedPhase = _tradingFlowEngine.CurrentPhase;
         _lastLoggedOpenMode = _tradingFlowEngine.CurrentOpenMode;
         _lastLoggedPositionSide = _tradingFlowEngine.CurrentPositionSide;
         SafeVmLog($"[FLOW][INFO] Session start: phase={_lastLoggedPhase} openMode={_lastLoggedOpenMode} side={_lastLoggedPositionSide}");
-        LastSignalText = "-";
-        SignalLogItems.Clear();
-        return Task.CompletedTask;
     }
 
     private Task StopTradingLogicAsync()
@@ -2231,11 +2241,12 @@ public sealed class DashboardViewModel : ObservableObject
             try
             {
                 await _configService.SaveCurrentTicksAsync("", "");
-                SafeVmLog("[RECOVERY][INFO] Cleared current ticks from DB after close finalize");
+                await _configService.SaveCurrentSlotsAsync("[]");
+                SafeVmLog("[RECOVERY][INFO] Cleared current ticks/current_slots from DB after close finalize");
             }
             catch (Exception ex)
             {
-                SafeVmLog($"[RECOVERY][WARN] Failed to clear current ticks: {ex.Message}");
+                SafeVmLog($"[RECOVERY][WARN] Failed to clear current recovery state: {ex.Message}");
             }
         });
     }
@@ -2433,6 +2444,48 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         return Task.CompletedTask;
+    }
+
+    private async Task ResyncOpenTradesAsync()
+    {
+        try
+        {
+            var tradeMapNameA = TradeTab.LeftPanel.TargetMapName;
+            var tradeMapNameB = TradeTab.RightPanel.TargetMapName;
+
+            if (string.IsNullOrWhiteSpace(tradeMapNameA) || string.IsNullOrWhiteSpace(tradeMapNameB))
+            {
+                AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Resync failed: trade map names are not available");
+                return;
+            }
+
+            var tradeResultA = _tradesSharedMemoryReader.ReadTrades(tradeMapNameA);
+            var tradeResultB = _tradesSharedMemoryReader.ReadTrades(tradeMapNameB);
+            if (!AreTradeMapsHealthy(tradeResultA, tradeResultB))
+            {
+                AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Resync failed: trade maps unavailable or parse failed");
+                return;
+            }
+
+            var resyncedSlots = BuildResyncedOpenSlots(tradeResultA.Records, tradeResultB.Records);
+            if (resyncedSlots.Count == 0)
+            {
+                AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Resync skipped: no pairable open trades found");
+                return;
+            }
+
+            ApplyResyncedOpenSlots(resyncedSlots, tradeMapNameA, tradeMapNameB);
+            await PersistCurrentSlotsSnapshotAsync("manual-resync");
+
+            AddSignalLog(
+                $"    - [{DateTime.Now:HH:mm:ss.fff}] Resync complete: restored {resyncedSlots.Count} slot(s), " +
+                $"auto-open resumed");
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[RECOVERY][ERROR] Resync open trades failed: {ex}");
+            AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Resync failed: {ex.Message}");
+        }
     }
 
     private Task OpenConfigAsync()
@@ -2930,6 +2983,8 @@ public sealed class DashboardViewModel : ObservableObject
                     _invariantClearStreak = 0;
                     SafeVmLog(
                         $"[WATCHDOG][INFO] Invariant cleared after {InvariantClearPollsRequired} stable polls. state=RESUMED");
+                    AddSignalLog(
+                        $"    - [{DateTime.Now:HH:mm:ss.fff}] Invariant cleared, auto-open resumed");
                 }
             }
             return;
@@ -2943,13 +2998,13 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         _isAutoOpenPausedByInvariant = true;
-        SafeVmLog(
-            $"[WATCHDOG][WARN] Invariant violation detected: " +
+        var watchdogMessage =
             $"toolA={toolRowsA},toolB={toolRowsB},autoPairs={liveAutoPairCount}, " +
             $"slotsActive={coordinatorActiveCount}/{_runtimeConfigState.CurrentMaxTotalOpens}, " +
             $"liveBuy={_portfolioCoordinator.LiveBuyCount}/{_runtimeConfigState.CurrentMaxBuyOpens}, " +
-            $"liveSell={_portfolioCoordinator.LiveSellCount}/{_runtimeConfigState.CurrentMaxSellOpens}. " +
-            $"state=PAUSED");
+            $"liveSell={_portfolioCoordinator.LiveSellCount}/{_runtimeConfigState.CurrentMaxSellOpens}";
+        SafeVmLog($"[WATCHDOG][WARN] Invariant violation detected: {watchdogMessage}. state=PAUSED");
+        AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Watchdog paused: {watchdogMessage}");
     }
 
     private static int GetOpenRowCount(SharedMapReadResult<TradeSharedRecord> tradeResult)
@@ -4715,6 +4770,7 @@ public sealed class DashboardViewModel : ObservableObject
                         await _configService.SaveCurrentTicksAsync(
                             state.OpenedTicketA.Value.ToString(),
                             state.OpenedTicketB.Value.ToString());
+                        await PersistCurrentSlotsSnapshotAsync("open-confirmed");
                         SafeVmLog($"[RECOVERY][INFO] Saved current ticks to DB: ticketA={state.OpenedTicketA.Value} ticketB={state.OpenedTicketB.Value}");
                     }
                     catch (Exception ex)
@@ -5347,8 +5403,12 @@ public sealed class DashboardViewModel : ObservableObject
                 IsShowConfigVisible = result.IsShowConfig == 1;
                 ResetTradingLogicState();
 
-                // Recovery: restore active tickets from DB if tool was restarted with open trades
-                await TryRecoverTicketsFromConfigAsync(result.CurrentTickA, result.CurrentTickB);
+                // Recovery: prefer multi-slot snapshot, fallback to legacy single pair fields.
+                var recoveredFromSlots = await TryRecoverSlotsFromConfigAsync(result.CurrentSlots);
+                if (!recoveredFromSlots)
+                {
+                    await TryRecoverTicketsFromConfigAsync(result.CurrentTickA, result.CurrentTickB);
+                }
 
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
@@ -5926,6 +5986,66 @@ public sealed class DashboardViewModel : ObservableObject
     private static string FormatTextOrDash(string? value)
         => string.IsNullOrWhiteSpace(value) ? "-" : value;
 
+    private async Task<bool> TryRecoverSlotsFromConfigAsync(string currentSlotsJson)
+    {
+        try
+        {
+            var persistedSlots = SlotPersistence.Deserialize(currentSlotsJson);
+            if (persistedSlots.Count == 0)
+            {
+                return false;
+            }
+
+            var tradeMapNameA = TradeTab.LeftPanel.TargetMapName;
+            var tradeMapNameB = TradeTab.RightPanel.TargetMapName;
+            if (string.IsNullOrWhiteSpace(tradeMapNameA) || string.IsNullOrWhiteSpace(tradeMapNameB))
+            {
+                SafeVmLog("[RECOVERY][WARN] Trade map names not available yet, cannot recover persisted slots.");
+                return false;
+            }
+
+            var tradeResultA = _tradesSharedMemoryReader.ReadTrades(tradeMapNameA);
+            var tradeResultB = _tradesSharedMemoryReader.ReadTrades(tradeMapNameB);
+            if (!AreTradeMapsHealthy(tradeResultA, tradeResultB))
+            {
+                SafeVmLog("[RECOVERY][WARN] Trade maps are not healthy, cannot recover persisted slots.");
+                return false;
+            }
+
+            var liveSlots = persistedSlots
+                .Where(slot => tradeResultA.Records.Any(r => r.Ticket == slot.TicketA)
+                               && tradeResultB.Records.Any(r => r.Ticket == slot.TicketB))
+                .ToList();
+
+            if (liveSlots.Count == 0)
+            {
+                SafeVmLog("[RECOVERY][INFO] Persisted slots not found in shared memory. Clearing DB slot snapshot.");
+                await _configService.SaveCurrentSlotsAsync("[]");
+                return false;
+            }
+
+            _portfolioCoordinator.RecoverSlotsFromPersisted(liveSlots);
+            RegisterRecoveredSlotMappings(liveSlots, tradeResultA.Records, tradeResultB.Records, tradeMapNameA, tradeMapNameB);
+            _autoSlot = Math.Max(_autoSlot, liveSlots.Max(s => s.SlotId) + 1);
+            SetActiveAutoCycleFromRecoveredSlots(liveSlots);
+
+            SafeVmLog($"[RECOVERY][INFO] Recovered {liveSlots.Count}/{persistedSlots.Count} slots from current_slots.");
+            AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Recovered {liveSlots.Count} open slot(s) from DB");
+
+            if (liveSlots.Count != persistedSlots.Count)
+            {
+                await PersistCurrentSlotsSnapshotAsync("drop-stale-persisted-slots");
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[RECOVERY][ERROR] Failed to recover persisted slots: {ex.Message}");
+            return false;
+        }
+    }
+
     private async Task TryRecoverTicketsFromConfigAsync(string currentTickA, string currentTickB)
     {
         try
@@ -6022,11 +6142,220 @@ public sealed class DashboardViewModel : ObservableObject
             }
 
             SafeVmLog($"[RECOVERY][INFO] Recovered tickets from previous session: ticketA={ticketA} ticketB={ticketB} pairId={recoveryPairId}");
+            await PersistCurrentSlotsSnapshotAsync("legacy-ticket-recovery");
         }
         catch (Exception ex)
         {
             SafeVmLog($"[RECOVERY][ERROR] Failed to recover tickets: {ex.Message}");
         }
+    }
+
+    private static bool AreTradeMapsHealthy(
+        SharedMapReadResult<TradeSharedRecord> tradeResultA,
+        SharedMapReadResult<TradeSharedRecord> tradeResultB)
+        => tradeResultA.IsMapAvailable
+           && tradeResultA.IsParseSuccess
+           && tradeResultB.IsMapAvailable
+           && tradeResultB.IsParseSuccess;
+
+    private List<ResyncedOpenSlot> BuildResyncedOpenSlots(
+        IReadOnlyList<TradeSharedRecord> recordsA,
+        IReadOnlyList<TradeSharedRecord> recordsB)
+    {
+        var tracked = BuildTrackedResyncedOpenSlots(recordsA, recordsB);
+        return tracked.Count > 0 ? tracked : BuildInferredResyncedOpenSlots(recordsA, recordsB);
+    }
+
+    private List<ResyncedOpenSlot> BuildTrackedResyncedOpenSlots(
+        IReadOnlyList<TradeSharedRecord> recordsA,
+        IReadOnlyList<TradeSharedRecord> recordsB)
+    {
+        var byPairA = recordsA
+            .Where(r => _pairIdByTicket.ContainsKey(r.Ticket))
+            .GroupBy(r => _pairIdByTicket[r.Ticket], StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.OrderBy(r => r.TimeMsc).First(), StringComparer.Ordinal);
+        var byPairB = recordsB
+            .Where(r => _pairIdByTicket.ContainsKey(r.Ticket))
+            .GroupBy(r => _pairIdByTicket[r.Ticket], StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.OrderBy(r => r.TimeMsc).First(), StringComparer.Ordinal);
+
+        var slots = new List<ResyncedOpenSlot>();
+        foreach (var pairId in byPairA.Keys.Intersect(byPairB.Keys, StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal))
+        {
+            var recordA = byPairA[pairId];
+            var recordB = byPairB[pairId];
+            if (!TryResolveOpenSide(recordA, recordB, out var side, out var mode))
+            {
+                continue;
+            }
+
+            slots.Add(new ResyncedOpenSlot(slots.Count + 1, pairId, side, mode, recordA, recordB));
+        }
+
+        return slots;
+    }
+
+    private List<ResyncedOpenSlot> BuildInferredResyncedOpenSlots(
+        IReadOnlyList<TradeSharedRecord> recordsA,
+        IReadOnlyList<TradeSharedRecord> recordsB)
+    {
+        var slots = new List<ResyncedOpenSlot>();
+        PairInferredTrades(recordsA, recordsB, slots, tradeTypeA: 0, tradeTypeB: 1, TradingPositionSide.Buy, TradingOpenMode.GapBuy);
+        PairInferredTrades(recordsA, recordsB, slots, tradeTypeA: 1, tradeTypeB: 0, TradingPositionSide.Sell, TradingOpenMode.GapSell);
+        return slots
+            .OrderBy(s => Math.Min(s.RecordA.TimeMsc, s.RecordB.TimeMsc))
+            .Select((slot, index) => slot with { SlotId = index + 1 })
+            .ToList();
+    }
+
+    private static void PairInferredTrades(
+        IReadOnlyList<TradeSharedRecord> recordsA,
+        IReadOnlyList<TradeSharedRecord> recordsB,
+        List<ResyncedOpenSlot> slots,
+        int tradeTypeA,
+        int tradeTypeB,
+        TradingPositionSide side,
+        TradingOpenMode mode)
+    {
+        var left = recordsA.Where(r => r.TradeType == tradeTypeA).OrderBy(r => r.TimeMsc).ToList();
+        var right = recordsB.Where(r => r.TradeType == tradeTypeB).OrderBy(r => r.TimeMsc).ToList();
+        var count = Math.Min(left.Count, right.Count);
+
+        for (var i = 0; i < count; i++)
+        {
+            var pairId = $"RESYNC-{slots.Count + 1:D4}-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+            slots.Add(new ResyncedOpenSlot(slots.Count + 1, pairId, side, mode, left[i], right[i]));
+        }
+    }
+
+    private static bool TryResolveOpenSide(
+        TradeSharedRecord recordA,
+        TradeSharedRecord recordB,
+        out TradingPositionSide side,
+        out TradingOpenMode mode)
+    {
+        if (recordA.TradeType == 0 && recordB.TradeType == 1)
+        {
+            side = TradingPositionSide.Buy;
+            mode = TradingOpenMode.GapBuy;
+            return true;
+        }
+
+        if (recordA.TradeType == 1 && recordB.TradeType == 0)
+        {
+            side = TradingPositionSide.Sell;
+            mode = TradingOpenMode.GapSell;
+            return true;
+        }
+
+        side = TradingPositionSide.None;
+        mode = TradingOpenMode.None;
+        return false;
+    }
+
+    private void ApplyResyncedOpenSlots(
+        IReadOnlyList<ResyncedOpenSlot> slots,
+        string tradeMapNameA,
+        string tradeMapNameB)
+    {
+        var recovered = slots.Select(slot => new RecoveredSlotData(
+            SlotId: slot.SlotId,
+            PairId: slot.PairId,
+            Side: slot.Side,
+            OpenMode: slot.OpenMode,
+            TicketA: slot.RecordA.Ticket,
+            TicketB: slot.RecordB.Ticket,
+            OpenConfirmedAtUtc: DateTime.UtcNow,
+            HoldingSeconds: Math.Max(0, _tradingFlowEngine.CurrentHoldingSeconds))).ToList();
+
+        _portfolioCoordinator.RecoverSlotsFromPersisted(recovered);
+        RegisterRecoveredSlotMappings(recovered, slots.Select(s => s.RecordA).ToList(), slots.Select(s => s.RecordB).ToList(), tradeMapNameA, tradeMapNameB);
+        SetActiveAutoCycleFromRecoveredSlots(recovered);
+        _autoSlot = Math.Max(_autoSlot, recovered.Max(s => s.SlotId) + 1);
+        _isAutoOpenPausedByInvariant = false;
+        _invariantClearStreak = 0;
+        RaiseCurrentPositionTextChanged();
+        OnPropertyChanged(nameof(CurrentPhaseText));
+    }
+
+    private void RegisterRecoveredSlotMappings(
+        IReadOnlyList<RecoveredSlotData> slots,
+        IReadOnlyList<TradeSharedRecord> recordsA,
+        IReadOnlyList<TradeSharedRecord> recordsB,
+        string tradeMapNameA,
+        string tradeMapNameB)
+    {
+        var keyA = NormalizeMapName(tradeMapNameA);
+        var keyB = NormalizeMapName(tradeMapNameB);
+        if (!_knownTradeTicketsByMap.ContainsKey(keyA))
+        {
+            _knownTradeTicketsByMap[keyA] = [];
+        }
+
+        if (!_knownTradeTicketsByMap.ContainsKey(keyB))
+        {
+            _knownTradeTicketsByMap[keyB] = [];
+        }
+
+        foreach (var slot in slots)
+        {
+            _pairIdByTicket[slot.TicketA] = slot.PairId;
+            _pairIdByTicket[slot.TicketB] = slot.PairId;
+            _knownTradeTicketsByMap[keyA].Add(slot.TicketA);
+            _knownTradeTicketsByMap[keyB].Add(slot.TicketB);
+
+            var recordA = recordsA.FirstOrDefault(r => r.Ticket == slot.TicketA);
+            var recordB = recordsB.FirstOrDefault(r => r.Ticket == slot.TicketB);
+            if (recordA is not null)
+            {
+                _profitSnapshotByTicket.TryAdd(recordA.Ticket, recordA.Profit);
+            }
+
+            if (recordB is not null)
+            {
+                _profitSnapshotByTicket.TryAdd(recordB.Ticket, recordB.Profit);
+            }
+        }
+    }
+
+    private void SetActiveAutoCycleFromRecoveredSlots(IReadOnlyList<RecoveredSlotData> slots)
+    {
+        var latest = slots
+            .OrderByDescending(s => s.OpenConfirmedAtUtc)
+            .FirstOrDefault();
+        if (latest is null)
+        {
+            return;
+        }
+
+        _activeAutoCycle = new ActiveAutoCycleState
+        {
+            Slot = latest.SlotId,
+            OpenedAtLocal = DateTimeOffset.Now,
+            PairIdA = latest.PairId,
+            PairIdB = latest.PairId,
+            TicketA = latest.TicketA,
+            TicketB = latest.TicketB
+        };
+    }
+
+    private async Task PersistCurrentSlotsSnapshotAsync(string reason)
+    {
+        var json = SlotPersistence.Serialize(_portfolioCoordinator.LiveSlots);
+        try
+        {
+            await _configService.SaveCurrentSlotsAsync(json);
+            SafeVmLog($"[PERSIST][INFO] Saved current_slots ({reason}): {json}");
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[PERSIST][WARN] Failed to save current_slots ({reason}): {ex.Message}");
+        }
+    }
+
+    private void AddSignalLog(string message)
+    {
+        System.Windows.Application.Current.Dispatcher.Invoke(() => SignalLogItems.Insert(0, message));
     }
 
     private void SafeVmLog(string message)

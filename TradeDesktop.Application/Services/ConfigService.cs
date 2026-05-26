@@ -15,6 +15,7 @@ public interface IConfigService
         IReadOnlyList<ManualHwndColumnConfig>? manualHwndColumns = null,
         CancellationToken cancellationToken = default);
     Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default);
+    Task SaveCurrentSlotsAsync(string currentSlotsJson, CancellationToken cancellationToken = default);
 }
 
 public sealed class ConfigService(
@@ -82,7 +83,8 @@ public sealed class ConfigService(
             record.CoolDownGapTick,
             record.IsShowConfig,
             record.CurrentTickA,
-            record.CurrentTickB);
+            record.CurrentTickB,
+            record.CurrentSlots);
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -94,6 +96,17 @@ public sealed class ConfigService(
         }
 
         await configRepository.UpdateCurrentTicksAsync(hostName, currentTickA, currentTickB, cancellationToken);
+    }
+
+    public async Task SaveCurrentSlotsAsync(string currentSlotsJson, CancellationToken cancellationToken = default)
+    {
+        var hostName = machineIdentityService.GetHostName();
+        if (string.IsNullOrWhiteSpace(hostName))
+        {
+            return;
+        }
+
+        await configRepository.UpdateCurrentSlotsAsync(hostName, currentSlotsJson, cancellationToken);
     }
 
     public async Task<ConfigSaveResult> SaveByMachineHostNameAsync(
@@ -186,7 +199,8 @@ public sealed record ConfigLoadResult(
     int CoolDownGapTick,
     int IsShowConfig = 0,
     string CurrentTickA = "",
-    string CurrentTickB = "")
+    string CurrentTickB = "",
+    string CurrentSlots = "")
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -228,7 +242,8 @@ public sealed record ConfigLoadResult(
         int coolDownGapTick = 0,
         int isShowConfig = 0,
         string currentTickA = "",
-        string currentTickB = "") =>
+        string currentTickB = "",
+        string currentSlots = "") =>
         new(
             true,
             true,
@@ -272,13 +287,14 @@ public sealed record ConfigLoadResult(
             Math.Max(0, coolDownGapTick),
             isShowConfig,
             currentTickA ?? string.Empty,
-            currentTickB ?? string.Empty);
+            currentTickB ?? string.Empty,
+            currentSlots ?? string.Empty);
 
     public static ConfigLoadResult NotFound(string machineHostName) =>
-        new(false, false, machineHostName, [ManualHwndColumnConfig.Empty], "mt5", "mt5", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, "[]", null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "", "");
+        new(false, false, machineHostName, [ManualHwndColumnConfig.Empty], "mt5", "mt5", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, "[]", null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "", "", "");
 
     public static ConfigLoadResult Failed(string machineHostName, string error) =>
-        new(false, true, machineHostName, [ManualHwndColumnConfig.Empty], "mt5", "mt5", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, "[]", error, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "", "");
+        new(false, true, machineHostName, [ManualHwndColumnConfig.Empty], "mt5", "mt5", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, "[]", error, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "", "", "");
 
     private static IReadOnlyList<ManualHwndColumnConfig> NormalizeColumns(IReadOnlyList<ManualHwndColumnConfig>? columns)
     {

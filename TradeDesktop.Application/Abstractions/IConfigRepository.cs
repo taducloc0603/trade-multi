@@ -16,4 +16,8 @@ public interface IConfigRepository
         string currentTickA,
         string currentTickB,
         CancellationToken cancellationToken = default);
+    Task<bool> UpdateCurrentSlotsAsync(
+        string hostName,
+        string currentSlotsJson,
+        CancellationToken cancellationToken = default);
 }

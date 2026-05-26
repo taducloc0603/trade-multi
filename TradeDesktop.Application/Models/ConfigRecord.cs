@@ -37,4 +37,5 @@ public sealed record ConfigRecord(
     int CoolDownGapTick,
     int IsShowConfig = 0,
     string CurrentTickA = "",
-    string CurrentTickB = "");
+    string CurrentTickB = "",
+    string CurrentSlots = "");
