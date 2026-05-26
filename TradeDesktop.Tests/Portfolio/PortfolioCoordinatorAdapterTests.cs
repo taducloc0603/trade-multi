@@ -231,6 +231,30 @@ public sealed class PortfolioCoordinatorAdapterTests
     }
 
     [Fact]
+    public void AbortPendingOpenExecution_WhenLiveSlotExists_DoesNotRemoveLiveSlot()
+    {
+        var coordinator = new PortfolioCoordinator(
+            new GapSignalConfirmationEngine(),
+            new CloseSignalEngineFactory());
+        var sut = new PortfolioCoordinatorAdapter(coordinator);
+
+        coordinator.RegisterSyncedSlot(
+            pairId: "AUTO-0000-1",
+            side: TradingPositionSide.Buy,
+            openMode: TradingOpenMode.GapBuy,
+            ticketA: 100,
+            ticketB: 200,
+            openConfirmedAtUtc: DateTime.UtcNow,
+            holdingSeconds: 10);
+
+        sut.AbortPendingOpenExecution();
+
+        Assert.Equal(1, coordinator.LiveCount);
+        Assert.NotNull(coordinator.GetSlotByPairId("AUTO-0000-1"));
+        Assert.Equal(TradingFlowPhase.WaitingCloseFromGapBuy, sut.CurrentPhase);
+    }
+
+    [Fact]
     public void ForceWaitingClose_WhenBuy_SetsWaitingCloseFromGapBuy()
     {
         var sut = CreateSut();

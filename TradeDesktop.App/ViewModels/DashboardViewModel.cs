@@ -3,6 +3,7 @@ using System.IO;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Diagnostics;
+using System.Reflection;
 using System.Windows.Media;
 using Microsoft.Extensions.DependencyInjection;
 using TradeDesktop.App.Commands;
@@ -19,6 +20,8 @@ namespace TradeDesktop.App.ViewModels;
 
 public sealed class DashboardViewModel : ObservableObject
 {
+    private static readonly string AssemblyVersion = GetAssemblyVersion();
+
     private readonly IServiceProvider _serviceProvider;
     private readonly RuntimeConfigState _runtimeConfigState;
     private readonly IConfigService _configService;
@@ -400,6 +403,8 @@ public sealed class DashboardViewModel : ObservableObject
         get => _runtimeSummary;
         private set => SetProperty(ref _runtimeSummary, value);
     }
+
+    public string BuildVersion => $"Version {AssemblyVersion}";
 
     public string DbInlineData
     {
@@ -6482,4 +6487,18 @@ public sealed class DashboardViewModel : ObservableObject
         });
     }
 
+    private static string GetAssemblyVersion()
+    {
+        var assembly = typeof(DashboardViewModel).Assembly;
+        var informationalVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+
+        if (!string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            return informationalVersion;
+        }
+
+        return assembly.GetName().Version?.ToString() ?? "unknown";
+    }
 }

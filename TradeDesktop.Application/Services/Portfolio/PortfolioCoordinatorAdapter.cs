@@ -148,11 +148,6 @@ public sealed class PortfolioCoordinatorAdapter : ITradingFlowEngine
         {
             _coordinator.AbortPendingOpen(slot.PairId);
         }
-        else
-        {
-            // Slot is Live or PendingClose — remove anyway (mirrors engine cũ's reset behavior).
-            _coordinator.State.RemoveSlot(slot);
-        }
 
         _adapterClosedAtUtc = null;
         _adapterClosedAtRuntimeUtc = null;

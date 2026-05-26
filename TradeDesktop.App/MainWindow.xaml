@@ -78,6 +78,10 @@
 
                 <StackPanel Orientation="Vertical">
                     <TextBlock Text="Dashboard" FontSize="24" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,2,0,0"
+                               Foreground="#667085"
+                               FontSize="12"
+                               Text="{Binding BuildVersion}" />
                     <TextBlock Margin="0,6,0,0"
                                Foreground="#B42318"
                                FontWeight="SemiBold"
