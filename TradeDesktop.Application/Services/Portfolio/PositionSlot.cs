@@ -32,6 +32,10 @@ public sealed class PositionSlot
     public int HoldingSeconds { get; private set; }
     public bool IsCloseExecutionPending { get; private set; }
     public double? LastProfitSnapshot { get; internal set; }
+    public double? LastProfitA { get; private set; }
+    public double? LastProfitB { get; private set; }
+    public bool HasCompleteProfitSnapshot => LastProfitA.HasValue && LastProfitB.HasValue;
+    public CloseSignalReason? LastCloseReason { get; private set; }
     public ICloseSignalEngine CloseSignalEngine { get; private set; }
 
     public void MarkOpenTriggered(
@@ -45,6 +49,8 @@ public sealed class PositionSlot
         OpenedAtUtc = triggerAtUtc;
         HoldingSeconds = holdingSeconds;
         Status = PositionSlotStatus.PendingOpen;
+        ClearProfitSnapshot();
+        LastCloseReason = null;
     }
 
     public void MarkOpenConfirmed(ulong ticketA, ulong ticketB, DateTime confirmedAtUtc)
@@ -55,9 +61,10 @@ public sealed class PositionSlot
         Status = PositionSlotStatus.Live;
     }
 
-    public void MarkCloseTriggered(DateTime triggerAtUtc)
+    public void MarkCloseTriggered(DateTime triggerAtUtc, CloseSignalReason closeReason = CloseSignalReason.Gap)
     {
         ClosedAtUtc = triggerAtUtc;
+        LastCloseReason = closeReason;
         IsCloseExecutionPending = true;
         Status = PositionSlotStatus.PendingClose;
     }
@@ -106,6 +113,28 @@ public sealed class PositionSlot
         HoldingSeconds = holdingSeconds;
         Status = PositionSlotStatus.Live;
         IsCloseExecutionPending = false;
+        ClearProfitSnapshot();
+        LastCloseReason = null;
+    }
+
+    public void UpdateProfit(ulong ticket, double profit)
+    {
+        if (TicketA.HasValue && ticket == TicketA.Value)
+        {
+            LastProfitA = profit;
+        }
+        else if (TicketB.HasValue && ticket == TicketB.Value)
+        {
+            LastProfitB = profit;
+        }
+        else
+        {
+            return;
+        }
+
+        LastProfitSnapshot = HasCompleteProfitSnapshot
+            ? LastProfitA!.Value + LastProfitB!.Value
+            : null;
     }
 
     /// <summary>
@@ -114,5 +143,12 @@ public sealed class PositionSlot
     public void ResetCloseSignalEngine(ICloseSignalEngine engine)
     {
         CloseSignalEngine = engine;
+    }
+
+    private void ClearProfitSnapshot()
+    {
+        LastProfitA = null;
+        LastProfitB = null;
+        LastProfitSnapshot = null;
     }
 }

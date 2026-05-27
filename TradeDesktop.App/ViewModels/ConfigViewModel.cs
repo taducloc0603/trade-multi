@@ -400,6 +400,8 @@ public sealed class ConfigViewModel : ObservableObject
                 loadResult.OpenPriceFreezeMs,
                 loadResult.ClosePts,
                 loadResult.CloseConfirmGapPts,
+                loadResult.CloseTpProfit,
+                loadResult.CloseConfirmTpProfit,
                 loadResult.CloseHoldConfirmMs,
                 loadResult.ClosePriceFreezeMs,
                 loadResult.StartTimeHold,

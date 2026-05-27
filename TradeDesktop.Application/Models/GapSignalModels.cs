@@ -12,6 +12,12 @@ public enum GapSignalSide
     Sell = 1
 }
 
+public enum CloseSignalReason
+{
+    Gap = 0,
+    Tp = 1
+}
+
 public enum TradingFlowPhase
 {
     WaitingOpen = 0,
@@ -56,6 +62,8 @@ public sealed record GapSignalConfirmationConfig(
     int HoldConfirmMs,
     int CloseConfirmGapPts = 0,
     int ClosePts = 0,
+    double CloseConfirmTpProfit = 0,
+    double CloseTpProfit = 0,
     int CloseHoldConfirmMs = 0,
     int StartTimeHold = 0,
     int EndTimeHold = 0,
@@ -85,7 +93,11 @@ public sealed record GapSignalTriggerResult(
     decimal? GapBuySourceAAsk,
     decimal? GapSellSourceBAsk,
     decimal? GapSellSourceABid,
-    int PointMultiplier);
+    int PointMultiplier,
+    CloseSignalReason CloseReason = CloseSignalReason.Gap,
+    double? CloseTpProfit = null,
+    double? CloseTpTarget = null,
+    IReadOnlyList<double>? CloseTpProfits = null);
 
 public enum GapSignalTriggerType
 {

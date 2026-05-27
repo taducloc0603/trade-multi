@@ -12,6 +12,8 @@ public interface IRuntimeConfigProvider
     int CurrentOpenPriceFreezeMs { get; }
     int CurrentClosePts { get; }
     int CurrentCloseConfirmGapPts { get; }
+    double CurrentCloseTpProfit { get; }
+    double CurrentCloseConfirmTpProfit { get; }
     int CurrentCloseHoldConfirmMs { get; }
     int CurrentClosePriceFreezeMs { get; }
     int CurrentStartTimeHold { get; }

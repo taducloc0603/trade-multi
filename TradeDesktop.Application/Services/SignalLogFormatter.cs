@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Linq;
+using TradeDesktop.Application.Models;
 
 namespace TradeDesktop.Application.Services;
 
@@ -57,9 +58,18 @@ public static class SignalLogFormatter
     public static string FormatAutoClose(
         DateTime localTime, int slot, string exchangeLabel,
         string tradeType, string symbol, decimal? price,
-        string gapLabel, int? lastGap, IReadOnlyList<int>? allGaps)
+        string gapLabel, int? lastGap, IReadOnlyList<int>? allGaps,
+        CloseSignalReason closeReason = CloseSignalReason.Gap,
+        double? tpProfit = null,
+        double? tpTarget = null,
+        IReadOnlyList<double>? tpProfits = null)
     {
         var ts = localTime.ToString(TimestampFormat, CultureInfo.InvariantCulture);
+        if (closeReason == CloseSignalReason.Tp)
+        {
+            return $"{ts}> [{slot}:{exchangeLabel}]. CLOSE {tradeType.ToUpperInvariant()} {symbol} at {Fp(price)}. Reason: Close by TP profit = {Ftp(tpProfit)}/{Ftp(tpTarget)} ({Ftp(tpProfits)})";
+        }
+
         var lastGapText = lastGap.HasValue ? lastGap.Value.ToString(CultureInfo.InvariantCulture) : "0";
         return $"{ts}> [{slot}:{exchangeLabel}]. CLOSE {tradeType.ToUpperInvariant()} {symbol} at {Fp(price)}. Reason: Close by {gapLabel} = {lastGapText} ({Fg(allGaps)})";
     }
@@ -123,6 +133,14 @@ public static class SignalLogFormatter
         => gaps is null || gaps.Count == 0
             ? "0"
             : string.Join("|", gaps.Select(g => g.ToString(CultureInfo.InvariantCulture)));
+
+    private static string Ftp(double? profit)
+        => profit.HasValue ? profit.Value.ToString("0.00", CultureInfo.InvariantCulture) : "-";
+
+    private static string Ftp(IReadOnlyList<double>? profits)
+        => profits is null || profits.Count == 0
+            ? "0"
+            : string.Join("|", profits.Select(v => v.ToString("0.00", CultureInfo.InvariantCulture)));
 
     private static string Cap(string tradeType)
     {

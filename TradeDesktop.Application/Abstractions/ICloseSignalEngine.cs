@@ -7,7 +7,8 @@ public interface ICloseSignalEngine
     GapSignalTriggerResult? ProcessSnapshot(
         GapSignalSnapshot snapshot,
         GapSignalConfirmationConfig config,
-        TradingOpenMode openMode);
+        TradingOpenMode openMode,
+        double? slotProfit = null);
 
     void Reset();
 }

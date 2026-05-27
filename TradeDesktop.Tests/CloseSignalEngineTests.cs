@@ -143,15 +143,97 @@ public sealed class CloseSignalEngineTests
         Assert.NotNull(trigger);
     }
 
+    [Fact]
+    public void ProcessSnapshot_TriggersCloseByTp_WhenSlotProfitHoldsAndFinalTargetMatches()
+    {
+        var sut = new CloseSignalEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            CloseConfirmGapPts: 50,
+            ClosePts: 80,
+            CloseConfirmTpProfit: 10,
+            CloseTpProfit: 15,
+            CloseHoldConfirmMs: 400);
+        var start = new DateTime(2026, 3, 18, 15, 30, 0, DateTimeKind.Utc);
+
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 10));
+        Assert.Null(Process(sut, start.AddMilliseconds(180), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 12));
+
+        var trigger = Process(sut, start.AddMilliseconds(420), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 15);
+
+        Assert.NotNull(trigger);
+        Assert.Equal(GapSignalAction.Close, trigger!.Action);
+        Assert.Equal(CloseSignalReason.Tp, trigger.CloseReason);
+        Assert.Equal(15, trigger.CloseTpProfit);
+        Assert.Equal(15, trigger.CloseTpTarget);
+        Assert.Equal(new[] { 10d, 12d, 15d }, trigger.CloseTpProfits);
+    }
+
+    [Fact]
+    public void ProcessSnapshot_ResetsTpWindow_WhenProfitDropsBelowConfirm()
+    {
+        var sut = new CloseSignalEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            CloseConfirmGapPts: 50,
+            ClosePts: 80,
+            CloseConfirmTpProfit: 10,
+            CloseTpProfit: 15,
+            CloseHoldConfirmMs: 300);
+        var start = new DateTime(2026, 3, 18, 15, 35, 0, DateTimeKind.Utc);
+
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 10));
+        Assert.Null(Process(sut, start.AddMilliseconds(100), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 12));
+        Assert.Null(Process(sut, start.AddMilliseconds(200), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 9));
+        Assert.Null(Process(sut, start.AddMilliseconds(250), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 10));
+        Assert.Null(Process(sut, start.AddMilliseconds(400), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 15));
+
+        var trigger = Process(sut, start.AddMilliseconds(600), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 15);
+
+        Assert.NotNull(trigger);
+        Assert.Equal(new[] { 10d, 15d, 15d }, trigger!.CloseTpProfits);
+    }
+
+    [Fact]
+    public void ProcessSnapshot_PrefersTpReason_WhenGapAndTpBothTrigger()
+    {
+        var sut = new CloseSignalEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            CloseConfirmGapPts: 5,
+            ClosePts: 8,
+            CloseConfirmTpProfit: 10,
+            CloseTpProfit: 15,
+            CloseHoldConfirmMs: 300);
+        var start = new DateTime(2026, 3, 18, 15, 40, 0, DateTimeKind.Utc);
+
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: null, gapSell: -5, config, TradingOpenMode.GapBuy, slotProfit: 10));
+        Assert.Null(Process(sut, start.AddMilliseconds(150), gapBuy: null, gapSell: -6, config, TradingOpenMode.GapBuy, slotProfit: 12));
+
+        var trigger = Process(sut, start.AddMilliseconds(350), gapBuy: null, gapSell: -8, config, TradingOpenMode.GapBuy, slotProfit: 15);
+
+        Assert.NotNull(trigger);
+        Assert.Equal(CloseSignalReason.Tp, trigger!.CloseReason);
+        Assert.Equal(GapSignalTriggerType.CloseByGapSell, trigger.TriggerType);
+    }
+
     private static GapSignalTriggerResult? Process(
         CloseSignalEngine sut,
         DateTime timestampUtc,
         int? gapBuy,
         int? gapSell,
         GapSignalConfirmationConfig config,
-        TradingOpenMode openMode)
+        TradingOpenMode openMode,
+        double? slotProfit = null)
         => sut.ProcessSnapshot(
             new GapSignalSnapshot(timestampUtc, 2945.12m, 2945.34m, 2945.56m, 2945.78m, gapBuy ?? 0, gapSell ?? 0, 1),
             config,
-            openMode);
+            openMode,
+            slotProfit);
 }

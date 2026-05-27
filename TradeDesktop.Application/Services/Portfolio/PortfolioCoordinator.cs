@@ -1,3 +1,4 @@
+using System.Globalization;
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
 
@@ -158,7 +159,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             if (slot.IsCloseExecutionPending) continue;
             if (!IsHoldingElapsedOrFloorReached(slot, effectiveNow)) continue;
 
-            var closeTrigger = slot.CloseSignalEngine.ProcessSnapshot(snapshot, config, slot.OpenMode);
+            LogTpCheck(slot, config);
+
+            var closeTrigger = slot.CloseSignalEngine.ProcessSnapshot(
+                snapshot,
+                config,
+                slot.OpenMode,
+                slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot : null);
             if (closeTrigger is null || !closeTrigger.Triggered || closeTrigger.Action != GapSignalAction.Close)
             {
                 continue;
@@ -176,7 +183,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
             // Mark IsCloseExecutionPending immediately so next tick doesn't double-trigger.
             // Note: status transitions to PendingClose only after MarkSlotCloseTriggered from caller.
-            winner.slot.MarkCloseTriggered(winner.trigger.TriggeredAtUtc);
+            winner.slot.MarkCloseTriggered(winner.trigger.TriggeredAtUtc, winner.trigger.CloseReason);
 
             // Reset both engines after a close trigger (matches TradingFlowEngine behavior).
             _openSignalEngine.Reset();
@@ -327,7 +334,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             : "lockNone";
         _logger?.Log(
             $"[SLOT][CLOSE_CONFIRMED] slot={slot.SlotId} side={slot.Side} " +
-            $"profit={slot.LastProfitSnapshot:F2} {lockSummary}");
+            $"profit={slot.LastProfitSnapshot:F2} closeReason={slot.LastCloseReason ?? CloseSignalReason.Gap} {lockSummary}");
     }
 
     public PositionSlot RegisterSyncedSlot(
@@ -355,7 +362,26 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     {
         var slot = _state.GetSlotByTicket(ticket);
         if (slot is null) return;
-        slot.LastProfitSnapshot = profit;
+        slot.UpdateProfit(ticket, profit);
+    }
+
+    private void LogTpCheck(PositionSlot slot, GapSignalConfirmationConfig config)
+    {
+        if (config.CloseTpProfit <= 0d)
+        {
+            return;
+        }
+
+        var profitText = slot.HasCompleteProfitSnapshot && slot.LastProfitSnapshot.HasValue
+            ? slot.LastProfitSnapshot.Value.ToString("0.00", CultureInfo.InvariantCulture)
+            : "incomplete";
+
+        _logger?.Log(
+            $"[SLOT][TP_CHECK] slot={slot.SlotId} profit={profitText} " +
+            $"confirm={Math.Abs(config.CloseConfirmTpProfit).ToString("0.00", CultureInfo.InvariantCulture)} " +
+            $"tp={Math.Abs(config.CloseTpProfit).ToString("0.00", CultureInfo.InvariantCulture)} " +
+            $"holdMs={Math.Max(0, config.CloseHoldConfirmMs)} " +
+            $"maxTick={Math.Max(0, config.CloseMaxTimesTick)}");
     }
 
     // ===== Rule checks (Phase 2) =====

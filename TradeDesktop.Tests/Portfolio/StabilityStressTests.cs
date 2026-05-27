@@ -11,7 +11,11 @@ public sealed class StabilityStressTests
     private sealed class ScriptedCloseEngine : ICloseSignalEngine
     {
         public GapSignalTriggerResult? NextResult { get; set; }
-        public GapSignalTriggerResult? ProcessSnapshot(GapSignalSnapshot s, GapSignalConfirmationConfig c, TradingOpenMode m)
+        public GapSignalTriggerResult? ProcessSnapshot(
+            GapSignalSnapshot s,
+            GapSignalConfirmationConfig c,
+            TradingOpenMode m,
+            double? slotProfit = null)
             => NextResult;
         public void Reset() { }
     }
@@ -145,8 +149,11 @@ public sealed class StabilityStressTests
 
             // Assign profits: middle slot wins.
             coordinator.UpdateProfit((ulong)(cycle * 1000 + 0 * 10), 1.0);
+            coordinator.UpdateProfit((ulong)(cycle * 1000 + 0 * 10 + 1), 0.0);
             coordinator.UpdateProfit((ulong)(cycle * 1000 + 1 * 10), 5.0); // winner
+            coordinator.UpdateProfit((ulong)(cycle * 1000 + 1 * 10 + 1), 0.0);
             coordinator.UpdateProfit((ulong)(cycle * 1000 + 2 * 10), 2.0);
+            coordinator.UpdateProfit((ulong)(cycle * 1000 + 2 * 10 + 1), 0.0);
 
             // Configure all 3 close engines to return close trigger.
             var thisCycleEngines = factory.Created.TakeLast(3).ToList();

@@ -166,8 +166,9 @@ public sealed class PortfolioCoordinatorTests
         coordinator.MarkSlotOpenConfirmed("p1", 555, 666, DateTime.UtcNow);
 
         coordinator.UpdateProfit(555, 12.5);
+        coordinator.UpdateProfit(666, 1.5);
 
-        Assert.Equal(12.5, slot!.LastProfitSnapshot);
+        Assert.Equal(14.0, slot!.LastProfitSnapshot);
     }
 
     [Fact]

@@ -1497,7 +1497,20 @@ public sealed class DashboardViewModel : ObservableObject
                         _runtimeConfigState.CurrentDashboardMetrics?.ExchangeA.Bid,
                         _runtimeConfigState.CurrentDashboardMetrics?.ExchangeA.Ask,
                         isBuyA);
-                    SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoClose(now, slot, "A", typeA, symbolA, closePriceA, triggerGapLabel, triggerLastGap, triggerAllGaps));
+                    SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoClose(
+                        now,
+                        slot,
+                        "A",
+                        typeA,
+                        symbolA,
+                        closePriceA,
+                        triggerGapLabel,
+                        triggerLastGap,
+                        triggerAllGaps,
+                        trigger.CloseReason,
+                        trigger.CloseTpProfit,
+                        trigger.CloseTpTarget,
+                        trigger.CloseTpProfits));
                 }
 
                 if (selectB.TradeType.HasValue
@@ -1510,7 +1523,20 @@ public sealed class DashboardViewModel : ObservableObject
                         _runtimeConfigState.CurrentDashboardMetrics?.ExchangeB.Bid,
                         _runtimeConfigState.CurrentDashboardMetrics?.ExchangeB.Ask,
                         isBuyB);
-                    SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoClose(now, slot, "B", typeB, symbolB, closePriceB, triggerGapLabel, triggerLastGap, triggerAllGaps));
+                    SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoClose(
+                        now,
+                        slot,
+                        "B",
+                        typeB,
+                        symbolB,
+                        closePriceB,
+                        triggerGapLabel,
+                        triggerLastGap,
+                        triggerAllGaps,
+                        trigger.CloseReason,
+                        trigger.CloseTpProfit,
+                        trigger.CloseTpTarget,
+                        trigger.CloseTpProfits));
                 }
 
                 AppendCloseSelectionDiagnostics(selectA, selectB);
@@ -4438,10 +4464,11 @@ public sealed class DashboardViewModel : ObservableObject
         var rows = BuildTradeRows(appGeneratedRecords, appGeneratedRecords.Count, result.Timestamp, snapshot, isExchangeA, point);
         panel.SetTradeData(rows);
 
-        // Phase 1: forward per-ticket profit to coordinator (Phase 2 Rule D uses LastProfitSnapshot).
+        // Forward the same realtime per-leg profit shown in the Trade tab;
+        // coordinator sums A+B into the slot profit used by close priority and TP.
         foreach (var record in appGeneratedRecords)
         {
-            _portfolioCoordinator.UpdateProfit(record.Ticket, record.Profit);
+            _portfolioCoordinator.UpdateProfit(record.Ticket, CalculateTradeProfit(record, snapshot, isExchangeA, point));
         }
 
         RebuildTradeRealtimeProfitRows();
@@ -5382,6 +5409,8 @@ public sealed class DashboardViewModel : ObservableObject
                     result.OpenPriceFreezeMs,
                     result.ClosePts,
                     result.CloseConfirmGapPts,
+                    result.CloseTpProfit,
+                    result.CloseConfirmTpProfit,
                     result.CloseHoldConfirmMs,
                     result.ClosePriceFreezeMs,
                     result.StartTimeHold,
@@ -5418,7 +5447,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
                     DbInlineData =
-                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | start_wait_time={result.StartWaitTime} | end_wait_time={result.EndWaitTime} | sans={result.SansJson}";
+                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | start_wait_time={result.StartWaitTime} | end_wait_time={result.EndWaitTime} | sans={result.SansJson}";
                     IsDbInlineDataVisible = true;
                 }
                 else
@@ -5537,6 +5566,8 @@ public sealed class DashboardViewModel : ObservableObject
                     HoldConfirmMs: _runtimeConfigState.CurrentHoldConfirmMs,
                     CloseConfirmGapPts: _runtimeConfigState.CurrentCloseConfirmGapPts,
                     ClosePts: _runtimeConfigState.CurrentClosePts,
+                    CloseConfirmTpProfit: _runtimeConfigState.CurrentCloseConfirmTpProfit,
+                    CloseTpProfit: _runtimeConfigState.CurrentCloseTpProfit,
                     CloseHoldConfirmMs: _runtimeConfigState.CurrentCloseHoldConfirmMs,
                     StartTimeHold: _runtimeConfigState.CurrentStartTimeHold,
                     EndTimeHold: _runtimeConfigState.CurrentEndTimeHold,
@@ -5942,7 +5973,11 @@ public sealed class DashboardViewModel : ObservableObject
             closePrice,
             gapLabel,
             lastGap,
-            allGaps);
+            allGaps,
+            trigger.CloseReason,
+            trigger.CloseTpProfit,
+            trigger.CloseTpTarget,
+            trigger.CloseTpProfits);
     }
 
     private static string FormatNumberOrDash(decimal? value, int decimalPlaces = 5)

@@ -52,6 +52,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             OpenPriceFreezeMs: row.OpenPriceFreezeMs > 0 ? row.OpenPriceFreezeMs : row.HoldConfirmMs,
             ClosePts: row.ClosePts,
             CloseConfirmGapPts: row.CloseConfirmGapPts,
+            CloseTpProfit: row.CloseTpProfit,
+            CloseConfirmTpProfit: row.CloseConfirmTpProfit,
             CloseHoldConfirmMs: row.CloseHoldConfirmMs,
             ClosePriceFreezeMs: row.ClosePriceFreezeMs > 0 ? row.ClosePriceFreezeMs : row.CloseHoldConfirmMs,
             StartTimeHold: row.StartTimeHold,
@@ -267,6 +269,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("open_price_freeze_ms", out var openPriceFreezeMsElement);
         first.TryGetProperty("close_pts", out var closePtsElement);
         first.TryGetProperty("close_confirm_gap_pts", out var closeConfirmGapPtsElement);
+        first.TryGetProperty("close_tp_profit", out var closeTpProfitElement);
+        first.TryGetProperty("close_confirm_tp_profit", out var closeConfirmTpProfitElement);
         first.TryGetProperty("close_hold_confirm_ms", out var closeHoldConfirmMsElement);
         first.TryGetProperty("close_price_freeze_ms", out var closePriceFreezeMsElement);
         first.TryGetProperty("start_time_hold", out var startTimeHoldElement);
@@ -318,6 +322,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             OpenPriceFreezeMs = openPriceFreezeMsElement.ValueKind == JsonValueKind.Number && openPriceFreezeMsElement.TryGetInt32(out var openPriceFreezeMs) ? openPriceFreezeMs : 0,
             ClosePts = closePtsElement.ValueKind == JsonValueKind.Number && closePtsElement.TryGetInt32(out var closePts) ? closePts : 0,
             CloseConfirmGapPts = closeConfirmGapPtsElement.ValueKind == JsonValueKind.Number && closeConfirmGapPtsElement.TryGetInt32(out var closeConfirmGapPts) ? closeConfirmGapPts : 0,
+            CloseTpProfit = closeTpProfitElement.ValueKind == JsonValueKind.Number && closeTpProfitElement.TryGetDouble(out var closeTpProfit) ? closeTpProfit : 0d,
+            CloseConfirmTpProfit = closeConfirmTpProfitElement.ValueKind == JsonValueKind.Number && closeConfirmTpProfitElement.TryGetDouble(out var closeConfirmTpProfit) ? closeConfirmTpProfit : 0d,
             CloseHoldConfirmMs = closeHoldConfirmMsElement.ValueKind == JsonValueKind.Number && closeHoldConfirmMsElement.TryGetInt32(out var closeHoldConfirmMs) ? closeHoldConfirmMs : 0,
             ClosePriceFreezeMs = closePriceFreezeMsElement.ValueKind == JsonValueKind.Number && closePriceFreezeMsElement.TryGetInt32(out var closePriceFreezeMs) ? closePriceFreezeMs : 0,
             StartTimeHold = startTimeHoldElement.ValueKind == JsonValueKind.Number && startTimeHoldElement.TryGetInt32(out var startTimeHold) ? startTimeHold : 0,
@@ -389,6 +395,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("open_price_freeze_ms", out var openPriceFreezeMsElement);
         first.TryGetProperty("close_pts", out var closePtsElement);
         first.TryGetProperty("close_confirm_gap_pts", out var closeConfirmGapPtsElement);
+        first.TryGetProperty("close_tp_profit", out var closeTpProfitElement);
+        first.TryGetProperty("close_confirm_tp_profit", out var closeConfirmTpProfitElement);
         first.TryGetProperty("close_hold_confirm_ms", out var closeHoldConfirmMsElement);
         first.TryGetProperty("close_price_freeze_ms", out var closePriceFreezeMsElement);
         first.TryGetProperty("start_time_hold", out var startTimeHoldElement);
@@ -438,6 +446,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             OpenPriceFreezeMs = openPriceFreezeMsElement.ValueKind == JsonValueKind.Number && openPriceFreezeMsElement.TryGetInt32(out var openPriceFreezeMs) ? openPriceFreezeMs : 0,
             ClosePts = closePtsElement.ValueKind == JsonValueKind.Number && closePtsElement.TryGetInt32(out var closePts) ? closePts : 0,
             CloseConfirmGapPts = closeConfirmGapPtsElement.ValueKind == JsonValueKind.Number && closeConfirmGapPtsElement.TryGetInt32(out var closeConfirmGapPts) ? closeConfirmGapPts : 0,
+            CloseTpProfit = closeTpProfitElement.ValueKind == JsonValueKind.Number && closeTpProfitElement.TryGetDouble(out var closeTpProfit) ? closeTpProfit : 0d,
+            CloseConfirmTpProfit = closeConfirmTpProfitElement.ValueKind == JsonValueKind.Number && closeConfirmTpProfitElement.TryGetDouble(out var closeConfirmTpProfit) ? closeConfirmTpProfit : 0d,
             CloseHoldConfirmMs = closeHoldConfirmMsElement.ValueKind == JsonValueKind.Number && closeHoldConfirmMsElement.TryGetInt32(out var closeHoldConfirmMs) ? closeHoldConfirmMs : 0,
             ClosePriceFreezeMs = closePriceFreezeMsElement.ValueKind == JsonValueKind.Number && closePriceFreezeMsElement.TryGetInt32(out var closePriceFreezeMs) ? closePriceFreezeMs : 0,
             StartTimeHold = startTimeHoldElement.ValueKind == JsonValueKind.Number && startTimeHoldElement.TryGetInt32(out var startTimeHold) ? startTimeHold : 0,
@@ -549,6 +559,12 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("close_confirm_gap_pts")]
         public int CloseConfirmGapPts { get; set; }
+
+        [JsonPropertyName("close_tp_profit")]
+        public double CloseTpProfit { get; set; }
+
+        [JsonPropertyName("close_confirm_tp_profit")]
+        public double CloseConfirmTpProfit { get; set; }
 
         [JsonPropertyName("close_hold_confirm_ms")]
         public int CloseHoldConfirmMs { get; set; }

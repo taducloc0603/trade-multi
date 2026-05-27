@@ -64,6 +64,29 @@ public sealed class TradeSignalLogBuilderTests
         Assert.Equal("    - [12:53:15.737] CLOSE BUY B at Price: 4555.28", lines[3]);
     }
 
+    [Fact]
+    public void FormatAutoClose_ByTp_PrintsProfitReason()
+    {
+        var line = SignalLogFormatter.FormatAutoClose(
+            new DateTime(2026, 3, 20, 13, 0, 43, 573, DateTimeKind.Local),
+            slot: 2,
+            exchangeLabel: "A",
+            tradeType: "BUY",
+            symbol: "XAUUSD",
+            price: 4555.42m,
+            gapLabel: "Gap SELL",
+            lastGap: -22,
+            allGaps: [-22],
+            closeReason: CloseSignalReason.Tp,
+            tpProfit: 16.5,
+            tpTarget: 15,
+            tpProfits: [10, 12.25, 16.5]);
+
+        Assert.Equal(
+            "2026.03.20 13:00:43.573000> [2:A]. CLOSE BUY XAUUSD at 4555.42. Reason: Close by TP profit = 16.50/15.00 (10.00|12.25|16.50)",
+            line);
+    }
+
     private static GapSignalTriggerResult BuildTrigger(GapSignalAction action, GapSignalSide primarySide)
     {
         var triggeredAtUtc = new DateTime(2026, 3, 20, 6, 0, 43, 573, DateTimeKind.Utc);

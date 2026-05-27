@@ -16,6 +16,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentOpenPriceFreezeMs { get; private set; }
     public int CurrentClosePts { get; private set; }
     public int CurrentCloseConfirmGapPts { get; private set; }
+    public double CurrentCloseTpProfit { get; private set; }
+    public double CurrentCloseConfirmTpProfit { get; private set; }
     public int CurrentCloseHoldConfirmMs { get; private set; }
     public int CurrentClosePriceFreezeMs { get; private set; }
     public int CurrentStartTimeHold { get; private set; }
@@ -72,6 +74,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int OpenPriceFreezeMs => CurrentOpenPriceFreezeMs;
     public int ClosePts => CurrentClosePts;
     public int CloseConfirmGapPts => CurrentCloseConfirmGapPts;
+    public double CloseTpProfit => CurrentCloseTpProfit;
+    public double CloseConfirmTpProfit => CurrentCloseConfirmTpProfit;
     public int CloseHoldConfirmMs => CurrentCloseHoldConfirmMs;
     public int ClosePriceFreezeMs => CurrentClosePriceFreezeMs;
     public int StartTimeHold => CurrentStartTimeHold;
@@ -109,6 +113,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int openPriceFreezeMs,
         int closePts,
         int closeConfirmGapPts,
+        double closeTpProfit,
+        double closeConfirmTpProfit,
         int closeHoldConfirmMs,
         int closePriceFreezeMs,
         int startTimeHold,
@@ -144,6 +150,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             openPriceFreezeMs,
             closePts,
             closeConfirmGapPts,
+            closeTpProfit,
+            closeConfirmTpProfit,
             closeHoldConfirmMs,
             closePriceFreezeMs,
             startTimeHold,
@@ -180,6 +188,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int openPriceFreezeMs,
         int closePts,
         int closeConfirmGapPts,
+        double closeTpProfit,
+        double closeConfirmTpProfit,
         int closeHoldConfirmMs,
         int closePriceFreezeMs,
         int startTimeHold,
@@ -216,6 +226,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             : CurrentHoldConfirmMs;
         CurrentClosePts = Math.Abs(closePts);
         CurrentCloseConfirmGapPts = Math.Abs(closeConfirmGapPts);
+        CurrentCloseTpProfit = Math.Abs(closeTpProfit);
+        CurrentCloseConfirmTpProfit = Math.Abs(closeConfirmTpProfit);
         CurrentCloseHoldConfirmMs = Math.Max(0, closeHoldConfirmMs);
         CurrentClosePriceFreezeMs = closePriceFreezeMs >= 0
             ? Math.Max(0, closePriceFreezeMs)
@@ -307,6 +319,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentOpenPriceFreezeMs,
             CurrentClosePts,
             CurrentCloseConfirmGapPts,
+            CurrentCloseTpProfit,
+            CurrentCloseConfirmTpProfit,
             CurrentCloseHoldConfirmMs,
             CurrentClosePriceFreezeMs,
             CurrentStartTimeHold,
@@ -344,6 +358,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentOpenPriceFreezeMs,
             CurrentClosePts,
             CurrentCloseConfirmGapPts,
+            CurrentCloseTpProfit,
+            CurrentCloseConfirmTpProfit,
             CurrentCloseHoldConfirmMs,
             CurrentClosePriceFreezeMs,
             CurrentStartTimeHold,

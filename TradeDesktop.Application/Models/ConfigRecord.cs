@@ -13,6 +13,8 @@ public sealed record ConfigRecord(
     int OpenPriceFreezeMs,
     int ClosePts,
     int CloseConfirmGapPts,
+    double CloseTpProfit,
+    double CloseConfirmTpProfit,
     int CloseHoldConfirmMs,
     int ClosePriceFreezeMs,
     int StartTimeHold,

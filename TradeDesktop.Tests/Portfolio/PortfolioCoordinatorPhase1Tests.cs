@@ -57,10 +57,10 @@ public sealed class PortfolioCoordinatorPhase1Tests
         coordinator.MarkSlotOpenConfirmed("p1", ticketA: 100, ticketB: 200, DateTime.UtcNow);
 
         coordinator.UpdateProfit(100, 1.50);
-        coordinator.UpdateProfit(200, 2.50); // overwrites since both tickets point to same slot
+        coordinator.UpdateProfit(200, 2.50);
 
         Assert.NotNull(slot);
-        Assert.Equal(2.50, slot!.LastProfitSnapshot);
+        Assert.Equal(4.00, slot!.LastProfitSnapshot);
     }
 
     [Fact]

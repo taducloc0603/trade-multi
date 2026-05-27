@@ -16,7 +16,8 @@ public sealed class PriorityCloseRuleTests
         public GapSignalTriggerResult? ProcessSnapshot(
             GapSignalSnapshot snapshot,
             GapSignalConfirmationConfig config,
-            TradingOpenMode openMode)
+            TradingOpenMode openMode,
+            double? slotProfit = null)
             => NextResult;
 
         public void Reset() { /* no-op for scripted engine */ }
@@ -77,8 +78,11 @@ public sealed class PriorityCloseRuleTests
 
         // Set profits.
         coordinator.UpdateProfit(100, 1.5);  // slot 1
+        coordinator.UpdateProfit(200, 0.0);
         coordinator.UpdateProfit(101, 3.2);  // slot 2 ← WINNER
+        coordinator.UpdateProfit(201, 0.0);
         coordinator.UpdateProfit(102, 2.1);  // slot 3
+        coordinator.UpdateProfit(202, 0.0);
 
         // Set all 3 scripted engines to return a close trigger.
         foreach (var engine in factory.Created)
@@ -161,6 +165,7 @@ public sealed class PriorityCloseRuleTests
         coordinator.MarkSlotOpenConfirmed("p2", 101, 201, openTime.AddSeconds(-10));
 
         coordinator.UpdateProfit(101, -5.0);  // slot 2: negative profit but defined
+        coordinator.UpdateProfit(201, 0.0);
         // slot 1 has null profit (no UpdateProfit call) → treated as MinValue
 
         factory.Created[0].NextResult = CloseTrigger();
@@ -190,7 +195,9 @@ public sealed class PriorityCloseRuleTests
         // Slot 1 already triggered close (PendingClose status); only slot 2 eligible now.
         coordinator.MarkSlotCloseTriggered("p1", openTime);
         coordinator.UpdateProfit(100, 100.0);  // slot 1 has high profit but excluded
+        coordinator.UpdateProfit(200, 0.0);
         coordinator.UpdateProfit(101, 1.0);
+        coordinator.UpdateProfit(201, 0.0);
 
         factory.Created[1].NextResult = CloseTrigger();  // slot 2
 

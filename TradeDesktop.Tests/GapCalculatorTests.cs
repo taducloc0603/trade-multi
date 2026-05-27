@@ -67,6 +67,8 @@ public sealed class GapCalculatorTests
         public int CurrentHoldConfirmMs => 0;
         public int CurrentClosePts => 0;
         public int CurrentCloseConfirmGapPts => 0;
+        public double CurrentCloseTpProfit => 0;
+        public double CurrentCloseConfirmTpProfit => 0;
         public int CurrentCloseHoldConfirmMs => 0;
         public int CurrentStartTimeHold => 0;
         public int CurrentEndTimeHold => 0;
