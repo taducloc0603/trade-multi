@@ -79,7 +79,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             IsShowConfig: row.IsShowConfig,
             CurrentTickA: row.CurrentTickA ?? string.Empty,
             CurrentTickB: row.CurrentTickB ?? string.Empty,
-            CurrentSlots: row.CurrentSlotsJson);
+            CurrentSlots: row.CurrentSlotsJson,
+            MaxLifeTimeBySecond: row.MaxLifeTimeBySecond);
     }
 
     public async Task<bool> UpdateCurrentTicksAsync(
@@ -299,6 +300,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("current_tick_a", out var currentTickAElement);
         first.TryGetProperty("current_tick_b", out var currentTickBElement);
         first.TryGetProperty("current_slots", out var currentSlotsElement);
+        first.TryGetProperty("max_life_time_by_second", out var maxLifeTimeBySecondElement);
 
         // DB column name is lowercase: hostname
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
@@ -353,7 +355,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CurrentTickB = currentTickBElement.ValueKind == JsonValueKind.String ? currentTickBElement.GetString() : null,
             CurrentSlots = currentSlotsElement.ValueKind is JsonValueKind.Array or JsonValueKind.Object
                 ? currentSlotsElement.Clone()
-                : default
+                : default,
+            MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0
         };
     }
 
@@ -425,6 +428,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("current_tick_a", out var currentTickAElement);
         first.TryGetProperty("current_tick_b", out var currentTickBElement);
         first.TryGetProperty("current_slots", out var currentSlotsElement);
+        first.TryGetProperty("max_life_time_by_second", out var maxLifeTimeBySecondElement);
 
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
         if (!hasHostName)
@@ -477,7 +481,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CurrentTickB = currentTickBElement.ValueKind == JsonValueKind.String ? currentTickBElement.GetString() : null,
             CurrentSlots = currentSlotsElement.ValueKind is JsonValueKind.Array or JsonValueKind.Object
                 ? currentSlotsElement.Clone()
-                : default
+                : default,
+            MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0
         };
     }
 
@@ -649,6 +654,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("current_slots")]
         public JsonElement CurrentSlots { get; set; }
+
+        [JsonPropertyName("max_life_time_by_second")]
+        public int MaxLifeTimeBySecond { get; set; }
 
         public string CurrentSlotsJson => CurrentSlots.ValueKind is JsonValueKind.Array or JsonValueKind.Object
             ? CurrentSlots.GetRawText()

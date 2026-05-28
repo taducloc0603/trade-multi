@@ -40,4 +40,5 @@ public sealed record ConfigRecord(
     int IsShowConfig = 0,
     string CurrentTickA = "",
     string CurrentTickB = "",
-    string CurrentSlots = "");
+    string CurrentSlots = "",
+    int MaxLifeTimeBySecond = 0);

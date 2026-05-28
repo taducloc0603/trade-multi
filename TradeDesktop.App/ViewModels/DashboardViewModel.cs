@@ -2604,6 +2604,9 @@ public sealed class DashboardViewModel : ObservableObject
         // Hardcode tạm: start_wait_time=3, end_wait_time=10 (sẽ chuyển sang DB Supabase sau).
         // Opposite-side lock 5p vẫn hardcode trong PortfolioCoordinator.OppositeSideLockSeconds=300.
         _portfolioCoordinator.UpdateCooldownConfig(minSec: 3, maxSec: 10);
+
+        _portfolioCoordinator.UpdateMaxLifeTimeConfig(
+            _runtimeConfigState.CurrentMaxLifeTimeBySecond);
     }
 
     private void RefreshOrderInfoTabs()
@@ -4553,6 +4556,7 @@ public sealed class DashboardViewModel : ObservableObject
         RegisterCloseExecutionForNewHistoryTickets(panel.TargetMapName, result.Records);
         var appGeneratedRecords = result.Records
             .Where(x => IsAppGeneratedTicket(x.Ticket))
+            .OrderByDescending(x => x.CloseEaTimeLocal)
             .ToList();
 
         if (appGeneratedRecords.Count == 0)
@@ -5432,7 +5436,8 @@ public sealed class DashboardViewModel : ObservableObject
                     result.CloseNumberOfQualifyingTimes,
                     result.OpenGapTick,
                     result.CloseGapTick,
-                    result.CoolDownGapTick);
+                    result.CoolDownGapTick,
+                    result.MaxLifeTimeBySecond);
                 _runtimeConfigState.UpdateManualTradeHwnd(result.ManualHwndColumns);
                 IsShowConfigVisible = result.IsShowConfig == 1;
                 ResetTradingLogicState();

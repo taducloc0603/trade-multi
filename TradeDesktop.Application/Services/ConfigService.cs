@@ -86,7 +86,8 @@ public sealed class ConfigService(
             record.IsShowConfig,
             record.CurrentTickA,
             record.CurrentTickB,
-            record.CurrentSlots);
+            record.CurrentSlots,
+            record.MaxLifeTimeBySecond);
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -204,7 +205,8 @@ public sealed record ConfigLoadResult(
     int IsShowConfig = 0,
     string CurrentTickA = "",
     string CurrentTickB = "",
-    string CurrentSlots = "")
+    string CurrentSlots = "",
+    int MaxLifeTimeBySecond = 0)
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -249,7 +251,8 @@ public sealed record ConfigLoadResult(
         int isShowConfig = 0,
         string currentTickA = "",
         string currentTickB = "",
-        string currentSlots = "") =>
+        string currentSlots = "",
+        int maxLifeTimeBySecond = 0) =>
         new(
             true,
             true,
@@ -296,7 +299,8 @@ public sealed record ConfigLoadResult(
             isShowConfig,
             currentTickA ?? string.Empty,
             currentTickB ?? string.Empty,
-            currentSlots ?? string.Empty);
+            currentSlots ?? string.Empty,
+            Math.Max(0, maxLifeTimeBySecond));
 
     public static ConfigLoadResult NotFound(string machineHostName) =>
         new(false, false, machineHostName, [ManualHwndColumnConfig.Empty], "mt5", "mt5", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, "[]", null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "", "", "");

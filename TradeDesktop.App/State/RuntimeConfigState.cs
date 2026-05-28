@@ -40,6 +40,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentOpenGapTick { get; private set; }
     public int CurrentCloseGapTick { get; private set; }
     public int CurrentCoolDownGapTick { get; private set; }
+    public int CurrentMaxLifeTimeBySecond { get; private set; }
 
     // Phase 1: multi-slot quota config. Default tạm hardcode theo Rule A (4/4/7) —
     // Phase 5 (DB integration) sẽ override từ DB columns max_*_opens.
@@ -136,7 +137,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int closeNumberOfQualifyingTimes = -1,
         int openGapTick = -1,
         int closeGapTick = -1,
-        int coolDownGapTick = -1)
+        int coolDownGapTick = -1,
+        int maxLifeTimeBySecond = -1)
         => Update(
             machineHostName,
             mapName1,
@@ -173,7 +175,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             closeNumberOfQualifyingTimes,
             openGapTick,
             closeGapTick,
-            coolDownGapTick);
+            coolDownGapTick,
+            maxLifeTimeBySecond);
 
     public void Update(
         string machineHostName,
@@ -211,7 +214,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int closeNumberOfQualifyingTimes = -1,
         int openGapTick = -1,
         int closeGapTick = -1,
-        int coolDownGapTick = -1)
+        int coolDownGapTick = -1,
+        int maxLifeTimeBySecond = -1)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
         var oldCloseN = CurrentCloseNumberOfQualifyingTimes;
@@ -284,6 +288,10 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         if (coolDownGapTick >= 0)
         {
             CurrentCoolDownGapTick = Math.Max(0, coolDownGapTick);
+        }
+        if (maxLifeTimeBySecond >= 0)
+        {
+            CurrentMaxLifeTimeBySecond = Math.Max(0, maxLifeTimeBySecond);
         }
         CurrentMapName1 = (mapName1 ?? string.Empty).Trim();
         CurrentMapName2 = (mapName2 ?? string.Empty).Trim();

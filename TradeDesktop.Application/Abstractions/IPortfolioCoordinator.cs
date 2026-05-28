@@ -70,6 +70,7 @@ public interface IPortfolioCoordinator
     // === Config sync from RuntimeConfigState (Phase 2) ===
     void UpdateQuotaConfig(int maxTotal, int maxBuy, int maxSell);
     void UpdateCooldownConfig(int minSec, int maxSec);
+    void UpdateMaxLifeTimeConfig(int maxLifeTimeSec);
 
     // === Rollback (open/close execution failed) ===
     void AbortPendingOpen(string pairId);

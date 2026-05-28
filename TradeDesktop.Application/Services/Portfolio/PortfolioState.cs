@@ -22,6 +22,7 @@ public sealed class PortfolioState
     public int GlobalCooldownMaxSec { get; set; } = 0;
     public DateTime? LastOpenConfirmedAtUtc { get; set; }
     public TradingPositionSide LastOpenConfirmedSide { get; set; } = TradingPositionSide.None;
+    public int MaxLifeTimeBySecond { get; set; } = 0;
 
     public int CountLiveAndPendingBuy()
         => _slots.Count(s => s.Side == TradingPositionSide.Buy && IsLiveOrPending(s.Status));

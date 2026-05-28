@@ -374,10 +374,10 @@ Fields chính:
 | **A — Quota** | Max 7 tổng, max 4 Buy, max 4 Sell. Đếm cả `PendingOpen + Live + PendingClose`. |
 | **B — Cooldown** | Random `Uniform(GlobalCooldownMinSec, MaxSec)` sau mỗi OPEN/CLOSE confirm. Khóa toàn hệ thống. |
 | **C — Opposite-side lock** | Hardcode 300s sau OPEN. Chỉ block OPEN opposite-side. Same-side refresh timer. KHÔNG block CLOSE. |
-| **D — Priority close** | Khi nhiều slot trigger close cùng tick, slot có `LastProfitSnapshot` cao nhất được close. Losers giữ window. |
+| **D — Priority close (extended)** | Khi nhiều slot trigger close cùng tick: (1) nếu `max_life_time_by_second > 0`, lọc ra các slot có tuổi `(now - OpenConfirmedAtUtc) > max_life_time_by_second` (overtime tier) → chọn profit cao nhất trong tier đó; (2) nếu không có slot nào overtime, chọn profit cao nhất trong tất cả eligible (Rule D gốc). Losers giữ window. `max_life_time_by_second = 0` (default) = disable tier, hành vi giống Rule D gốc. |
 
 Rule A + C check trong `CanOpenNewSlot(side, out reason)`. Rule B check trong `CanCloseNow(out reason)`.
-Rule D pick trong `ProcessSnapshot` close path: `OrderByDescending(slot.LastProfitSnapshot ?? double.MinValue).First()`.
+Rule D pick trong `ProcessSnapshot` close path: overtime tier nếu có, fallback toàn bộ eligible — cả 2 đều `OrderByDescending(LastProfitSnapshot ?? double.MinValue).First()`.
 
 ### 13.4 Cap config
 
@@ -389,6 +389,7 @@ ViewModel push config xuống coordinator qua `SyncPortfolioCoordinatorConfig()`
 - Gọi từ constructor + sau mỗi `ApplyRuntimeConfig()`.
 - Map `RuntimeConfigState.CurrentMaxTotal/Buy/SellOpens` → `coordinator.UpdateQuotaConfig`.
 - Map `CurrentStartWaitTime/EndWaitTime` → `coordinator.UpdateCooldownConfig`.
+- Map `CurrentMaxLifeTimeBySecond` (từ DB column `max_life_time_by_second`) → `coordinator.UpdateMaxLifeTimeConfig`.
 
 ### 13.5 ProcessSnapshot flow (mỗi tick 50ms)
 
@@ -403,7 +404,10 @@ ViewModel push config xuống coordinator qua `SyncPortfolioCoordinatorConfig()`
 5. CLOSE path (nếu open path không return):
    - Loop Live slots, skip slot IsCloseExecutionPending hoặc holding chưa elapsed.
    - Per-slot slot.CloseSignalEngine.ProcessSnapshot → eligibleCloses.
-   - Pick winner (Rule D), MarkCloseTriggered, reset engines.
+   - Pick winner (Rule D extended):
+     - Nếu `MaxLifeTimeBySecond > 0`: lọc overtime slots (`now - OpenConfirmedAtUtc > maxLifeTimeSec`) → nếu có, chọn profit cao nhất trong overtime.
+     - Nếu không có overtime slot (hoặc `MaxLifeTimeBySecond = 0`): chọn profit cao nhất toàn bộ eligible (Rule D gốc).
+   - MarkCloseTriggered, reset engines.
    - Return PortfolioSnapshotResult(CloseTarget: slot, CloseTrigger: trigger).
 6. Else return Empty.
 ```

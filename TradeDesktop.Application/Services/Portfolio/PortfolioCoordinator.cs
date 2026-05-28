@@ -176,8 +176,26 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
         if (eligibleCloses.Count > 0)
         {
-            // Rule D: pick slot with highest profit. Null profit treated as MinValue (lowest priority).
-            var winner = eligibleCloses
+            // Rule D (extended): if max_life_time_by_second > 0, prioritize slots whose age
+            // (effectiveNow - OpenConfirmedAtUtc) exceeds the threshold. Among those overtime
+            // slots, pick the highest profit. If none are overtime, fall back to plain Rule D
+            // (highest profit across all eligible).
+            var maxLifeTimeSec = _state.MaxLifeTimeBySecond;
+            IEnumerable<(PositionSlot slot, GapSignalTriggerResult trigger)> candidates;
+            if (maxLifeTimeSec > 0)
+            {
+                var overtime = eligibleCloses
+                    .Where(x => x.slot.OpenConfirmedAtUtc.HasValue &&
+                                (effectiveNow - x.slot.OpenConfirmedAtUtc.Value).TotalSeconds > maxLifeTimeSec)
+                    .ToList();
+                candidates = overtime.Count > 0 ? overtime : eligibleCloses;
+            }
+            else
+            {
+                candidates = eligibleCloses;
+            }
+
+            var winner = candidates
                 .OrderByDescending(x => x.slot.LastProfitSnapshot ?? double.MinValue)
                 .First();
 
@@ -477,6 +495,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     {
         _state.GlobalCooldownMinSec = Math.Max(0, minSec);
         _state.GlobalCooldownMaxSec = Math.Max(_state.GlobalCooldownMinSec, maxSec);
+    }
+
+    public void UpdateMaxLifeTimeConfig(int maxLifeTimeSec)
+    {
+        _state.MaxLifeTimeBySecond = Math.Max(0, maxLifeTimeSec);
     }
 
     // ===== Rollback =====
