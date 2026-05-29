@@ -423,7 +423,8 @@ public sealed class ConfigViewModel : ObservableObject
                 loadResult.CloseNumberOfQualifyingTimes,
                 loadResult.OpenGapTick,
                 loadResult.CloseGapTick,
-                loadResult.CoolDownGapTick);
+                loadResult.CoolDownGapTick,
+                closeMaxTpProfit: loadResult.CloseMaxTpProfit);
             _runtimeConfigState.UpdateManualTradeHwnd(BuildManualHwndColumns());
 
             IsExistingRecordLoaded = true;

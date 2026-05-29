@@ -129,6 +129,12 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             return null;
         }
 
+        var maxTpProfit = Math.Abs(config.CloseMaxTpProfit);
+        if (maxTpProfit > 0d && lastProfit > maxTpProfit)
+        {
+            return null;
+        }
+
         var normalizedMaxTimesTick = Math.Max(0, config.CloseMaxTimesTick);
         if (normalizedMaxTimesTick > 0 && _tpState.Profits.Count > normalizedMaxTimesTick)
         {

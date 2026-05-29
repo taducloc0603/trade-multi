@@ -18,6 +18,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentCloseConfirmGapPts { get; private set; }
     public double CurrentCloseTpProfit { get; private set; }
     public double CurrentCloseConfirmTpProfit { get; private set; }
+    public double CurrentCloseMaxTpProfit { get; private set; }
     public int CurrentCloseHoldConfirmMs { get; private set; }
     public int CurrentClosePriceFreezeMs { get; private set; }
     public int CurrentStartTimeHold { get; private set; }
@@ -138,7 +139,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int openGapTick = -1,
         int closeGapTick = -1,
         int coolDownGapTick = -1,
-        int maxLifeTimeBySecond = -1)
+        int maxLifeTimeBySecond = -1,
+        double closeMaxTpProfit = 0)
         => Update(
             machineHostName,
             mapName1,
@@ -176,7 +178,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             openGapTick,
             closeGapTick,
             coolDownGapTick,
-            maxLifeTimeBySecond);
+            maxLifeTimeBySecond,
+            closeMaxTpProfit);
 
     public void Update(
         string machineHostName,
@@ -215,7 +218,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int openGapTick = -1,
         int closeGapTick = -1,
         int coolDownGapTick = -1,
-        int maxLifeTimeBySecond = -1)
+        int maxLifeTimeBySecond = -1,
+        double closeMaxTpProfit = 0)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
         var oldCloseN = CurrentCloseNumberOfQualifyingTimes;
@@ -232,6 +236,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentCloseConfirmGapPts = Math.Abs(closeConfirmGapPts);
         CurrentCloseTpProfit = Math.Abs(closeTpProfit);
         CurrentCloseConfirmTpProfit = Math.Abs(closeConfirmTpProfit);
+        CurrentCloseMaxTpProfit = Math.Abs(closeMaxTpProfit);
         CurrentCloseHoldConfirmMs = Math.Max(0, closeHoldConfirmMs);
         CurrentClosePriceFreezeMs = closePriceFreezeMs >= 0
             ? Math.Max(0, closePriceFreezeMs)

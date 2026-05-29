@@ -64,6 +64,7 @@ public sealed record GapSignalConfirmationConfig(
     int ClosePts = 0,
     double CloseConfirmTpProfit = 0,
     double CloseTpProfit = 0,
+    double CloseMaxTpProfit = 0,
     int CloseHoldConfirmMs = 0,
     int StartTimeHold = 0,
     int EndTimeHold = 0,

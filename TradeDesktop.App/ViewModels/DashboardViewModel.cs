@@ -5573,6 +5573,7 @@ public sealed class DashboardViewModel : ObservableObject
                     ClosePts: _runtimeConfigState.CurrentClosePts,
                     CloseConfirmTpProfit: _runtimeConfigState.CurrentCloseConfirmTpProfit,
                     CloseTpProfit: _runtimeConfigState.CurrentCloseTpProfit,
+                    CloseMaxTpProfit: _runtimeConfigState.CurrentCloseMaxTpProfit,
                     CloseHoldConfirmMs: _runtimeConfigState.CurrentCloseHoldConfirmMs,
                     StartTimeHold: _runtimeConfigState.CurrentStartTimeHold,
                     EndTimeHold: _runtimeConfigState.CurrentEndTimeHold,
