@@ -62,28 +62,33 @@ Config trước khi áp rule được chuẩn hóa:
 - `OpenPts = Abs(config.OpenPts)`
 - `HoldConfirmMs = Max(0, config.HoldConfirmMs)`
 - `OpenMaxTimesTick = Max(0, config.OpenMaxTimesTick)`
+- `LimitMaxGap = Max(0, config.LimitMaxGap)` — `0` = disabled
 
 ### 3.1 OpenByGapBuy
 
 1. `GapBuy` hiện tại phải tồn tại và `>= ConfirmGapPts`.
-2. Mở cửa sổ confirm, gom chuỗi gap theo thời gian.
-3. Khi đủ `HoldConfirmMs`, toàn bộ `BuyGaps` trong cửa sổ phải thỏa `>= ConfirmGapPts`.
-4. Tick cuối cùng phải thỏa `>= OpenPts`.
-5. Nếu `OpenMaxTimesTick > 0` thì số tick trong cửa sổ không được vượt ngưỡng này.
-6. Thỏa hết điều kiện -> trigger `OpenByGapBuy`.
+2. Nếu `LimitMaxGap > 0` và `|GapBuy| > LimitMaxGap` → **reset window ngay** (chu kỳ mới).
+3. Mở cửa sổ confirm, gom chuỗi gap theo thời gian.
+4. Khi đủ `HoldConfirmMs`, toàn bộ `BuyGaps` trong cửa sổ phải thỏa `>= ConfirmGapPts`.
+5. Tick cuối cùng phải thỏa `>= OpenPts`.
+6. Nếu `OpenMaxTimesTick > 0` thì số tick trong cửa sổ không được vượt ngưỡng này.
+7. Thỏa hết điều kiện -> trigger `OpenByGapBuy`.
 
 ### 3.2 OpenByGapSell
 
 Đối xứng với ngưỡng âm:
 
 1. `GapSell <= -ConfirmGapPts`.
-2. Duy trì liên tục đủ `HoldConfirmMs`.
-3. Toàn bộ `SellGaps` trong cửa sổ thỏa `<= -ConfirmGapPts`.
-4. Tick cuối cùng thỏa `<= -OpenPts`.
-5. Nếu `OpenMaxTimesTick > 0`, số tick phải nằm trong giới hạn.
-6. Thỏa hết -> trigger `OpenByGapSell`.
+2. Nếu `LimitMaxGap > 0` và `|GapSell| > LimitMaxGap` → **reset window ngay** (chu kỳ mới).
+3. Duy trì liên tục đủ `HoldConfirmMs`.
+4. Toàn bộ `SellGaps` trong cửa sổ thỏa `<= -ConfirmGapPts`.
+5. Tick cuối cùng thỏa `<= -OpenPts`.
+6. Nếu `OpenMaxTimesTick > 0`, số tick phải nằm trong giới hạn.
+7. Thỏa hết -> trigger `OpenByGapSell`.
 
 > Bất kỳ điều kiện nào fail trong window -> reset state của nhánh đó.
+
+> **`LimitMaxGap`** áp dụng trên mỗi tick — khác với `max_gap` trong `SignalEntryGuard` chỉ kiểm tra tại thời điểm trigger. Khi gap spike vượt ngưỡng, window reset ngay; khi gap về lại bình thường, window mở lại từ đầu.
 
 ---
 
@@ -97,6 +102,8 @@ Config close được chuẩn hóa:
 - `ClosePts = Abs(config.ClosePts)`
 - `CloseHoldConfirmMs = Max(0, config.CloseHoldConfirmMs)`
 - `CloseMaxTimesTick = Max(0, config.CloseMaxTimesTick)`
+- `LimitMaxGap = Max(0, config.LimitMaxGap)` — `0` = disabled (dùng chung với open signal)
+- `LimitMaxTp = Abs(config.LimitMaxTp)` — `0` = disabled
 
 Rule theo mode đã mở:
 
@@ -104,11 +111,22 @@ Rule theo mode đã mở:
   -> close theo nhánh `GapSell` với điều kiện âm:
   - confirm: `GapSell <= -CloseConfirmGapPts`
   - tick cuối: `GapSell <= -ClosePts`
+  - `LimitMaxGap` áp dụng tương tự open: nếu `|GapSell| > LimitMaxGap` → reset window
 
 - Nếu đang mở từ `GapSell` (`TradingOpenMode.GapSell`)  
   -> close theo nhánh `GapBuy` với điều kiện dương:
   - confirm: `GapBuy >= CloseConfirmGapPts`
   - tick cuối: `GapBuy >= ClosePts`
+  - `LimitMaxGap` áp dụng tương tự
+
+**TP close path** (song song với gap close, thắng nếu trigger trước):
+
+- Profit phải `>= CloseConfirmTpProfit` để mở window.
+- Nếu `LimitMaxTp > 0` và `profit > LimitMaxTp` → **reset TP window ngay** (chu kỳ mới).
+- Sau `CloseHoldConfirmMs`, toàn bộ profits trong window phải `>= CloseConfirmTpProfit`.
+- Tick cuối phải `>= CloseTpProfit` và `<= CloseMaxTpProfit` (nếu set).
+
+> **`LimitMaxTp`** khác với `CloseMaxTpProfit`: `CloseMaxTpProfit` chỉ kiểm tra tại trigger (suspend, không reset), còn `LimitMaxTp` reset window ngay tại tick spike.
 
 ---
 
@@ -203,6 +221,14 @@ Files:
 - Config được load/save theo `machine host name` (đã normalize lowercase).
 - Nhiều trường số được normalize an toàn (`Abs`, `Max(0)`, fallback point = 1).
 - `platform_a/platform_b` normalize về `mt4` hoặc `mt5` (default `mt5`).
+
+DB fields liên quan đến guard/limit (tất cả `= 0` là disabled):
+
+| DB column | C# property | Kiểu | Ý nghĩa |
+|---|---|---|---|
+| `max_gap` | `CurrentMaxGap` | `int` | Chặn open/close tại trigger nếu `|gap| > max_gap` (post-trigger guard) |
+| `limit_max_gap` | `CurrentLimitMaxGap` | `int` | Reset confirm window ngay nếu `|gap| > limit_max_gap` trong mỗi tick |
+| `limit_max_tp` | `CurrentLimitMaxTp` | `double` | Reset TP window ngay nếu `profit > limit_max_tp` trong mỗi tick |
 
 ### 7.2 Routing thực thi lệnh
 

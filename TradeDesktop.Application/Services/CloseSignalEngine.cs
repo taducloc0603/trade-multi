@@ -38,7 +38,8 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
                 holdConfirmMs: normalizedHoldMs,
                 maxTimesTick: config.CloseMaxTimesTick,
                 isConfirmSatisfied: value => value <= -normalizedCloseConfirm,
-                isOpenSatisfied: value => value <= -normalizedClose),
+                isOpenSatisfied: value => value <= -normalizedClose,
+                limitMaxGap: config.LimitMaxGap),
 
             TradingOpenMode.GapSell => GapSignalConfirmationEngine.ProcessSide(
                 triggerType: GapSignalTriggerType.CloseByGapBuy,
@@ -57,7 +58,8 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
                 holdConfirmMs: normalizedHoldMs,
                 maxTimesTick: config.CloseMaxTimesTick,
                 isConfirmSatisfied: value => value >= normalizedCloseConfirm,
-                isOpenSatisfied: value => value >= normalizedClose),
+                isOpenSatisfied: value => value >= normalizedClose,
+                limitMaxGap: config.LimitMaxGap),
 
             _ => null
         };
@@ -96,6 +98,13 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
 
         var currentProfit = slotProfit.Value;
         if (currentProfit < confirmProfit)
+        {
+            _tpState.Reset();
+            return null;
+        }
+
+        var limitMaxTp = Math.Abs(config.LimitMaxTp);
+        if (limitMaxTp > 0d && currentProfit > limitMaxTp)
         {
             _tpState.Reset();
             return null;

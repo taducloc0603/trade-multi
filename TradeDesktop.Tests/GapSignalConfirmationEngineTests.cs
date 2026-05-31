@@ -160,6 +160,96 @@ public sealed class GapSignalConfirmationEngineTests
         Assert.Single(results);
     }
 
+    [Fact]
+    public void ProcessSnapshot_LimitMaxGap_Disabled_WhenZero()
+    {
+        var sut = new GapSignalConfirmationEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            LimitMaxGap: 0);
+        var start = new DateTime(2026, 3, 17, 6, 0, 0, DateTimeKind.Utc);
+
+        Assert.Empty(Process(sut, start.AddMilliseconds(0), gapBuy: 20, gapSell: null, config));
+        Assert.Empty(Process(sut, start.AddMilliseconds(100), gapBuy: 25, gapSell: null, config));
+        Assert.Empty(Process(sut, start.AddMilliseconds(300), gapBuy: 30, gapSell: null, config));
+
+        var results = Process(sut, start.AddMilliseconds(550), gapBuy: 20, gapSell: null, config);
+
+        // LimitMaxGap=0 means disabled — gap lớn vẫn trigger bình thường
+        Assert.Single(results);
+    }
+
+    [Fact]
+    public void ProcessSnapshot_LimitMaxGap_ResetsWindow_WhenGapExceedsLimitDuringCollection()
+    {
+        var sut = new GapSignalConfirmationEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            LimitMaxGap: 15);
+        var start = new DateTime(2026, 3, 17, 6, 1, 0, DateTimeKind.Utc);
+
+        Assert.Empty(Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, config));
+        Assert.Empty(Process(sut, start.AddMilliseconds(100), gapBuy: 8, gapSell: null, config));
+        // Spike vượt limitMaxGap=15 → reset window
+        Assert.Empty(Process(sut, start.AddMilliseconds(200), gapBuy: 20, gapSell: null, config));
+        // Tiếp tục sau reset — holdMs reset từ đây nếu gap hợp lệ
+        Assert.Empty(Process(sut, start.AddMilliseconds(300), gapBuy: 8, gapSell: null, config));
+
+        // Chưa đủ holdMs kể từ khi window mở lại → chưa trigger
+        var results = Process(sut, start.AddMilliseconds(550), gapBuy: 9, gapSell: null, config);
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void ProcessSnapshot_LimitMaxGap_PreventsWindowOpen_WhenGapExceedsLimitFromStart()
+    {
+        var sut = new GapSignalConfirmationEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            LimitMaxGap: 15);
+        var start = new DateTime(2026, 3, 17, 6, 2, 0, DateTimeKind.Utc);
+
+        // Gap ngay từ đầu đã > limitMaxGap → window không mở
+        Assert.Empty(Process(sut, start.AddMilliseconds(0), gapBuy: 20, gapSell: null, config));
+        Assert.Empty(Process(sut, start.AddMilliseconds(100), gapBuy: 18, gapSell: null, config));
+
+        // Dù holdMs đủ (600ms) nhưng window chưa bao giờ mở
+        var results = Process(sut, start.AddMilliseconds(600), gapBuy: 16, gapSell: null, config);
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void ProcessSnapshot_LimitMaxGap_NewCycle_AfterSpikeReset()
+    {
+        var sut = new GapSignalConfirmationEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 300,
+            LimitMaxGap: 15);
+        var start = new DateTime(2026, 3, 17, 6, 3, 0, DateTimeKind.Utc);
+
+        // Cycle 1: spike → reset
+        Assert.Empty(Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, config));
+        Assert.Empty(Process(sut, start.AddMilliseconds(100), gapBuy: 20, gapSell: null, config)); // spike reset
+
+        // Cycle 2: gap trở lại bình thường → window mở lại
+        Assert.Empty(Process(sut, start.AddMilliseconds(200), gapBuy: 8, gapSell: null, config));
+        Assert.Empty(Process(sut, start.AddMilliseconds(350), gapBuy: 10, gapSell: null, config));
+
+        var results = Process(sut, start.AddMilliseconds(510), gapBuy: 12, gapSell: null, config);
+
+        var trigger = Assert.Single(results);
+        Assert.Equal(GapSignalTriggerType.OpenByGapBuy, trigger.TriggerType);
+        Assert.Equal(new[] { 8, 10, 12 }, trigger.BuyGaps);
+    }
+
     private static IReadOnlyList<GapSignalTriggerResult> Process(
         GapSignalConfirmationEngine sut,
         DateTime timestampUtc,

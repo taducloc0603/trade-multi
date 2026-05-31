@@ -74,7 +74,9 @@ public sealed record GapSignalConfirmationConfig(
     int CloseMaxTimesTick = 0,
     int OpenGapTick = 0,
     int CloseGapTick = 0,
-    int CoolDownGapTick = 0);
+    int CoolDownGapTick = 0,
+    int LimitMaxGap = 0,
+    double LimitMaxTp = 0);
 
 public sealed record GapSignalTriggerResult(
     bool Triggered,

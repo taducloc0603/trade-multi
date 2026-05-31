@@ -70,6 +70,7 @@ public sealed class ConfigService(
             record.SansJson,
             record.ConfirmLatencyMs,
             record.MaxGap,
+            record.LimitMaxGap,
             record.MaxSpread,
             record.OpenMaxTimesTick,
             record.CloseMaxTimesTick,
@@ -88,7 +89,8 @@ public sealed class ConfigService(
             record.CurrentTickA,
             record.CurrentTickB,
             record.CurrentSlots,
-            record.MaxLifeTimeBySecond);
+            record.MaxLifeTimeBySecond,
+            limitMaxTp: record.LimitMaxTp);
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -177,6 +179,7 @@ public sealed record ConfigLoadResult(
     double CloseTpProfit,
     double CloseConfirmTpProfit,
     double CloseMaxTpProfit,
+    double LimitMaxTp,
     int CloseHoldConfirmMs,
     int ClosePriceFreezeMs,
     int StartTimeHold,
@@ -190,6 +193,7 @@ public sealed record ConfigLoadResult(
     string? Error,
     int ConfirmLatencyMs,
     int MaxGap,
+    int LimitMaxGap,
     int MaxSpread,
     int OpenMaxTimesTick,
     int CloseMaxTimesTick,
@@ -237,6 +241,7 @@ public sealed record ConfigLoadResult(
         string sansJson,
         int confirmLatencyMs = 0,
         int maxGap = 0,
+        int limitMaxGap = 0,
         int maxSpread = 0,
         int openMaxTimesTick = 0,
         int closeMaxTimesTick = 0,
@@ -255,7 +260,8 @@ public sealed record ConfigLoadResult(
         string currentTickA = "",
         string currentTickB = "",
         string currentSlots = "",
-        int maxLifeTimeBySecond = 0) =>
+        int maxLifeTimeBySecond = 0,
+        double limitMaxTp = 0) =>
         new(
             true,
             true,
@@ -273,6 +279,7 @@ public sealed record ConfigLoadResult(
             Math.Abs(closeTpProfit),
             Math.Abs(closeConfirmTpProfit),
             Math.Abs(closeMaxTpProfit),
+            Math.Abs(limitMaxTp),
             Math.Max(0, closeHoldConfirmMs),
             Math.Max(0, closePriceFreezeMs),
             Math.Max(0, startTimeHold),
@@ -286,6 +293,7 @@ public sealed record ConfigLoadResult(
             null,
             Math.Max(0, confirmLatencyMs),
             Math.Max(0, maxGap),
+            Math.Max(0, limitMaxGap),
             Math.Max(0, maxSpread),
             Math.Max(0, openMaxTimesTick),
             Math.Max(0, closeMaxTimesTick),
@@ -307,10 +315,10 @@ public sealed record ConfigLoadResult(
             Math.Max(0, maxLifeTimeBySecond));
 
     public static ConfigLoadResult NotFound(string machineHostName) =>
-        new(false, false, machineHostName, [ManualHwndColumnConfig.Empty], "mt5", "mt5", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, "[]", null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "", "", "");
+        new(false, false, machineHostName, [ManualHwndColumnConfig.Empty], "mt5", "mt5", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0d, 0, 0, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, "[]", null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "", "", "");
 
     public static ConfigLoadResult Failed(string machineHostName, string error) =>
-        new(false, true, machineHostName, [ManualHwndColumnConfig.Empty], "mt5", "mt5", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, "[]", error, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "", "", "");
+        new(false, true, machineHostName, [ManualHwndColumnConfig.Empty], "mt5", "mt5", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0d, 0, 0, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, "[]", error, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "", "", "");
 
     private static IReadOnlyList<ManualHwndColumnConfig> NormalizeColumns(IReadOnlyList<ManualHwndColumnConfig>? columns)
     {

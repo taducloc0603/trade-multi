@@ -76,6 +76,8 @@ public sealed class GapCalculatorTests
         public int CurrentEndWaitTime => 0;
         public int CurrentConfirmLatencyMs => 0;
         public int CurrentMaxGap => 0;
+        public int CurrentLimitMaxGap => 0;
+        public double CurrentLimitMaxTp => 0;
         public int CurrentMaxSpread => 0;
         public int CurrentOpenMaxTimesTick => 0;
         public int CurrentCloseMaxTimesTick => 0;

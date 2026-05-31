@@ -22,6 +22,8 @@ public interface IRuntimeConfigProvider
     int CurrentEndWaitTime { get; }
     int CurrentConfirmLatencyMs { get; }
     int CurrentMaxGap { get; }
+    int CurrentLimitMaxGap { get; }
+    double CurrentLimitMaxTp { get; }
     int CurrentMaxSpread { get; }
     int CurrentOpenMaxTimesTick { get; }
     int CurrentCloseMaxTimesTick { get; }

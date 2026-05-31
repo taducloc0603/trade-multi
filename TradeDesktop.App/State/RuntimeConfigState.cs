@@ -19,6 +19,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public double CurrentCloseTpProfit { get; private set; }
     public double CurrentCloseConfirmTpProfit { get; private set; }
     public double CurrentCloseMaxTpProfit { get; private set; }
+    public double CurrentLimitMaxTp { get; private set; }
     public int CurrentCloseHoldConfirmMs { get; private set; }
     public int CurrentClosePriceFreezeMs { get; private set; }
     public int CurrentStartTimeHold { get; private set; }
@@ -27,6 +28,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentEndWaitTime { get; private set; }
     public int CurrentConfirmLatencyMs { get; private set; }
     public int CurrentMaxGap { get; private set; }
+    public int CurrentLimitMaxGap { get; private set; }
     public int CurrentMaxSpread { get; private set; }
     public int CurrentOpenMaxTimesTick { get; private set; }
     public int CurrentCloseMaxTimesTick { get; private set; }
@@ -86,6 +88,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int EndWaitTime => CurrentEndWaitTime;
     public int ConfirmLatencyMs => CurrentConfirmLatencyMs;
     public int MaxGap => CurrentMaxGap;
+    public int LimitMaxGap => CurrentLimitMaxGap;
+    public double LimitMaxTp => CurrentLimitMaxTp;
     public int MaxSpread => CurrentMaxSpread;
     public int OpenMaxTimesTick => CurrentOpenMaxTimesTick;
     public int CloseMaxTimesTick => CurrentCloseMaxTimesTick;
@@ -125,6 +129,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int endWaitTime,
         int confirmLatencyMs = 0,
         int maxGap = 0,
+        int limitMaxGap = 0,
         int maxSpread = 0,
         int openMaxTimesTick = 0,
         int closeMaxTimesTick = 0,
@@ -140,7 +145,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int closeGapTick = -1,
         int coolDownGapTick = -1,
         int maxLifeTimeBySecond = -1,
-        double closeMaxTpProfit = 0)
+        double closeMaxTpProfit = 0,
+        double limitMaxTp = 0)
         => Update(
             machineHostName,
             mapName1,
@@ -164,6 +170,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             endWaitTime,
             confirmLatencyMs,
             maxGap,
+            limitMaxGap,
             maxSpread,
             openMaxTimesTick,
             closeMaxTimesTick,
@@ -179,7 +186,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             closeGapTick,
             coolDownGapTick,
             maxLifeTimeBySecond,
-            closeMaxTpProfit);
+            closeMaxTpProfit,
+            limitMaxTp);
 
     public void Update(
         string machineHostName,
@@ -204,6 +212,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int endWaitTime,
         int confirmLatencyMs = 0,
         int maxGap = 0,
+        int limitMaxGap = 0,
         int maxSpread = 0,
         int openMaxTimesTick = 0,
         int closeMaxTimesTick = 0,
@@ -219,7 +228,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int closeGapTick = -1,
         int coolDownGapTick = -1,
         int maxLifeTimeBySecond = -1,
-        double closeMaxTpProfit = 0)
+        double closeMaxTpProfit = 0,
+        double limitMaxTp = 0)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
         var oldCloseN = CurrentCloseNumberOfQualifyingTimes;
@@ -237,6 +247,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentCloseTpProfit = Math.Abs(closeTpProfit);
         CurrentCloseConfirmTpProfit = Math.Abs(closeConfirmTpProfit);
         CurrentCloseMaxTpProfit = Math.Abs(closeMaxTpProfit);
+        CurrentLimitMaxTp = Math.Abs(limitMaxTp);
         CurrentCloseHoldConfirmMs = Math.Max(0, closeHoldConfirmMs);
         CurrentClosePriceFreezeMs = closePriceFreezeMs >= 0
             ? Math.Max(0, closePriceFreezeMs)
@@ -247,6 +258,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentEndWaitTime = Math.Max(0, endWaitTime);
         CurrentConfirmLatencyMs = Math.Max(0, confirmLatencyMs);
         CurrentMaxGap = Math.Max(0, maxGap);
+        CurrentLimitMaxGap = Math.Max(0, limitMaxGap);
         CurrentMaxSpread = Math.Max(0, maxSpread);
         CurrentOpenMaxTimesTick = Math.Max(0, openMaxTimesTick);
         CurrentCloseMaxTimesTick = Math.Max(0, closeMaxTimesTick);
@@ -342,6 +354,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentEndWaitTime,
             CurrentConfirmLatencyMs,
             CurrentMaxGap,
+            CurrentLimitMaxGap,
             CurrentMaxSpread,
             CurrentOpenMaxTimesTick,
             CurrentCloseMaxTimesTick,
@@ -355,7 +368,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentCloseNumberOfQualifyingTimes,
             CurrentOpenGapTick,
             CurrentCloseGapTick,
-            CurrentCoolDownGapTick);
+            CurrentCoolDownGapTick,
+            closeMaxTpProfit: CurrentCloseMaxTpProfit,
+            limitMaxTp: CurrentLimitMaxTp);
 
     public void Update(string machineHostName, string mapName1, string mapName2)
         => Update(
@@ -381,6 +396,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentEndWaitTime,
             CurrentConfirmLatencyMs,
             CurrentMaxGap,
+            CurrentLimitMaxGap,
             CurrentMaxSpread,
             CurrentOpenMaxTimesTick,
             CurrentCloseMaxTimesTick,
@@ -394,7 +410,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentCloseNumberOfQualifyingTimes,
             CurrentOpenGapTick,
             CurrentCloseGapTick,
-            CurrentCoolDownGapTick);
+            CurrentCoolDownGapTick,
+            closeMaxTpProfit: CurrentCloseMaxTpProfit,
+            limitMaxTp: CurrentLimitMaxTp);
 
     public void UpdatePlatform(string platformA, string platformB)
     {

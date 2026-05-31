@@ -223,6 +223,114 @@ public sealed class CloseSignalEngineTests
         Assert.Equal(GapSignalTriggerType.CloseByGapSell, trigger.TriggerType);
     }
 
+    [Fact]
+    public void ProcessSnapshot_LimitMaxTp_Disabled_WhenZero()
+    {
+        var sut = new CloseSignalEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            CloseConfirmGapPts: 50,
+            ClosePts: 80,
+            CloseConfirmTpProfit: 10,
+            CloseTpProfit: 15,
+            CloseHoldConfirmMs: 300,
+            LimitMaxTp: 0);
+        var start = new DateTime(2026, 3, 18, 16, 0, 0, DateTimeKind.Utc);
+
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 100));
+        Assert.Null(Process(sut, start.AddMilliseconds(100), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 200));
+
+        var trigger = Process(sut, start.AddMilliseconds(310), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 150);
+
+        // LimitMaxTp=0 means disabled — profit lớn vẫn trigger bình thường
+        Assert.NotNull(trigger);
+        Assert.Equal(CloseSignalReason.Tp, trigger!.CloseReason);
+    }
+
+    [Fact]
+    public void ProcessSnapshot_LimitMaxTp_ResetsWindow_WhenProfitExceedsLimit()
+    {
+        var sut = new CloseSignalEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            CloseConfirmGapPts: 50,
+            ClosePts: 80,
+            CloseConfirmTpProfit: 10,
+            CloseTpProfit: 15,
+            CloseHoldConfirmMs: 300,
+            LimitMaxTp: 50);
+        var start = new DateTime(2026, 3, 18, 16, 1, 0, DateTimeKind.Utc);
+
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 10));
+        Assert.Null(Process(sut, start.AddMilliseconds(100), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 20));
+        // Spike vượt limitMaxTp=50 → reset window
+        Assert.Null(Process(sut, start.AddMilliseconds(200), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 80));
+        // Mở window mới sau reset
+        Assert.Null(Process(sut, start.AddMilliseconds(250), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 15));
+
+        // 250ms từ window mới (t=250), holdMs=300 → chưa đủ
+        var trigger = Process(sut, start.AddMilliseconds(500), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 20);
+        Assert.Null(trigger);
+    }
+
+    [Fact]
+    public void ProcessSnapshot_LimitMaxTp_PreventsWindowOpen_WhenProfitExceedsLimitFromStart()
+    {
+        var sut = new CloseSignalEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            CloseConfirmGapPts: 50,
+            ClosePts: 80,
+            CloseConfirmTpProfit: 10,
+            CloseTpProfit: 15,
+            CloseHoldConfirmMs: 300,
+            LimitMaxTp: 50);
+        var start = new DateTime(2026, 3, 18, 16, 2, 0, DateTimeKind.Utc);
+
+        // Profit > limitMaxTp từ đầu → window không mở
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 80));
+        Assert.Null(Process(sut, start.AddMilliseconds(100), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 60));
+
+        var trigger = Process(sut, start.AddMilliseconds(400), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 55);
+        Assert.Null(trigger);
+    }
+
+    [Fact]
+    public void ProcessSnapshot_LimitMaxTp_NewCycle_AfterSpikeReset()
+    {
+        var sut = new CloseSignalEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            CloseConfirmGapPts: 50,
+            ClosePts: 80,
+            CloseConfirmTpProfit: 10,
+            CloseTpProfit: 15,
+            CloseHoldConfirmMs: 200,
+            LimitMaxTp: 50);
+        var start = new DateTime(2026, 3, 18, 16, 3, 0, DateTimeKind.Utc);
+
+        // Cycle 1: spike → reset
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 12));
+        Assert.Null(Process(sut, start.AddMilliseconds(50), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 80)); // spike reset
+
+        // Cycle 2: profit về bình thường → window mở lại
+        Assert.Null(Process(sut, start.AddMilliseconds(100), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 15));
+        Assert.Null(Process(sut, start.AddMilliseconds(200), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 20));
+
+        var trigger = Process(sut, start.AddMilliseconds(310), gapBuy: 0, gapSell: 0, config, TradingOpenMode.GapBuy, slotProfit: 18);
+
+        Assert.NotNull(trigger);
+        Assert.Equal(CloseSignalReason.Tp, trigger!.CloseReason);
+    }
+
     private static GapSignalTriggerResult? Process(
         CloseSignalEngine sut,
         DateTime timestampUtc,
