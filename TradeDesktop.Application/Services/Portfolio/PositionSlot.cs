@@ -35,6 +35,15 @@ public sealed class PositionSlot
     public double? LastProfitA { get; private set; }
     public double? LastProfitB { get; private set; }
     public bool HasCompleteProfitSnapshot => LastProfitA.HasValue && LastProfitB.HasValue;
+
+    /// <summary>
+    /// P/L thật từ broker (HistorySharedRecord.Profit) khi lệnh đã đóng — tổng 2 leg, gồm
+    /// commission/swap. KHÁC với <see cref="LastProfitSnapshot"/> (mark-to-market theo giá quote
+    /// lúc trigger). Chỉ dùng để log/hiển thị net P/L thật, KHÔNG tham gia quyết định TP/Rule D.
+    /// </summary>
+    public double? RealizedCloseProfit { get; private set; }
+    private double? _realizedCloseProfitA;
+    private double? _realizedCloseProfitB;
     public CloseSignalReason? LastCloseReason { get; private set; }
     public ICloseSignalEngine CloseSignalEngine { get; private set; }
 
@@ -138,6 +147,30 @@ public sealed class PositionSlot
     }
 
     /// <summary>
+    /// Cập nhật P/L thật từ broker cho 1 leg (theo ticket). Tổng 2 leg chỉ sẵn sàng khi đã có
+    /// cả A và B; thiếu 1 leg → <see cref="RealizedCloseProfit"/> = null. Ticket lạ → no-op.
+    /// </summary>
+    public void UpdateRealizedCloseProfit(ulong ticket, double profit)
+    {
+        if (TicketA.HasValue && ticket == TicketA.Value)
+        {
+            _realizedCloseProfitA = profit;
+        }
+        else if (TicketB.HasValue && ticket == TicketB.Value)
+        {
+            _realizedCloseProfitB = profit;
+        }
+        else
+        {
+            return;
+        }
+
+        RealizedCloseProfit = _realizedCloseProfitA.HasValue && _realizedCloseProfitB.HasValue
+            ? _realizedCloseProfitA.Value + _realizedCloseProfitB.Value
+            : null;
+    }
+
+    /// <summary>
     /// Replace CloseSignalEngine instance (dùng cho Phase 5 recovery — fresh engine, không recover window state).
     /// </summary>
     public void ResetCloseSignalEngine(ICloseSignalEngine engine)
@@ -150,5 +183,8 @@ public sealed class PositionSlot
         LastProfitA = null;
         LastProfitB = null;
         LastProfitSnapshot = null;
+        _realizedCloseProfitA = null;
+        _realizedCloseProfitB = null;
+        RealizedCloseProfit = null;
     }
 }

@@ -350,9 +350,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var lockSummary = _state.GlobalActionLockUntilUtc.HasValue
             ? $"lockUntil={_state.GlobalActionLockUntilUtc:HH:mm:ss}UTC"
             : "lockNone";
+        var realizedText = slot.RealizedCloseProfit.HasValue
+            ? slot.RealizedCloseProfit.Value.ToString("F2")
+            : "n/a";
         _logger?.Log(
             $"[SLOT][CLOSE_CONFIRMED] slot={slot.SlotId} side={slot.Side} " +
-            $"profit={slot.LastProfitSnapshot:F2} closeReason={slot.LastCloseReason ?? CloseSignalReason.Gap} {lockSummary}");
+            $"profit={slot.LastProfitSnapshot:F2} realizedProfit={realizedText} " +
+            $"closeReason={slot.LastCloseReason ?? CloseSignalReason.Gap} {lockSummary}");
     }
 
     public PositionSlot RegisterSyncedSlot(
@@ -381,6 +385,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var slot = _state.GetSlotByTicket(ticket);
         if (slot is null) return;
         slot.UpdateProfit(ticket, profit);
+    }
+
+    public void UpdateRealizedCloseProfit(ulong ticket, double profit)
+    {
+        var slot = _state.GetSlotByTicket(ticket);
+        if (slot is null) return;
+        slot.UpdateRealizedCloseProfit(ticket, profit);
     }
 
     private void LogTpCheck(PositionSlot slot, GapSignalConfirmationConfig config)

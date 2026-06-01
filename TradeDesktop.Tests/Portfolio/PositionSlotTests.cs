@@ -138,4 +138,41 @@ public sealed class PositionSlotTests
         Assert.Equal(confirmedAt, slot.OpenConfirmedAtUtc);
         Assert.Equal(12, slot.HoldingSeconds);
     }
+
+    [Fact]
+    public void UpdateRealizedCloseProfit_NullUntilBothLegsPresent()
+    {
+        var slot = CreateSlot();
+        slot.MarkOpenTriggered(TradingPositionSide.Buy, TradingOpenMode.GapBuy, DateTime.UtcNow, 3);
+        slot.MarkOpenConfirmed(ticketA: 1001, ticketB: 1002, DateTime.UtcNow);
+
+        slot.UpdateRealizedCloseProfit(1001, -3.0);
+
+        Assert.Null(slot.RealizedCloseProfit);
+    }
+
+    [Fact]
+    public void UpdateRealizedCloseProfit_SumsBothLegs()
+    {
+        var slot = CreateSlot();
+        slot.MarkOpenTriggered(TradingPositionSide.Buy, TradingOpenMode.GapBuy, DateTime.UtcNow, 3);
+        slot.MarkOpenConfirmed(ticketA: 1001, ticketB: 1002, DateTime.UtcNow);
+
+        slot.UpdateRealizedCloseProfit(1001, -3.0);
+        slot.UpdateRealizedCloseProfit(1002, -31.0);
+
+        Assert.Equal(-34.0, slot.RealizedCloseProfit);
+    }
+
+    [Fact]
+    public void UpdateRealizedCloseProfit_IgnoresUnknownTicket()
+    {
+        var slot = CreateSlot();
+        slot.MarkOpenTriggered(TradingPositionSide.Buy, TradingOpenMode.GapBuy, DateTime.UtcNow, 3);
+        slot.MarkOpenConfirmed(ticketA: 1001, ticketB: 1002, DateTime.UtcNow);
+
+        slot.UpdateRealizedCloseProfit(9999, 100.0);
+
+        Assert.Null(slot.RealizedCloseProfit);
+    }
 }

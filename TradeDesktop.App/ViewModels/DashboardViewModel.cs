@@ -1153,8 +1153,8 @@ public sealed class DashboardViewModel : ObservableObject
                 var triggerLastGap = trigger.LastBuyGap;
                 var triggerAllGaps = trigger.BuyGaps;
                 var spreadText = BuildSpreadPtsText(_runtimeConfigState.CurrentDashboardMetrics);
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, slot, "B", "SELL", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, slot, "A", "BUY", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, coordinatorSlot.SlotId, "B", "SELL", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, coordinatorSlot.SlotId, "A", "BUY", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
                 _autoSlot++;
             });
         }
@@ -1311,8 +1311,8 @@ public sealed class DashboardViewModel : ObservableObject
                 var triggerLastGap = trigger.LastSellGap;
                 var triggerAllGaps = trigger.SellGaps;
                 var spreadText = BuildSpreadPtsText(_runtimeConfigState.CurrentDashboardMetrics);
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, slot, "B", "BUY", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, slot, "A", "SELL", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, coordinatorSlot.SlotId, "B", "BUY", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, coordinatorSlot.SlotId, "A", "SELL", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
                 _autoSlot++;
             });
         }
@@ -1499,7 +1499,7 @@ public sealed class DashboardViewModel : ObservableObject
                         isBuyA);
                     SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoClose(
                         now,
-                        slot,
+                        targetSlot?.SlotId ?? slot,
                         "A",
                         typeA,
                         symbolA,
@@ -1525,7 +1525,7 @@ public sealed class DashboardViewModel : ObservableObject
                         isBuyB);
                     SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoClose(
                         now,
-                        slot,
+                        targetSlot?.SlotId ?? slot,
                         "B",
                         typeB,
                         symbolB,
@@ -2067,6 +2067,35 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         return BuildPairId(slotNumber, requestRawMs, isAutoFlow);
+    }
+
+    /// <summary>
+    /// Resolve SlotId 1-based của coordinator để hiển thị trong nhãn log EA [N:A]/[N:B], sao cho
+    /// khớp với `slot=` ở các log [SLOT]/[CLOSE_CONFIRMED]/[CLOSE_SELECT] của CÙNG một lệnh.
+    /// Ưu tiên tra theo ticket (đáng tin nhất), rồi pairId, cuối cùng fallback về SlotNumber cũ.
+    /// Chỉ dùng cho HIỂN THỊ — không ảnh hưởng matching/PairId/cooldown.
+    /// </summary>
+    private int ResolveLogSlotId(string? pairId, ulong? ticket, int fallback)
+    {
+        if (ticket.HasValue)
+        {
+            var byTicket = _portfolioCoordinator.GetSlotByTicket(ticket.Value);
+            if (byTicket is not null)
+            {
+                return byTicket.SlotId;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(pairId))
+        {
+            var byPair = _portfolioCoordinator.GetSlotByPairId(pairId);
+            if (byPair is not null)
+            {
+                return byPair.SlotId;
+            }
+        }
+
+        return fallback;
     }
 
     private static string ResolveTradeMapNameFromHistoryMap(string historyMapName)
@@ -4694,7 +4723,7 @@ public sealed class DashboardViewModel : ObservableObject
             var openTypeText = SignalLogFormatter.TradeTypeString(newRecord.TradeType);
             SignalLogItems.Insert(0, SignalLogFormatter.FormatOpenConfirm(
                 DateTime.Now,
-                pendingRequest.SlotNumber,
+                ResolveLogSlotId(pendingRequest.PairId, newRecord.Ticket, pendingRequest.SlotNumber),
                 pendingRequest.ExchangeLabel,
                 openTypeText,
                 newRecord.Symbol,
@@ -4849,6 +4878,12 @@ public sealed class DashboardViewModel : ObservableObject
 
             _closeRequestByTicket[record.Ticket] = pendingRequest;
             _pairIdByTicket[record.Ticket] = pendingRequest.PairId;
+
+            // Net P/L thật từ broker (gồm commission/swap, khớp cột FeeSpread) cho leg vừa đóng.
+            // Gọi TRƯỚC khi cả-2-leg confirm trigger MarkSlotCloseConfirmed để CLOSE_CONFIRMED log
+            // được realizedProfit thật cạnh số MTM. Chỉ log/hiển thị — không đụng quyết định TP/Rule D.
+            _portfolioCoordinator.UpdateRealizedCloseProfit(record.Ticket, record.Profit);
+
             var closeExecutionMs = ComputeExecutionMilliseconds(
                 record.CloseEaTimeLocal,
                 pendingRequest.AppCloseRequestRawMs);
@@ -4878,7 +4913,7 @@ public sealed class DashboardViewModel : ObservableObject
             var closeTypeText = SignalLogFormatter.TradeTypeString(record.TradeType);
             SignalLogItems.Insert(0, SignalLogFormatter.FormatCloseConfirm(
                 DateTime.Now,
-                pendingRequest.SlotNumber,
+                ResolveLogSlotId(pendingRequest.PairId, record.Ticket, pendingRequest.SlotNumber),
                 pendingRequest.ExchangeLabel,
                 closeTypeText,
                 record.Symbol,

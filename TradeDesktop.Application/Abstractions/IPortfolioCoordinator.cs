@@ -63,6 +63,10 @@ public interface IPortfolioCoordinator
     // === Profit tracking (Phase 1 MMF poll; Phase 2 Rule D priority close) ===
     void UpdateProfit(ulong ticket, double profit);
 
+    // Net P/L thật từ broker (HistorySharedRecord.Profit) lúc lệnh đóng — chỉ log/hiển thị,
+    // KHÔNG tham gia quyết định TP/Rule D.
+    void UpdateRealizedCloseProfit(ulong ticket, double profit);
+
     // === Rule checks (Phase 2) ===
     bool CanOpenNewSlot(TradingPositionSide side, out string blockReason);
     bool CanCloseNow(out string blockReason);

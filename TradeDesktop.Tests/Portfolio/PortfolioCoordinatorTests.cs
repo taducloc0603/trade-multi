@@ -179,6 +179,26 @@ public sealed class PortfolioCoordinatorTests
     }
 
     [Fact]
+    public void UpdateRealizedCloseProfit_StoresValue_OnMatchingTicket()
+    {
+        var coordinator = CreateCoordinator();
+        var slot = coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 555, 666, DateTime.UtcNow);
+
+        coordinator.UpdateRealizedCloseProfit(555, -3.0);
+        coordinator.UpdateRealizedCloseProfit(666, -31.0);
+
+        Assert.Equal(-34.0, slot!.RealizedCloseProfit);
+    }
+
+    [Fact]
+    public void UpdateRealizedCloseProfit_IgnoresUnknownTicket()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateRealizedCloseProfit(9999, 1.0); // no slot
+    }
+
+    [Fact]
     public void RegisterSyncedSlot_CreatesLiveSlotDirectly()
     {
         var coordinator = CreateCoordinator();
