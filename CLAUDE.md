@@ -67,6 +67,22 @@ DB integration deferred).
 - Slot losers giữ nguyên close window — sẽ trigger lại tick sau nếu vẫn đủ điều kiện.
 - Implementation: `coordinator.ProcessSnapshot` close path: `OrderByDescending(LastProfitSnapshot ?? double.MinValue)`.
 
+### Rule E — Signal-only mandate (HIGHEST — đứng trên tất cả)
+- **Quy tắc cao nhất**: MỌI điều kiện OPEN/CLOSE một vị thế cân bằng PHẢI bắt nguồn từ signal engine.
+  - OPEN → `GapSignalConfirmationEngine` (qua `PortfolioCoordinator.ProcessSnapshot`).
+  - CLOSE → `CloseSignalEngine` (TP hoặc Gap đảo chiều). Có signal mới được thực hiện.
+- **Cấm tuyệt đối**: thêm path mở/đóng theo thời gian / loss / lifetime / thủ công mà BỎ QUA signal.
+  - Force-close theo `max_life_time` đã bị gỡ (commit `01f1f50`). `max_life_time_by_second` CHỈ được dùng
+    để **ưu tiên trong nhóm slot ĐÃ có close signal** (`eligibleCloses`) — KHÔNG bao giờ tự tạo close.
+- **Exceptions hợp lệ** (KHÔNG coi là vi phạm — đây là recovery/integrity cho trạng thái BẤT THƯỜNG,
+  không phải quyết định giao dịch theo thị trường):
+  1. `CloseOpenedLegByTimeoutAsync` — rollback leg mở dở khi sàn kia fail trong `OpenPendingTimeoutMs`.
+  2. `CloseRemainingLegAfterExternalCloseAsync` — đóng leg còn lại khi 1 leg bị đóng bên ngoài (EA/broker/tay).
+  3. `RetryCloseLegByPendingAsync` — chỉ hoàn tất một close ĐÃ được signal trigger trước đó (retry execution).
+  4. Manual open/close buttons — dormant, ẩn qua `IsManualTradeButtonsVisible=false` (Phase 6).
+- **Khi thêm path mở/đóng mới**: nếu KHÔNG qua signal engine thì BẮT BUỘC phải là recovery/integrity
+  rõ ràng, có guard chống đóng/mở nhầm, và phải document thêm vào danh sách exception ở trên.
+
 ---
 
 ## 3. Architecture map
@@ -252,6 +268,7 @@ New code MUST NOT introduce new failures.
 - ❌ Đừng remove logs `[CYCLE]` `[SLOT]` `[CLOSE_SELECT]` — cần cho debug production.
 - ❌ Đừng fallback close to row 0 nếu ticket missing trong MMF — skip + log warn.
 - ❌ Đừng change `RuntimeConfigState` defaults từ 1 → 7 cho cap → phải qua DB config (Phase 5).
+- ❌ Đừng thêm bất kỳ path mở/đóng vị thế nào bỏ qua signal engine (Rule E) — trừ các recovery/integrity exception đã liệt kê ở Section 2.
 
 ---
 

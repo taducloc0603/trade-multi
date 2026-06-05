@@ -45,8 +45,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentCoolDownGapTick { get; private set; }
     public int CurrentMaxLifeTimeBySecond { get; private set; }
 
-    // Phase 1: multi-slot quota config. Default tạm hardcode theo Rule A (3/3/5) —
-    // Phase 5 (DB integration) sẽ override từ DB columns max_*_opens.
+    // Multi-slot quota config. Default theo Rule A (5/3/3) khi DB chưa có cột — runtime
+    // được override từ DB columns max_total_opens / max_buy_opens / max_sell_opens qua UpdateQuota.
     public int CurrentMaxTotalOpens { get; private set; } = 5;
     public int CurrentMaxBuyOpens { get; private set; } = 3;
     public int CurrentMaxSellOpens { get; private set; } = 3;
@@ -413,6 +413,17 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentCoolDownGapTick,
             closeMaxTpProfit: CurrentCloseMaxTpProfit,
             limitMaxTp: CurrentLimitMaxTp);
+
+    // Quota từ DB (max_total_opens / max_buy_opens / max_sell_opens). Floor về 1 để không
+    // bao giờ khoá toàn bộ open. Raise StateChanged để ApplyRuntimeConfig → SyncPortfolioCoordinatorConfig
+    // đẩy giá trị mới xuống coordinator.
+    public void UpdateQuota(int maxTotalOpens, int maxBuyOpens, int maxSellOpens)
+    {
+        CurrentMaxTotalOpens = Math.Max(1, maxTotalOpens);
+        CurrentMaxBuyOpens = Math.Max(1, maxBuyOpens);
+        CurrentMaxSellOpens = Math.Max(1, maxSellOpens);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     public void UpdatePlatform(string platformA, string platformB)
     {

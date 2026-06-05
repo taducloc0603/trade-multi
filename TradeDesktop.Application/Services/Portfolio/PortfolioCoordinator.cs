@@ -178,26 +178,33 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         {
             // Rule D (extended): if max_life_time_by_second > 0, prioritize slots whose age
             // (effectiveNow - OpenConfirmedAtUtc) exceeds the threshold. Among those overtime
-            // slots, pick the highest profit. If none are overtime, fall back to plain Rule D
+            // slots, pick the OLDEST (largest age from OpenConfirmedAtUtc); if two are the same
+            // age, tiebreak by highest profit. If none are overtime, fall back to plain Rule D
             // (highest profit across all eligible).
             var maxLifeTimeSec = _state.MaxLifeTimeBySecond;
-            IEnumerable<(PositionSlot slot, GapSignalTriggerResult trigger)> candidates;
-            if (maxLifeTimeSec > 0)
-            {
-                var overtime = eligibleCloses
+            var overtime = maxLifeTimeSec > 0
+                ? eligibleCloses
                     .Where(x => x.slot.OpenConfirmedAtUtc.HasValue &&
                                 (effectiveNow - x.slot.OpenConfirmedAtUtc.Value).TotalSeconds > maxLifeTimeSec)
-                    .ToList();
-                candidates = overtime.Count > 0 ? overtime : eligibleCloses;
+                    .ToList()
+                : new List<(PositionSlot slot, GapSignalTriggerResult trigger)>();
+
+            (PositionSlot slot, GapSignalTriggerResult trigger) winner;
+            if (overtime.Count > 0)
+            {
+                // Overtime tier: oldest first (smallest OpenConfirmedAtUtc), tiebreak highest profit.
+                // OpenConfirmedAtUtc is guaranteed non-null by the overtime filter above.
+                winner = overtime
+                    .OrderBy(x => x.slot.OpenConfirmedAtUtc!.Value)
+                    .ThenByDescending(x => x.slot.LastProfitSnapshot ?? double.MinValue)
+                    .First();
             }
             else
             {
-                candidates = eligibleCloses;
+                winner = eligibleCloses
+                    .OrderByDescending(x => x.slot.LastProfitSnapshot ?? double.MinValue)
+                    .First();
             }
-
-            var winner = candidates
-                .OrderByDescending(x => x.slot.LastProfitSnapshot ?? double.MinValue)
-                .First();
 
             // Mark IsCloseExecutionPending immediately so next tick doesn't double-trigger.
             // Note: status transitions to PendingClose only after MarkSlotCloseTriggered from caller.

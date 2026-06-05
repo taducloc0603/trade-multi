@@ -83,7 +83,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CurrentTickA: row.CurrentTickA ?? string.Empty,
             CurrentTickB: row.CurrentTickB ?? string.Empty,
             CurrentSlots: row.CurrentSlotsJson,
-            MaxLifeTimeBySecond: row.MaxLifeTimeBySecond);
+            MaxLifeTimeBySecond: row.MaxLifeTimeBySecond,
+            MaxBuyOpens: row.MaxBuyOpens,
+            MaxSellOpens: row.MaxSellOpens,
+            MaxTotalOpens: row.MaxTotalOpens);
     }
 
     public async Task<bool> UpdateCurrentTicksAsync(
@@ -307,6 +310,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("current_tick_b", out var currentTickBElement);
         first.TryGetProperty("current_slots", out var currentSlotsElement);
         first.TryGetProperty("max_life_time_by_second", out var maxLifeTimeBySecondElement);
+        first.TryGetProperty("max_buy_opens", out var maxBuyOpensElement);
+        first.TryGetProperty("max_sell_opens", out var maxSellOpensElement);
+        first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
 
         // DB column name is lowercase: hostname
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
@@ -365,7 +371,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CurrentSlots = currentSlotsElement.ValueKind is JsonValueKind.Array or JsonValueKind.Object
                 ? currentSlotsElement.Clone()
                 : default,
-            MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0
+            MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0,
+            MaxBuyOpens = maxBuyOpensElement.ValueKind == JsonValueKind.Number && maxBuyOpensElement.TryGetInt32(out var maxBuyOpens) ? maxBuyOpens : 3,
+            MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
+            MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5
         };
     }
 
@@ -441,6 +450,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("current_tick_b", out var currentTickBElement);
         first.TryGetProperty("current_slots", out var currentSlotsElement);
         first.TryGetProperty("max_life_time_by_second", out var maxLifeTimeBySecondElement);
+        first.TryGetProperty("max_buy_opens", out var maxBuyOpensElement);
+        first.TryGetProperty("max_sell_opens", out var maxSellOpensElement);
+        first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
 
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
         if (!hasHostName)
@@ -497,7 +509,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CurrentSlots = currentSlotsElement.ValueKind is JsonValueKind.Array or JsonValueKind.Object
                 ? currentSlotsElement.Clone()
                 : default,
-            MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0
+            MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0,
+            MaxBuyOpens = maxBuyOpensElement.ValueKind == JsonValueKind.Number && maxBuyOpensElement.TryGetInt32(out var maxBuyOpens) ? maxBuyOpens : 3,
+            MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
+            MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5
         };
     }
 
@@ -681,6 +696,15 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("max_life_time_by_second")]
         public int MaxLifeTimeBySecond { get; set; }
+
+        [JsonPropertyName("max_buy_opens")]
+        public int MaxBuyOpens { get; set; } = 3;
+
+        [JsonPropertyName("max_sell_opens")]
+        public int MaxSellOpens { get; set; } = 3;
+
+        [JsonPropertyName("max_total_opens")]
+        public int MaxTotalOpens { get; set; } = 5;
 
         public string CurrentSlotsJson => CurrentSlots.ValueKind is JsonValueKind.Array or JsonValueKind.Object
             ? CurrentSlots.GetRawText()

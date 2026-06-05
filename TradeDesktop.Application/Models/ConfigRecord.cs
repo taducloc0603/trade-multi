@@ -44,4 +44,7 @@ public sealed record ConfigRecord(
     string CurrentTickA = "",
     string CurrentTickB = "",
     string CurrentSlots = "",
-    int MaxLifeTimeBySecond = 0);
+    int MaxLifeTimeBySecond = 0,
+    int MaxBuyOpens = 3,
+    int MaxSellOpens = 3,
+    int MaxTotalOpens = 5);

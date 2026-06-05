@@ -6,7 +6,8 @@ using TradeDesktop.Application.Services.Portfolio;
 namespace TradeDesktop.Tests.Portfolio;
 
 // max_life_time_by_second: slots open longer than the threshold are prioritized for close.
-// Among overtime slots, pick highest profit. If none are overtime, fall back to Rule D (highest profit).
+// Among overtime slots, pick the OLDEST (largest age from OpenConfirmedAtUtc); tiebreak by highest
+// profit when ages are equal. If none are overtime, fall back to Rule D (highest profit).
 public sealed class MaxLifeTimeRuleTests
 {
     private sealed class ScriptedCloseSignalEngine : ICloseSignalEngine
@@ -96,7 +97,7 @@ public sealed class MaxLifeTimeRuleTests
     }
 
     [Fact]
-    public void MultipleOvertimeSlots_PicksHighestProfitAmongThem()
+    public void MultipleOvertimeSlots_SameAge_TiebreakByHighestProfit()
     {
         var factory = new ScriptedFactory();
         var coordinator = BuildCoordinator(factory);
@@ -104,7 +105,7 @@ public sealed class MaxLifeTimeRuleTests
 
         var now = new DateTime(2026, 5, 21, 12, 0, 0, DateTimeKind.Utc);
 
-        // Slots 1, 2, 3: all overtime (> 1200s)
+        // Slots 1, 2, 3: all overtime AND same age (-1500s) → tiebreak by profit.
         for (var i = 0; i < 3; i++)
         {
             var pairId = $"p{i + 1}";
@@ -115,7 +116,7 @@ public sealed class MaxLifeTimeRuleTests
 
         // Profits: p1=-10, p2=-5 (highest among overtime), p3=-8
         coordinator.UpdateProfit(100, -5.0); coordinator.UpdateProfit(200, -5.0);  // p1: -10
-        coordinator.UpdateProfit(101, -2.5); coordinator.UpdateProfit(201, -2.5);  // p2: -5 ← WINNER
+        coordinator.UpdateProfit(101, -2.5); coordinator.UpdateProfit(201, -2.5);  // p2: -5 ← WINNER (tiebreak)
         coordinator.UpdateProfit(102, -4.0); coordinator.UpdateProfit(202, -4.0);  // p3: -8
 
         foreach (var engine in factory.Created)
@@ -123,7 +124,36 @@ public sealed class MaxLifeTimeRuleTests
 
         var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
 
+        // All same age → highest profit wins the tiebreak.
         Assert.Equal("p2", result.CloseTargetSlot!.PairId);
+    }
+
+    [Fact]
+    public void MultipleOvertimeSlots_PicksOldest_NotHighestProfit()
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory);
+        coordinator.UpdateMaxLifeTimeConfig(1200);
+
+        var now = new DateTime(2026, 5, 21, 12, 0, 0, DateTimeKind.Utc);
+
+        // p1: oldest (-2000s, overtime), profit = -10 (lowest)
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-2000));
+        coordinator.UpdateProfit(100, -5.0); coordinator.UpdateProfit(200, -5.0);  // p1: -10 ← WINNER (oldest)
+
+        // p2: younger but still overtime (-1300s), profit = +5 (highest)
+        coordinator.AllocatePendingOpenSlot("p2", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p2", 101, 201, now.AddSeconds(-1300));
+        coordinator.UpdateProfit(101, 2.5); coordinator.UpdateProfit(201, 2.5);  // p2: +5
+
+        factory.Created[0].NextResult = CloseTrigger();
+        factory.Created[1].NextResult = CloseTrigger();
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        // Among overtime slots, the OLDEST wins even though its profit is lower.
+        Assert.Equal("p1", result.CloseTargetSlot!.PairId);
     }
 
     [Fact]
