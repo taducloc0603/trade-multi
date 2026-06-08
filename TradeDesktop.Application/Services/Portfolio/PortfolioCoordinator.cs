@@ -47,11 +47,10 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     // Phase 8: track cooldown block state changes để log entry/exit (tránh spam tick log).
     private bool _wasBlockedByCooldownLastTick;
 
-    // Log throttle: TP_CHECK log lại ngay khi band đổi (profit vượt ngưỡng confirm/TP), ngoài ra mỗi slot
-    // tối đa 1 lần / TpCheckLogMinIntervalSeconds (tránh spam mỗi tick).
+    // Log throttle: TP_CHECK heartbeat — mỗi slot tối đa 1 dòng / TpCheckLogMinIntervalSeconds
+    // (profit dao động quanh ngưỡng confirm/TP nên KHÔNG trigger theo band-change, chỉ theo interval).
     private readonly Dictionary<int, DateTime> _lastTpCheckLogAtUtc = new();
-    private readonly Dictionary<int, string> _lastTpCheckBand = new();
-    private const int TpCheckLogMinIntervalSeconds = 30;
+    private const int TpCheckLogMinIntervalSeconds = 60;
 
     // Log throttle: [SLOT][SKIP] Open blocked — log khi (side|reason) đổi HOẶC quá interval (tránh spam mỗi tick).
     private string _lastOpenSkipSignature = string.Empty;
@@ -363,7 +362,6 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         slot.MarkCloseConfirmed(confirmedAtUtc);
         Interlocked.Increment(ref _totalClosesAllTime);
         _lastTpCheckLogAtUtc.Remove(slot.SlotId);
-        _lastTpCheckBand.Remove(slot.SlotId);
 
         // Phase 8: cooldown ĐÃ được set tại close dispatch (MarkSlotCloseTriggered).
         // Tại confirm chỉ log + update slot status, không reset cooldown.
@@ -410,23 +408,19 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             return;
         }
 
-        var profitValue = slot.HasCompleteProfitSnapshot && slot.LastProfitSnapshot.HasValue
-            ? slot.LastProfitSnapshot
-            : (double?)null;
-        var band = TpCheckLogBand.Resolve(profitValue, config.CloseConfirmTpProfit, config.CloseTpProfit);
-
-        // Throttle: log lại NGAY khi band đổi (profit vượt confirm/TP — mốc sắp đóng), ngoài ra mỗi slot
-        // tối đa 1 dòng / TpCheckLogMinIntervalSeconds (tránh spam mỗi tick).
-        var bandChanged = !_lastTpCheckBand.TryGetValue(slot.SlotId, out var prevBand)
-            || !string.Equals(prevBand, band, StringComparison.Ordinal);
-        var intervalElapsed = !_lastTpCheckLogAtUtc.TryGetValue(slot.SlotId, out var lastLogAt)
-            || (effectiveNow - lastLogAt) >= TimeSpan.FromSeconds(TpCheckLogMinIntervalSeconds);
-        if (!bandChanged && !intervalElapsed)
+        // Throttle heartbeat: mỗi slot tối đa 1 dòng / TpCheckLogMinIntervalSeconds. KHÔNG trigger theo
+        // band-change vì profit dao động quanh ngưỡng confirm/TP gây spam. Close thật có [SLOT][CLOSE_CONFIRMED].
+        if (_lastTpCheckLogAtUtc.TryGetValue(slot.SlotId, out var lastLogAt)
+            && (effectiveNow - lastLogAt) < TimeSpan.FromSeconds(TpCheckLogMinIntervalSeconds))
         {
             return;
         }
         _lastTpCheckLogAtUtc[slot.SlotId] = effectiveNow;
-        _lastTpCheckBand[slot.SlotId] = band;
+
+        var profitValue = slot.HasCompleteProfitSnapshot && slot.LastProfitSnapshot.HasValue
+            ? slot.LastProfitSnapshot
+            : (double?)null;
+        var band = TpCheckLogBand.Resolve(profitValue, config.CloseConfirmTpProfit, config.CloseTpProfit);
 
         var profitText = profitValue.HasValue
             ? profitValue.Value.ToString("0.00", CultureInfo.InvariantCulture)
