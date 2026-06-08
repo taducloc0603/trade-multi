@@ -98,11 +98,17 @@ public sealed class DashboardViewModel : ObservableObject
     private const int StaleTickThresholdSeconds = 10;
     private DateTime _lastPerfSummaryAtUtc = DateTime.MinValue;
     private const int PerfSummaryIntervalSeconds = 60;
+    // Perf summary throttle: chỉ log khi signature thô (tps/latency band) đổi; heartbeat tối đa mỗi 5 phút.
+    private string _lastPerfSummarySignature = string.Empty;
+    private const int PerfSummaryHeartbeatSeconds = 300;
     private const double AlertSlippageThresholdPt = 40.0;
     private const long AlertExecutionThresholdMs = 1000;
     private bool _isAutoOpenPausedByInvariant;
     private int _invariantClearStreak;
     private const int InvariantClearPollsRequired = 10;
+    // Self-heal watchdog: chống churn — tối thiểu cách nhau ngần này giây giữa 2 lần resync tự động.
+    private DateTime _lastWatchdogSelfHealAtUtc = DateTime.MinValue;
+    private const int WatchdogSelfHealMinIntervalSeconds = 30;
     private TradingFlowPhase _lastLoggedPhase = TradingFlowPhase.WaitingOpen;
     private TradingOpenMode _lastLoggedOpenMode = TradingOpenMode.None;
     private TradingPositionSide _lastLoggedPositionSide = TradingPositionSide.None;
@@ -2498,18 +2504,18 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
-            var resyncedSlots = BuildResyncedOpenSlots(tradeResultA.Records, tradeResultB.Records);
-            if (resyncedSlots.Count == 0)
+            var restoredCount = TryRebuildCoordinatorFromMmf(
+                tradeResultA.Records, tradeResultB.Records, tradeMapNameA, tradeMapNameB);
+            if (restoredCount == 0)
             {
                 AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Resync skipped: no pairable open trades found");
                 return;
             }
 
-            ApplyResyncedOpenSlots(resyncedSlots, tradeMapNameA, tradeMapNameB);
             await PersistCurrentSlotsSnapshotAsync("manual-resync");
 
             AddSignalLog(
-                $"    - [{DateTime.Now:HH:mm:ss.fff}] Resync complete: restored {resyncedSlots.Count} slot(s), " +
+                $"    - [{DateTime.Now:HH:mm:ss.fff}] Resync complete: restored {restoredCount} slot(s), " +
                 $"auto-open resumed");
         }
         catch (Exception ex)
@@ -2948,6 +2954,17 @@ public sealed class DashboardViewModel : ObservableObject
     private static string BuildTickToken(ExchangeDashboardMetrics exchange, DateTime timestampUtc)
         => $"{timestampUtc:O}|{exchange.Time}|{exchange.Bid?.ToString(CultureInfo.InvariantCulture) ?? "-"}|{exchange.Ask?.ToString(CultureInfo.InvariantCulture) ?? "-"}";
 
+    // Band hoá số liệu để tạo signature thô: chỉ log lại khi tps/latency đổi đáng kể (không log mỗi phút khi ổn định).
+    private static string BandPerfMetric(double? value, double bucket)
+        => value.HasValue ? (Math.Round(value.Value / bucket) * bucket).ToString("0", CultureInfo.InvariantCulture) : "-";
+
+    private static string BuildPerfSummarySignature(DashboardMetrics metrics)
+    {
+        string Side(ExchangeDashboardMetrics e)
+            => $"{BandPerfMetric(e.Tps, 1d)}|{BandPerfMetric(e.LatencyMs.HasValue ? (double)e.LatencyMs.Value : (double?)null, 20d)}|{BandPerfMetric(e.AvgLatMs.HasValue ? (double)e.AvgLatMs.Value : (double?)null, 20d)}";
+        return $"A({Side(metrics.ExchangeA)})B({Side(metrics.ExchangeB)})";
+    }
+
     private void LogPerfSummaryIfDue(DashboardMetrics metrics)
     {
         var nowUtc = DateTime.UtcNow;
@@ -2956,6 +2973,16 @@ public sealed class DashboardViewModel : ObservableObject
         {
             return;
         }
+
+        // Bỏ qua nếu số liệu (band thô) không đổi và chưa tới heartbeat — tránh lặp 1 dòng/phút khi ổn định.
+        var signature = BuildPerfSummarySignature(metrics);
+        if (_lastPerfSummaryAtUtc != DateTime.MinValue
+            && string.Equals(_lastPerfSummarySignature, signature, StringComparison.Ordinal)
+            && (nowUtc - _lastPerfSummaryAtUtc) < TimeSpan.FromSeconds(PerfSummaryHeartbeatSeconds))
+        {
+            return;
+        }
+        _lastPerfSummarySignature = signature;
 
         SafeVmLog(
             "[MARKET][INFO] Perf summary: " +
@@ -2995,12 +3022,13 @@ public sealed class DashboardViewModel : ObservableObject
             || _portfolioCoordinator.LiveSellCount > _runtimeConfigState.CurrentMaxSellOpens;
         var toolOverTrackingViolation =
             toolRowsA > coordinatorActiveCount || toolRowsB > coordinatorActiveCount;
+        var autoPairCapViolation = liveAutoPairCount > _runtimeConfigState.CurrentMaxTotalOpens;
 
         var hasInvariantViolation =
             quotaTotalViolation
             || quotaSideViolation
             || toolOverTrackingViolation
-            || liveAutoPairCount > _runtimeConfigState.CurrentMaxTotalOpens;
+            || autoPairCapViolation;
         if (!hasInvariantViolation)
         {
             if (_isAutoOpenPausedByInvariant)
@@ -3026,17 +3054,72 @@ public sealed class DashboardViewModel : ObservableObject
 
         _invariantClearStreak = 0;
 
+        // Self-heal: nếu drift chỉ là coordinator under-count (toolOverTracking) mà trạng thái vật lý
+        // trên MMF vẫn hợp lệ ≤ cap, rebuild slot từ MMF để watchdog tự nhả thay vì pause vĩnh viễn.
+        // Đây là integrity/recovery (giống resync lúc Start) — KHÔNG tạo open/close dispatch (Rule E safe).
+        var rebuilt = BuildResyncedOpenSlots(tradeLeftResult.Records, tradeRightResult.Records);
+        var rebuiltBuyCount = rebuilt.Count(s => s.Side == TradingPositionSide.Buy);
+        var rebuiltSellCount = rebuilt.Count(s => s.Side == TradingPositionSide.Sell);
+        var hasOpenOrCloseInFlight =
+            _autoOpenInFlightBuy != 0
+            || _autoOpenInFlightSell != 0
+            || _autoCloseInFlight != 0
+            || _activeAutoCloseRecoveryCycle is not null
+            || _portfolioCoordinator.PendingCloseSlots.Count > 0;
+        var action = WatchdogSelfHealDecision.Decide(
+            quotaTotalViolation,
+            quotaSideViolation,
+            autoPairCapViolation,
+            toolOverTrackingViolation,
+            coordinatorActiveCount,
+            rebuilt.Count,
+            rebuiltBuyCount,
+            rebuiltSellCount,
+            _runtimeConfigState.CurrentMaxTotalOpens,
+            _runtimeConfigState.CurrentMaxBuyOpens,
+            _runtimeConfigState.CurrentMaxSellOpens,
+            hasOpenOrCloseInFlight);
+
+        var tradeMapNameA = TradeTab.LeftPanel.TargetMapName;
+        var tradeMapNameB = TradeTab.RightPanel.TargetMapName;
+        var mapsNamed = !string.IsNullOrWhiteSpace(tradeMapNameA) && !string.IsNullOrWhiteSpace(tradeMapNameB);
+        var throttleElapsed =
+            (DateTime.UtcNow - _lastWatchdogSelfHealAtUtc).TotalSeconds >= WatchdogSelfHealMinIntervalSeconds;
+        var canSelfHeal = action == WatchdogAction.SelfHeal && mapsNamed && throttleElapsed;
+
+        var watchdogMessage =
+            $"toolA={toolRowsA},toolB={toolRowsB},autoPairs={liveAutoPairCount}, " +
+            $"slotsActive={coordinatorActiveCount}/{_runtimeConfigState.CurrentMaxTotalOpens}, " +
+            $"liveBuy={_portfolioCoordinator.LiveBuyCount}/{_runtimeConfigState.CurrentMaxBuyOpens}, " +
+            $"liveSell={_portfolioCoordinator.LiveSellCount}/{_runtimeConfigState.CurrentMaxSellOpens}, " +
+            $"cond=[quotaTotal={quotaTotalViolation},quotaSide={quotaSideViolation}," +
+            $"toolOver={toolOverTrackingViolation},autoPairCap={autoPairCapViolation}], " +
+            $"action={action},selfHeal={canSelfHeal}(maps={mapsNamed},throttleOk={throttleElapsed}), " +
+            $"rebuild={rebuilt.Count}(buy={rebuiltBuyCount},sell={rebuiltSellCount}), " +
+            $"coordSlots=[{FormatCoordinatorSlotPairIds()}], " +
+            $"toolTicketsA=[{FormatToolOpenedTickets(tradeLeftResult)}], " +
+            $"toolTicketsB=[{FormatToolOpenedTickets(tradeRightResult)}]";
+
+        if (canSelfHeal)
+        {
+            // ApplyResyncedOpenSlots rebuild coordinator từ MMF + clear _isAutoOpenPausedByInvariant + reset streak.
+            ApplyResyncedOpenSlots(rebuilt, tradeMapNameA, tradeMapNameB);
+            _lastWatchdogSelfHealAtUtc = DateTime.UtcNow;
+            SafeVmLog(
+                $"[WATCHDOG][INFO] Self-heal: rebuilt {rebuilt.Count} slot(s) from MMF, auto-open resumed. {watchdogMessage}");
+            AddSignalLog(
+                $"    - [{DateTime.Now:HH:mm:ss.fff}] Watchdog self-heal: rebuilt {rebuilt.Count} slot(s), auto-open resumed");
+            _ = PersistCurrentSlotsSnapshotAsync("watchdog-self-heal");
+            return;
+        }
+
+        // Không self-heal (vi phạm thật / close đang chạy / throttle / map chưa sẵn sàng) → pause.
         if (_isAutoOpenPausedByInvariant)
         {
             return;
         }
 
         _isAutoOpenPausedByInvariant = true;
-        var watchdogMessage =
-            $"toolA={toolRowsA},toolB={toolRowsB},autoPairs={liveAutoPairCount}, " +
-            $"slotsActive={coordinatorActiveCount}/{_runtimeConfigState.CurrentMaxTotalOpens}, " +
-            $"liveBuy={_portfolioCoordinator.LiveBuyCount}/{_runtimeConfigState.CurrentMaxBuyOpens}, " +
-            $"liveSell={_portfolioCoordinator.LiveSellCount}/{_runtimeConfigState.CurrentMaxSellOpens}";
         SafeVmLog($"[WATCHDOG][WARN] Invariant violation detected: {watchdogMessage}. state=PAUSED");
         AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Watchdog paused: {watchdogMessage}");
     }
@@ -3063,6 +3146,32 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         return tradeResult.Records.Count(r => _pairIdByTicket.ContainsKey(r.Ticket));
+    }
+
+    /// <summary>
+    /// Diagnostic: liệt kê PairId các slot coordinator đang giữ (L=Live, PO=PendingOpen, PC=PendingClose).
+    /// </summary>
+    private string FormatCoordinatorSlotPairIds()
+    {
+        var live = _portfolioCoordinator.LiveSlots.Select(s => $"L:{s.PairId}");
+        var pendingOpen = _portfolioCoordinator.PendingOpenSlots.Select(s => $"PO:{s.PairId}");
+        var pendingClose = _portfolioCoordinator.PendingCloseSlots.Select(s => $"PC:{s.PairId}");
+        return string.Join(",", live.Concat(pendingOpen).Concat(pendingClose));
+    }
+
+    /// <summary>
+    /// Diagnostic: liệt kê ticket:pairId các lệnh đang mở do tool mở (có trong _pairIdByTicket) trên 1 sàn.
+    /// </summary>
+    private string FormatToolOpenedTickets(SharedMapReadResult<TradeSharedRecord> tradeResult)
+    {
+        if (!tradeResult.IsMapAvailable || !tradeResult.IsParseSuccess)
+        {
+            return string.Empty;
+        }
+
+        return string.Join(",", tradeResult.Records
+            .Where(r => _pairIdByTicket.ContainsKey(r.Ticket))
+            .Select(r => $"{r.Ticket}:{_pairIdByTicket[r.Ticket]}"));
     }
 
     private int CountLiveAutoPairCount(
@@ -6219,6 +6328,28 @@ public sealed class DashboardViewModel : ObservableObject
     {
         var tracked = BuildTrackedResyncedOpenSlots(recordsA, recordsB);
         return tracked.Count > 0 ? tracked : BuildInferredResyncedOpenSlots(recordsA, recordsB);
+    }
+
+    /// <summary>
+    /// Lõi đồng bộ của resync: rebuild coordinator slots từ MMF tool-pair đang mở (integrity/recovery —
+    /// KHÔNG tạo open/close dispatch, Rule E safe). Trả số slot đã rebuild; 0 nếu không có pair pairable.
+    /// Caller tự lo persist + log ngữ cảnh, và phải verify maps healthy trước khi gọi.
+    /// Dùng chung bởi <see cref="ResyncOpenTradesAsync"/> (Start) và self-heal watchdog.
+    /// </summary>
+    private int TryRebuildCoordinatorFromMmf(
+        IReadOnlyList<TradeSharedRecord> recordsA,
+        IReadOnlyList<TradeSharedRecord> recordsB,
+        string tradeMapNameA,
+        string tradeMapNameB)
+    {
+        var resyncedSlots = BuildResyncedOpenSlots(recordsA, recordsB);
+        if (resyncedSlots.Count == 0)
+        {
+            return 0;
+        }
+
+        ApplyResyncedOpenSlots(resyncedSlots, tradeMapNameA, tradeMapNameB);
+        return resyncedSlots.Count;
     }
 
     private List<ResyncedOpenSlot> BuildTrackedResyncedOpenSlots(

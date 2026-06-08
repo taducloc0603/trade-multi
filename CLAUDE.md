@@ -80,6 +80,11 @@ DB integration deferred).
   2. `CloseRemainingLegAfterExternalCloseAsync` — đóng leg còn lại khi 1 leg bị đóng bên ngoài (EA/broker/tay).
   3. `RetryCloseLegByPendingAsync` — chỉ hoàn tất một close ĐÃ được signal trigger trước đó (retry execution).
   4. Manual open/close buttons — dormant, ẩn qua `IsManualTradeButtonsVisible=false` (Phase 6).
+  5. Watchdog self-heal resync — khi coordinator under-count drift (số tool-pair mở thật trên MMF >
+     số slot coordinator giữ, nhưng trạng thái vật lý vẫn ≤ cap), `EvaluateAndApplyAutoOpenInvariantWatchdog`
+     gọi `TryRebuildCoordinatorFromMmf` (dùng chung với resync lúc Start) để rebuild slot từ MMF, KHÔNG tạo
+     open/close. Có guard: chỉ resync khi rebuild ≤ cap, rebuild > coordinator, không close/open dang dở,
+     và throttle `WatchdogSelfHealMinIntervalSeconds`. Decision thuần ở `WatchdogSelfHealDecision.Decide`.
 - **Khi thêm path mở/đóng mới**: nếu KHÔNG qua signal engine thì BẮT BUỘC phải là recovery/integrity
   rõ ràng, có guard chống đóng/mở nhầm, và phải document thêm vào danh sách exception ở trên.
 
@@ -175,7 +180,7 @@ TradeDesktop.Tests/            # xUnit tests
 - Per-side in-flight lock: `_autoOpenInFlightBuy` / `Sell` (Phase 3).
 
 ### Cooldown
-- Cooldown đo từ **MMF confirm**, không phải tool click.
+- Cooldown kick tại **DISPATCH time** (lúc tool gửi request — qua `AllocatePendingOpenSlot` / `MarkSlotCloseTriggered`), KHÔNG phải confirm time (Phase 8). MAX semantics: lock chỉ extend, confirm không reset.
 - App restart luôn kích cooldown mới (`coordinator.RecoverSlotsFromPersisted` kicks startup cooldown).
 - Manual buttons hidden (Phase 6 `IsManualTradeButtonsVisible=false`) — không có path bypass cooldown.
 
@@ -183,6 +188,12 @@ TradeDesktop.Tests/            # xUnit tests
 - Config load theo `MachineHostName` (lowercase, normalize).
 - `SyncPortfolioCoordinatorConfig` push từ `RuntimeConfigState` → coordinator. Gọi mỗi `ApplyRuntimeConfig`.
 - Recovery slots verify với MMF → slot không match → discard (orphan handling chưa wire, Phase 5 deferred).
+- **Coordinator under-count drift → invariant watchdog pause vĩnh viễn**: `BeginWaitAfterClose`
+  (adapter) gỡ slot `PendingCloseSlots.First() ?? LiveSlots.First()` — KHÔNG khớp PairId pair vừa đóng;
+  với ≥2 pair mở có thể gỡ nhầm slot còn sống → `coordinatorActiveCount < toolRows` → `toolOverTrackingViolation`
+  latch mãi (không bao giờ đủ 10 clean polls). Watchdog có **self-heal**: khi drift mà rebuild từ MMF ≤ cap,
+  tự resync để nhả (xem Rule E exception #5). Log `[WATCHDOG][WARN]` đã in chi tiết `cond/coordSlots/toolTickets/rebuild`
+  để debug khi self-heal không nhả (vd vi phạm thật quotaSide).
 - DB field `current_slots` là JSON list (Phase 5).
 
 ### Closing wrong trade (Phase 4)
@@ -262,7 +273,7 @@ New code MUST NOT introduce new failures.
 - ❌ Đừng share `CloseSignalEngine` giữa slots — Rule D requires isolated window state.
 - ❌ Đừng dùng scalar state (`CurrentOpenMode`, `CurrentPositionSide`) ở code mới — dùng `PositionSlot`.
 - ❌ Đừng đếm quota chỉ theo Live — phải bao gồm `PendingOpen + PendingClose`.
-- ❌ Đừng kích cooldown từ tool click — phải đợi MMF confirm.
+- ❌ Đừng kích cooldown tại confirm time — phải kick tại DISPATCH time (Phase 8); confirm KHÔNG reset lock (MAX semantics chỉ extend).
 - ❌ Đừng modify `TradingFlowEngine.cs` cũ — `[Obsolete]`, dùng `PortfolioCoordinator`.
 - ❌ Đừng hardcode profit threshold cho Rule D — Rule D pick max, không filter.
 - ❌ Đừng remove logs `[CYCLE]` `[SLOT]` `[CLOSE_SELECT]` — cần cho debug production.

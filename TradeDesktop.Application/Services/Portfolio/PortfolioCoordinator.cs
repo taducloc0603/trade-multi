@@ -47,6 +47,17 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     // Phase 8: track cooldown block state changes để log entry/exit (tránh spam tick log).
     private bool _wasBlockedByCooldownLastTick;
 
+    // Log throttle: TP_CHECK log lại ngay khi band đổi (profit vượt ngưỡng confirm/TP), ngoài ra mỗi slot
+    // tối đa 1 lần / TpCheckLogMinIntervalSeconds (tránh spam mỗi tick).
+    private readonly Dictionary<int, DateTime> _lastTpCheckLogAtUtc = new();
+    private readonly Dictionary<int, string> _lastTpCheckBand = new();
+    private const int TpCheckLogMinIntervalSeconds = 30;
+
+    // Log throttle: [SLOT][SKIP] Open blocked — log khi (side|reason) đổi HOẶC quá interval (tránh spam mỗi tick).
+    private string _lastOpenSkipSignature = string.Empty;
+    private DateTime _lastOpenSkipLogAtUtc;
+    private const int OpenSkipLogMinIntervalSeconds = 30;
+
     public PortfolioCoordinator(
         IOpenSignalEngine openSignalEngine,
         ICloseSignalEngineFactory closeSignalEngineFactory,
@@ -141,7 +152,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                     : TradingPositionSide.Sell;
                 if (!CanOpenNewSlot(side, out var blockReason))
                 {
-                    _logger?.Log($"[SLOT][SKIP] Open {side} blocked: {blockReason}");
+                    LogOpenSkipThrottled(side, blockReason, effectiveNow);
                     continue;
                 }
 
@@ -159,7 +170,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             if (slot.IsCloseExecutionPending) continue;
             if (!IsHoldingElapsedOrFloorReached(slot, effectiveNow)) continue;
 
-            LogTpCheck(slot, config);
+            LogTpCheck(slot, config, effectiveNow);
 
             var closeTrigger = slot.CloseSignalEngine.ProcessSnapshot(
                 snapshot,
@@ -351,6 +362,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
         slot.MarkCloseConfirmed(confirmedAtUtc);
         Interlocked.Increment(ref _totalClosesAllTime);
+        _lastTpCheckLogAtUtc.Remove(slot.SlotId);
+        _lastTpCheckBand.Remove(slot.SlotId);
 
         // Phase 8: cooldown ĐÃ được set tại close dispatch (MarkSlotCloseTriggered).
         // Tại confirm chỉ log + update slot status, không reset cooldown.
@@ -390,23 +403,57 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         slot.UpdateProfit(ticket, profit);
     }
 
-    private void LogTpCheck(PositionSlot slot, GapSignalConfirmationConfig config)
+    private void LogTpCheck(PositionSlot slot, GapSignalConfirmationConfig config, DateTime effectiveNow)
     {
         if (config.CloseTpProfit <= 0d)
         {
             return;
         }
 
-        var profitText = slot.HasCompleteProfitSnapshot && slot.LastProfitSnapshot.HasValue
-            ? slot.LastProfitSnapshot.Value.ToString("0.00", CultureInfo.InvariantCulture)
+        var profitValue = slot.HasCompleteProfitSnapshot && slot.LastProfitSnapshot.HasValue
+            ? slot.LastProfitSnapshot
+            : (double?)null;
+        var band = TpCheckLogBand.Resolve(profitValue, config.CloseConfirmTpProfit, config.CloseTpProfit);
+
+        // Throttle: log lại NGAY khi band đổi (profit vượt confirm/TP — mốc sắp đóng), ngoài ra mỗi slot
+        // tối đa 1 dòng / TpCheckLogMinIntervalSeconds (tránh spam mỗi tick).
+        var bandChanged = !_lastTpCheckBand.TryGetValue(slot.SlotId, out var prevBand)
+            || !string.Equals(prevBand, band, StringComparison.Ordinal);
+        var intervalElapsed = !_lastTpCheckLogAtUtc.TryGetValue(slot.SlotId, out var lastLogAt)
+            || (effectiveNow - lastLogAt) >= TimeSpan.FromSeconds(TpCheckLogMinIntervalSeconds);
+        if (!bandChanged && !intervalElapsed)
+        {
+            return;
+        }
+        _lastTpCheckLogAtUtc[slot.SlotId] = effectiveNow;
+        _lastTpCheckBand[slot.SlotId] = band;
+
+        var profitText = profitValue.HasValue
+            ? profitValue.Value.ToString("0.00", CultureInfo.InvariantCulture)
             : "incomplete";
 
         _logger?.Log(
-            $"[SLOT][TP_CHECK] slot={slot.SlotId} profit={profitText} " +
+            $"[SLOT][TP_CHECK] slot={slot.SlotId} band={band} profit={profitText} " +
             $"confirm={Math.Abs(config.CloseConfirmTpProfit).ToString("0.00", CultureInfo.InvariantCulture)} " +
             $"tp={Math.Abs(config.CloseTpProfit).ToString("0.00", CultureInfo.InvariantCulture)} " +
             $"holdMs={Math.Max(0, config.CloseHoldConfirmMs)} " +
             $"maxTick={Math.Max(0, config.CloseMaxTimesTick)}");
+    }
+
+    // Throttle [SLOT][SKIP] Open blocked: log khi (side|reason) đổi HOẶC quá interval — tránh spam mỗi tick khi quota full / opposite-lock.
+    private void LogOpenSkipThrottled(TradingPositionSide side, string blockReason, DateTime effectiveNow)
+    {
+        var signature = $"{side}|{blockReason}";
+        var changed = !string.Equals(_lastOpenSkipSignature, signature, StringComparison.Ordinal);
+        var intervalElapsed = (effectiveNow - _lastOpenSkipLogAtUtc) >= TimeSpan.FromSeconds(OpenSkipLogMinIntervalSeconds);
+        if (!changed && !intervalElapsed)
+        {
+            return;
+        }
+
+        _lastOpenSkipSignature = signature;
+        _lastOpenSkipLogAtUtc = effectiveNow;
+        _logger?.Log($"[SLOT][SKIP] Open {side} blocked: {blockReason}");
     }
 
     // ===== Rule checks (Phase 2) =====
