@@ -51,14 +51,15 @@ public static class SignalEntryGuard
     }
 
     /// <summary>
-    /// Kiểm tra tuần tự 4 điều kiện. Trả về CanTrade=false + lý do nếu fail.
+    /// Kiểm tra tuần tự 5 điều kiện. Trả về CanTrade=false + lý do nếu fail.
     /// </summary>
     public static GuardResult Check(
         GapSignalTriggerResult trigger,
         DashboardMetrics? metrics,
         GuardConfig config,
         Queue<PriceHistoryEntry> priceHistory,
-        int holdConfirmMs)
+        int holdConfirmMs,
+        int closeHoldConfirmMs = 0)
     {
         // 1. Latency
         var latencyResult = CheckLatency(metrics, config.ConfirmLatencyMs);
@@ -75,6 +76,10 @@ public static class SignalEntryGuard
         // 4. Price freeze
         var freezeResult = CheckPriceFreeze(trigger.TriggeredAtUtc, priceHistory, holdConfirmMs);
         if (!freezeResult.CanTrade) return freezeResult;
+
+        // 5. TP freeze (chỉ áp dụng close theo TP) — profit đi ngang suốt cửa sổ confirm
+        var tpFreezeResult = CheckTpFreeze(trigger, closeHoldConfirmMs);
+        if (!tpFreezeResult.CanTrade) return tpFreezeResult;
 
         return new GuardResult(true, null);
     }
@@ -192,6 +197,26 @@ public static class SignalEntryGuard
         if (first.AskB is decimal askB0 && window.All(e => e.AskB == first.AskB))
             return new GuardResult(false,
                 $"Giá Ask sàn B đóng băng suốt {holdConfirmMs} ms ({askB0.ToString("0.#####", CultureInfo.InvariantCulture)})");
+
+        return new GuardResult(true, null);
+    }
+
+    /// <summary>
+    /// TP freeze: với close theo TP, nếu mọi mẫu profit trong cửa sổ confirm đều giống nhau
+    /// (làm tròn 2 chữ số như log) thì coi là profit đóng băng → reject.
+    /// So sánh theo chuỗi "0.00" để khớp đúng giá trị hiển thị trong log.
+    /// </summary>
+    private static GuardResult CheckTpFreeze(GapSignalTriggerResult trigger, int closeHoldConfirmMs)
+    {
+        if (trigger.CloseReason != CloseSignalReason.Tp) return new GuardResult(true, null);
+
+        var profits = trigger.CloseTpProfits;
+        if (profits is null || profits.Count < 2) return new GuardResult(true, null); // cần ≥2 mẫu
+
+        var first = profits[0].ToString("0.00", CultureInfo.InvariantCulture);
+        if (profits.All(p => p.ToString("0.00", CultureInfo.InvariantCulture) == first))
+            return new GuardResult(false,
+                $"TP đóng băng suốt {closeHoldConfirmMs} ms ({first})");
 
         return new GuardResult(true, null);
     }

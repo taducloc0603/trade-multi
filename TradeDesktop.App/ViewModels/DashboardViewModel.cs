@@ -5730,7 +5730,9 @@ public sealed class DashboardViewModel : ObservableObject
                 MaxGap: _runtimeConfigState.CurrentMaxGap,
                 MaxSpread: _runtimeConfigState.CurrentMaxSpread,
                 PointMultiplier: _runtimeConfigState.CurrentPoint);
-            var guardResult = SignalEntryGuard.Check(trigger, metrics, guardConfig, _priceHistory, holdMs);
+            var guardResult = SignalEntryGuard.Check(
+                trigger, metrics, guardConfig, _priceHistory, holdMs,
+                _runtimeConfigState.CurrentCloseHoldConfirmMs);
             if (!guardResult.CanTrade)
             {
                 SafeVmLog(
