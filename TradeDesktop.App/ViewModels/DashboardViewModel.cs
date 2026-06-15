@@ -799,8 +799,9 @@ public sealed class DashboardViewModel : ObservableObject
             var priceA = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeA.Bid, snapshot?.ExchangeA.Ask, isBuy: true);
             var priceB = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeB.Bid, snapshot?.ExchangeB.Ask, isBuy: false);
             var spreadText = BuildSpreadPtsText(snapshot);
-            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, slot, "B", "SELL", symbolB, priceB, gap, spreadText));
-            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, slot, "A", "BUY", symbolA, priceA, gap, spreadText));
+            var displayStt = ResolveDisplayStt(BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: false), slot);
+            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "B", "SELL", symbolB, priceB, gap, spreadText));
+            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "A", "BUY", symbolA, priceA, gap, spreadText));
 
             _manualSlot++;
             ShowManualTradeFeedback("BUY", result);
@@ -860,8 +861,9 @@ public sealed class DashboardViewModel : ObservableObject
             var priceA = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeA.Bid, snapshot?.ExchangeA.Ask, isBuy: false);
             var priceB = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeB.Bid, snapshot?.ExchangeB.Ask, isBuy: true);
             var spreadText = BuildSpreadPtsText(snapshot);
-            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, slot, "B", "BUY", symbolB, priceB, gap, spreadText));
-            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, slot, "A", "SELL", symbolA, priceA, gap, spreadText));
+            var displayStt = ResolveDisplayStt(BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: false), slot);
+            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "B", "BUY", symbolB, priceB, gap, spreadText));
+            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "A", "SELL", symbolA, priceA, gap, spreadText));
 
             _manualSlot++;
             ShowManualTradeFeedback("SELL", result);
@@ -929,13 +931,16 @@ public sealed class DashboardViewModel : ObservableObject
 
         // Phase 1 Manual Close log
         var now = DateTime.Now;
+        var displayStt = ResolveDisplayStt(
+            ResolvePairIdForClose(selectA.Request?.Ticket ?? selectB.Request?.Ticket, slot, appCloseRequestRawMs, isAutoFlow: false),
+            slot);
         if (selectA.TradeType.HasValue)
         {
             var isBuyA = selectA.TradeType.Value == 0;
             var typeA = SignalLogFormatter.TradeTypeString(selectA.TradeType.Value);
             var symbolA = selectA.Symbol ?? "-";
             var closePriceA = SignalLogFormatter.ResolveClosePrice(snapshot?.ExchangeA.Bid, snapshot?.ExchangeA.Ask, isBuyA);
-            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualClose(now, slot, "A", typeA, symbolA, closePriceA));
+            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualClose(now, displayStt, "A", typeA, symbolA, closePriceA));
         }
 
         if (selectB.TradeType.HasValue)
@@ -944,7 +949,7 @@ public sealed class DashboardViewModel : ObservableObject
             var typeB = SignalLogFormatter.TradeTypeString(selectB.TradeType.Value);
             var symbolB = selectB.Symbol ?? "-";
             var closePriceB = SignalLogFormatter.ResolveClosePrice(snapshot?.ExchangeB.Bid, snapshot?.ExchangeB.Ask, isBuyB);
-            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualClose(now, slot, "B", typeB, symbolB, closePriceB));
+            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualClose(now, displayStt, "B", typeB, symbolB, closePriceB));
         }
 
         AppendCloseSelectionDiagnostics(selectA, selectB);
@@ -1284,8 +1289,9 @@ public sealed class DashboardViewModel : ObservableObject
                 var triggerLastGap = trigger.LastBuyGap;
                 var triggerAllGaps = trigger.BuyGaps;
                 var spreadText = BuildSpreadPtsText(_runtimeConfigState.CurrentDashboardMetrics);
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, slot, "B", "SELL", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, slot, "A", "BUY", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                var displayStt = ResolveDisplayStt(pairId, slot);
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "B", "SELL", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "A", "BUY", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
                 _autoSlot++;
             });
         }
@@ -1442,8 +1448,9 @@ public sealed class DashboardViewModel : ObservableObject
                 var triggerLastGap = trigger.LastSellGap;
                 var triggerAllGaps = trigger.SellGaps;
                 var spreadText = BuildSpreadPtsText(_runtimeConfigState.CurrentDashboardMetrics);
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, slot, "B", "BUY", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, slot, "A", "SELL", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                var displayStt = ResolveDisplayStt(pairId, slot);
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "B", "BUY", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "A", "SELL", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
                 _autoSlot++;
             });
         }
@@ -1630,7 +1637,7 @@ public sealed class DashboardViewModel : ObservableObject
                         isBuyA);
                     SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoClose(
                         now,
-                        slot,
+                        ResolveDisplayStt(targetSlot?.PairId, slot),
                         "A",
                         typeA,
                         symbolA,
@@ -1656,7 +1663,7 @@ public sealed class DashboardViewModel : ObservableObject
                         isBuyB);
                     SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoClose(
                         now,
-                        slot,
+                        ResolveDisplayStt(targetSlot?.PairId, slot),
                         "B",
                         typeB,
                         symbolB,
@@ -4964,7 +4971,7 @@ public sealed class DashboardViewModel : ObservableObject
             var openTypeText = SignalLogFormatter.TradeTypeString(newRecord.TradeType);
             SignalLogItems.Insert(0, SignalLogFormatter.FormatOpenConfirm(
                 DateTime.Now,
-                pendingRequest.SlotNumber,
+                ResolveDisplayStt(pendingRequest.PairId, pendingRequest.SlotNumber),
                 pendingRequest.ExchangeLabel,
                 openTypeText,
                 newRecord.Symbol,
@@ -5148,7 +5155,7 @@ public sealed class DashboardViewModel : ObservableObject
             var closeTypeText = SignalLogFormatter.TradeTypeString(record.TradeType);
             SignalLogItems.Insert(0, SignalLogFormatter.FormatCloseConfirm(
                 DateTime.Now,
-                pendingRequest.SlotNumber,
+                ResolveDisplayStt(pendingRequest.PairId, pendingRequest.SlotNumber),
                 pendingRequest.ExchangeLabel,
                 closeTypeText,
                 record.Symbol,
@@ -5286,6 +5293,14 @@ public sealed class DashboardViewModel : ObservableObject
                 openExecution: FormatExecutionMs(openExecutionMs),
                 closeExecution: FormatCloseExecutionDebug(record.CloseEaTimeLocal, closeRequest?.AppCloseRequestRawMs, closeExecutionMs));
         });
+
+    // stt hiển thị cho signal log = đúng STT mà grid history/trade dùng (ResolveStt theo pairId).
+    // Cùng pairId → cùng số → dò ngược log ↔ grid khớp. Fallback số legacy khi pairId chưa hợp lệ.
+    private int ResolveDisplayStt(string? pairId, int fallback)
+        => int.TryParse(
+            ResolveStt(pairId ?? string.Empty),
+            NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)
+            ? v : fallback;
 
     private string ResolveStt(string pairId)
     {
