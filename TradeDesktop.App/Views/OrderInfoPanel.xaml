@@ -435,27 +435,35 @@
                                     <Setter Property="FontWeight" Value="SemiBold" />
                                     <Setter Property="Foreground" Value="#475467" />
                                     <Setter Property="Background" Value="#FAFBFC" />
+                                    <Setter Property="Padding" Value="4,2" />
                                 </Style>
                             </DataGrid.ColumnHeaderStyle>
 
+                            <DataGrid.CellStyle>
+                                <Style TargetType="DataGridCell">
+                                    <Setter Property="Padding" Value="3,0" />
+                                    <Setter Property="BorderThickness" Value="0" />
+                                </Style>
+                            </DataGrid.CellStyle>
+
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="STT" Binding="{Binding Stt}" Width="55" />
-                                <DataGridTextColumn Header="Open EA Time Local" Binding="{Binding OpenEaTimeLocal}" Width="180" />
-                                <DataGridTextColumn Header="PairId" Binding="{Binding PairId}" Width="170" />
-                                <DataGridTextColumn Header="Ticket" Binding="{Binding Ticket}" Width="110" />
-                                <DataGridTextColumn Header="Profit" Binding="{Binding Profit}" Width="95" />
-                                <DataGridTextColumn Header="Symbol" Binding="{Binding Symbol}" Width="90" />
-                                <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="60" />
-                                <DataGridTextColumn Header="Volume" Binding="{Binding Lot}" Width="80" />
-                                <DataGridTextColumn Header="Slippage" Binding="{Binding Slippage}" Width="95" />
-                                <DataGridTextColumn Header="Open execution" Binding="{Binding OpenExecution}" Width="130" />
-                                <DataGridTextColumn Header="Profit ($)" Binding="{Binding FeeSpread}" Width="95" />
-                                <DataGridTextColumn Header="Price" Binding="{Binding Price}" Width="95" />
-                                <DataGridTextColumn Header="Timestamp" Binding="{Binding Timestamp}" Width="120" />
-                                <DataGridTextColumn Header="Count" Binding="{Binding Count}" Width="70" />
-                                <DataGridTextColumn Header="SL" Binding="{Binding Sl}" Width="95" />
-                                <DataGridTextColumn Header="TP" Binding="{Binding Tp}" Width="95" />
-                                <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="180" />
+                                <DataGridTextColumn Header="STT" Binding="{Binding Stt}" Width="Auto" />
+                                <DataGridTextColumn Header="Open EA Time Local" Binding="{Binding OpenEaTimeLocal}" Width="Auto" />
+                                <DataGridTextColumn Header="PairId" Binding="{Binding PairId}" Width="Auto" />
+                                <DataGridTextColumn Header="Ticket" Binding="{Binding Ticket}" Width="Auto" />
+                                <DataGridTextColumn Header="Profit" Binding="{Binding Profit}" Width="Auto" />
+                                <DataGridTextColumn Header="Symbol" Binding="{Binding Symbol}" Width="Auto" />
+                                <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="Auto" />
+                                <DataGridTextColumn Header="Volume" Binding="{Binding Lot}" Width="Auto" />
+                                <DataGridTextColumn Header="Slippage" Binding="{Binding Slippage}" Width="Auto" />
+                                <DataGridTextColumn Header="Open execution" Binding="{Binding OpenExecution}" Width="Auto" />
+                                <DataGridTextColumn Header="Profit ($)" Binding="{Binding FeeSpread}" Width="Auto" />
+                                <DataGridTextColumn Header="Price" Binding="{Binding Price}" Width="Auto" />
+                                <DataGridTextColumn Header="Timestamp" Binding="{Binding Timestamp}" Width="Auto" />
+                                <DataGridTextColumn Header="Count" Binding="{Binding Count}" Width="Auto" />
+                                <DataGridTextColumn Header="SL" Binding="{Binding Sl}" Width="Auto" />
+                                <DataGridTextColumn Header="TP" Binding="{Binding Tp}" Width="Auto" />
+                                <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="Auto" />
                             </DataGrid.Columns>
                         </DataGrid>
                         </ScrollViewer>

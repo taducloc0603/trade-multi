@@ -398,6 +398,8 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="16" />
                                 <ColumnDefinition Width="0.4*" />
+                                <ColumnDefinition Width="16" />
+                                <ColumnDefinition Width="0.3*" />
                             </Grid.ColumnDefinitions>
 
                             <views:OrderInfoPanel Grid.Column="0" DataContext="{Binding TradeTab.LeftPanel}" />
@@ -466,12 +468,83 @@
                                                     <DataGrid.Columns>
                                                         <DataGridTextColumn Header="STT" Binding="{Binding Stt}" Width="55" />
                                                         <DataGridTextColumn Header="Profit realtime" Binding="{Binding ProfitRealtime}" Width="120" />
-                                                        <DataGridTemplateColumn Header="" Width="70">
+                                                    </DataGrid.Columns>
+                                                </DataGrid>
+                                            </ScrollViewer>
+                                        </Border>
+                                    </Border>
+                                </Grid>
+                            </Border>
+
+                            <Border Grid.Column="6"
+                                    CornerRadius="10"
+                                    Padding="10"
+                                    Background="#FAFBFC"
+                                    BorderBrush="#EEF1F5"
+                                    BorderThickness="1">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="8" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Text="Close"
+                                               FontWeight="SemiBold"
+                                               Foreground="#344054" />
+
+                                    <Border Grid.Row="2"
+                                            BorderBrush="#E4E7EC"
+                                            BorderThickness="1"
+                                            CornerRadius="8"
+                                            Background="White"
+                                            Padding="8">
+                                        <Border BorderBrush="#EEF1F5"
+                                                BorderThickness="1"
+                                                CornerRadius="6"
+                                                Padding="6"
+                                                Background="#FAFBFC">
+                                            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                                          VerticalScrollBarVisibility="Auto">
+                                                <DataGrid ItemsSource="{Binding TradeRealtimeProfitRows}"
+                                                          AutoGenerateColumns="False"
+                                                          IsReadOnly="True"
+                                                          CanUserAddRows="False"
+                                                          CanUserDeleteRows="False"
+                                                          CanUserReorderColumns="False"
+                                                          CanUserResizeRows="False"
+                                                          CanUserSortColumns="False"
+                                                          EnableColumnVirtualization="False"
+                                                          EnableRowVirtualization="False"
+                                                          HeadersVisibility="Column"
+                                                          GridLinesVisibility="Horizontal"
+                                                          RowHeaderWidth="0"
+                                                          BorderThickness="0"
+                                                          Background="Transparent"
+                                                          Foreground="#101828"
+                                                          FontFamily="Consolas"
+                                                          FontSize="11"
+                                                          MinHeight="48"
+                                                          ScrollViewer.CanContentScroll="False"
+                                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                          ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                                                    <DataGrid.ColumnHeaderStyle>
+                                                        <Style TargetType="DataGridColumnHeader">
+                                                            <Setter Property="FontWeight" Value="SemiBold" />
+                                                            <Setter Property="Foreground" Value="#475467" />
+                                                            <Setter Property="Background" Value="#FAFBFC" />
+                                                        </Style>
+                                                    </DataGrid.ColumnHeaderStyle>
+
+                                                    <DataGrid.Columns>
+                                                        <DataGridTemplateColumn Header="" Width="*">
                                                             <DataGridTemplateColumn.CellTemplate>
                                                                 <DataTemplate>
-                                                                    <Button Content="Đóng"
+                                                                    <Button Content="{Binding Stt, StringFormat='Close({0})'}"
                                                                             FontSize="11"
                                                                             Padding="4,1"
+                                                                            Margin="0,1"
+                                                                            HorizontalAlignment="Left"
                                                                             Foreground="White"
                                                                             Background="#D92D20"
                                                                             BorderBrush="#D92D20"
