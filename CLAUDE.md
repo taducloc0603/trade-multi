@@ -79,7 +79,14 @@ DB integration deferred).
   1. `CloseOpenedLegByTimeoutAsync` — rollback leg mở dở khi sàn kia fail trong `OpenPendingTimeoutMs`.
   2. `CloseRemainingLegAfterExternalCloseAsync` — đóng leg còn lại khi 1 leg bị đóng bên ngoài (EA/broker/tay).
   3. `RetryCloseLegByPendingAsync` — chỉ hoàn tất một close ĐÃ được signal trigger trước đó (retry execution).
-  4. Manual open/close buttons — dormant, ẩn qua `IsManualTradeButtonsVisible=false` (Phase 6).
+  4. Manual open/close buttons (legacy `CloseOrderAsync`) — dormant, ẩn qua `IsManualTradeButtonsVisible=false` (Phase 6).
+  4b. **Nút "Đóng" per-pair ở tab Trade** (grid `TradeRealtimeProfitRows`) → `ManualClosePairBySlotAsync(pairId)`.
+     Đường RIÊNG coordinator-safe, ĐỘC LẬP với auto: resolve slot qua `GetSlotByPairId` (bấm là đóng ngay,
+     không modal confirm), dùng chung lock `_autoCloseInFlight` (chặn khi close khác in-flight), `MarkSlotCloseTriggered`
+     (PendingClose + cooldown) lúc dispatch, finalize qua polling gọi `CloseSlotManually(pairId)`
+     (confirm + remove slot). KHÔNG đụng `_activeAutoCycle` / `_activeAutoCloseRecoveryCycle` / `_autoSlot`,
+     KHÔNG đăng ký isAutoFlow. Pending state đánh dấu `IsManualCoordinatorClose` (chỉ set lúc tạo, không
+     reset khi retry). Đây là user-override đóng tay, KHÔNG phải auto path bỏ qua signal.
   5. Watchdog self-heal resync — khi coordinator under-count drift (số tool-pair mở thật trên MMF >
      số slot coordinator giữ, nhưng trạng thái vật lý vẫn ≤ cap), `EvaluateAndApplyAutoOpenInvariantWatchdog`
      gọi `TryRebuildCoordinatorFromMmf` (dùng chung với resync lúc Start) để rebuild slot từ MMF, KHÔNG tạo

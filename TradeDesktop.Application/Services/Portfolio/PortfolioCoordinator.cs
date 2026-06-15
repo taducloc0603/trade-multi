@@ -373,6 +373,24 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             $"profit={slot.LastProfitSnapshot:F2} closeReason={slot.LastCloseReason ?? CloseSignalReason.Gap} {lockSummary}");
     }
 
+    public void CloseSlotManually(string pairId, DateTime confirmedAtUtc)
+    {
+        var slot = _state.GetSlotByPairId(pairId);
+        if (slot is null) return;
+
+        if (slot.Status != PositionSlotStatus.Closed)
+        {
+            MarkSlotCloseConfirmed(pairId, confirmedAtUtc);
+        }
+
+        var closed = _state.GetSlotByPairId(pairId);
+        if (closed is { Status: PositionSlotStatus.Closed })
+        {
+            _state.RemoveSlot(closed);
+            _logger?.Log($"[SLOT][MANUAL_CLOSE] pairId={pairId} confirmed+removed");
+        }
+    }
+
     public PositionSlot RegisterSyncedSlot(
         string pairId,
         TradingPositionSide side,

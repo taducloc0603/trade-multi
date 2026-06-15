@@ -42,6 +42,10 @@ public interface IPortfolioCoordinator
     void MarkSlotCloseTriggered(string pairId, DateTime triggeredAtUtc);
     void MarkSlotCloseConfirmed(string pairId, DateTime confirmedAtUtc);
 
+    // Manual per-pair close finalize: confirm (nếu chưa Closed) + remove slot theo pairId.
+    // Coordinator-only — KHÔNG kick cooldown lại, KHÔNG đụng auto-cycle ViewModel state.
+    void CloseSlotManually(string pairId, DateTime confirmedAtUtc);
+
     // Phase 8: kick global cooldown trực tiếp (cho path không qua slot lifecycle:
     // external close của lệnh mồ côi, cleanup orphan, ...).
     void KickGlobalCooldown(DateTime triggeredAtUtc, string reasonSuffix);

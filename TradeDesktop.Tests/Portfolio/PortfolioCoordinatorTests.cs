@@ -104,6 +104,35 @@ public sealed class PortfolioCoordinatorTests
     }
 
     [Fact]
+    public void CloseSlotManually_RemovesSlot_AndCountsDrop()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+        Assert.Equal(1, coordinator.LiveCount);
+
+        coordinator.CloseSlotManually("p1", DateTime.UtcNow);
+
+        Assert.Null(coordinator.GetSlotByPairId("p1"));
+        Assert.Equal(0, coordinator.LiveCount);
+        Assert.Equal(0, coordinator.PendingCount);
+        Assert.Empty(coordinator.LiveSlots);
+    }
+
+    [Fact]
+    public void CloseSlotManually_WhenPairIdUnknown_IsNoOp()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+
+        coordinator.CloseSlotManually("does-not-exist", DateTime.UtcNow);
+
+        Assert.NotNull(coordinator.GetSlotByPairId("p1"));
+        Assert.Equal(1, coordinator.LiveCount);
+    }
+
+    [Fact]
     public void MarkSlotCloseTriggered_WhenSlotAlreadyPendingClose_StillKicksCooldown()
     {
         // Regression Phase 8: ProcessSnapshot (line ~179) pre-mark slot PendingClose

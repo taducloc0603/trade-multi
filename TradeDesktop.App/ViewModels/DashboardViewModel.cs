@@ -75,6 +75,7 @@ public sealed class DashboardViewModel : ObservableObject
     private DateTimeOffset? _lastAutoOpenBuyAtLocal;
     private DateTimeOffset? _lastAutoOpenSellAtLocal;
     private const int AutoOpenDebounceMs = 1500;
+    private const int ClosePendingTimeJitterMs = 200;
     private int _closeBothFlatPollStreak;
     private int _externalPartialCloseStreak = 0;
     private bool _hadBothOpenRecently = false;
@@ -204,6 +205,10 @@ public sealed class DashboardViewModel : ObservableObject
         public int RetryChecks { get; set; }
         public bool ExhaustedLogged { get; set; }
         public bool IsResolved { get; set; }
+
+        // True khi close này do nút "đóng tay" theo pairId khởi phát (đường riêng, độc lập auto).
+        // Finalize sẽ remove slot khỏi coordinator. Chỉ set lúc tạo state, không reset khi retry.
+        public bool IsManualCoordinatorClose { get; set; }
 
         public bool CloseConfirmedA { get; set; }
         public bool CloseConfirmedB { get; set; }
@@ -378,6 +383,8 @@ public sealed class DashboardViewModel : ObservableObject
         BuyCommand = new AsyncRelayCommand(BuyAsync, CanManualOpen);
         SellCommand = new AsyncRelayCommand(SellAsync, CanManualOpen);
         CloseOrderCommand = new AsyncRelayCommand(CloseOrderAsync, CanManualClose);
+        ClosePairManuallyCommand = new AsyncRelayCommand<TradePairRealtimeProfitRowViewModel?>(
+            row => ManualClosePairBySlotAsync(row?.PairId ?? string.Empty));
 
         TradeTab = new OrderInfoTabViewModel(
             OrderTabType.Trade,
@@ -622,6 +629,7 @@ public sealed class DashboardViewModel : ObservableObject
     public IAsyncRelayCommand BuyCommand { get; }
     public IAsyncRelayCommand SellCommand { get; }
     public IAsyncRelayCommand CloseOrderCommand { get; }
+    public IAsyncRelayCommand ClosePairManuallyCommand { get; }
 
     private bool CanStartTradingLogic() => !IsTradingLogicEnabled;
     private bool CanStopTradingLogic() => IsTradingLogicEnabled;
@@ -942,6 +950,123 @@ public sealed class DashboardViewModel : ObservableObject
         AppendCloseSelectionDiagnostics(selectA, selectB);
         ShowManualTradeFeedback("CLOSE", result);
         SyncTradingFlowWithLivePairState(GetLivePairTradeStateStrict());
+    }
+
+    // Đóng tay 1 cặp đang chạy theo pairId — đường RIÊNG, coordinator-safe, ĐỘC LẬP với auto flow.
+    // KHÔNG đụng _activeAutoCycle / _activeAutoCloseRecoveryCycle / _autoSlot. Chỉ chạm coordinator
+    // qua MarkSlotCloseTriggered (dispatch) + CloseSlotManually (finalize, qua polling).
+    private async Task ManualClosePairBySlotAsync(string pairId)
+    {
+        if (string.IsNullOrWhiteSpace(pairId))
+        {
+            return;
+        }
+
+        var slot = _portfolioCoordinator.GetSlotByPairId(pairId);
+        if (slot is null || slot.TicketA is not { } ticketA || slot.TicketB is not { } ticketB)
+        {
+            SafeVmLog($"[VM][WARN] Manual close skipped: no live pair for pairId={pairId}");
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                SignalLogItems.Insert(0,
+                    $"    - [{DateTime.Now:HH:mm:ss.fff}] Đóng tay bỏ qua: không tìm thấy cặp đang chạy ({pairId})"));
+            return;
+        }
+
+        if (slot.Status == PositionSlotStatus.PendingClose)
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                SignalLogItems.Insert(0,
+                    $"    - [{DateTime.Now:HH:mm:ss.fff}] Đóng tay bỏ qua: cặp {pairId} đang đóng"));
+            return;
+        }
+
+        if (slot.Status != PositionSlotStatus.Live)
+        {
+            SafeVmLog($"[VM][WARN] Manual close skipped: slot status={slot.Status} pairId={pairId}");
+            return;
+        }
+
+        // Chặn nếu một close khác (auto hoặc manual) đang in-flight — dùng chung lock với auto close.
+        if (Interlocked.CompareExchange(ref _autoCloseInFlight, 1, 0) != 0)
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                SignalLogItems.Insert(0,
+                    $"    - [{DateTime.Now:HH:mm:ss.fff}] Đóng tay bị chặn: đang có close khác in-flight"));
+            return;
+        }
+
+        try
+        {
+            var selectA = SelectCloseCandidateForTicket(
+                targetTicket: ticketA,
+                exchangeLabel: "A",
+                tradeMapName: TradeTab.LeftPanel.TargetMapName,
+                tradeHwnd: _runtimeConfigState.CurrentTradeHwndA);
+            var selectB = SelectCloseCandidateForTicket(
+                targetTicket: ticketB,
+                exchangeLabel: "B",
+                tradeMapName: TradeTab.RightPanel.TargetMapName,
+                tradeHwnd: _runtimeConfigState.CurrentTradeHwndB);
+
+            if (selectA.Request is null || selectB.Request is null)
+            {
+                SafeVmLog(
+                    $"[VM][WARN] Manual close aborted: leg unresolved pairId={pairId} " +
+                    $"A={selectA.Status} B={selectB.Status}");
+                AppendCloseSelectionDiagnostics(selectA, selectB);
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                    SignalLogItems.Insert(0,
+                        $"    - [{DateTime.Now:HH:mm:ss.fff}] Đóng tay bỏ qua: không resolve được leg ({pairId})"));
+                return;
+            }
+
+            var snapshot = _runtimeConfigState.CurrentDashboardMetrics;
+            var appCloseRequestTimeLocal = DateTimeOffset.Now;
+            var appCloseRequestRawMs = Environment.TickCount64;
+
+            // Capture pending BEFORE dispatch (chống race với polling). isAutoFlow=false.
+            CapturePendingCloseRequest(selectA, snapshot, isExchangeA: true, appCloseRequestTimeLocal, appCloseRequestRawMs, slot.SlotId);
+            CapturePendingCloseRequest(selectB, snapshot, isExchangeA: false, appCloseRequestTimeLocal, appCloseRequestRawMs, slot.SlotId);
+
+            // Đánh dấu pending state là manual-coordinator-close để finalize remove slot.
+            if (_pendingClosePairById.TryGetValue(slot.PairId, out var pendingState))
+            {
+                pendingState.IsManualCoordinatorClose = true;
+            }
+
+            // Coordinator: slot -> PendingClose (chặn auto double-close) + kick cooldown (dispatch time).
+            _portfolioCoordinator.MarkSlotCloseTriggered(slot.PairId, DateTime.UtcNow);
+
+            var result = await _tradeExecutionRouter.ClosePairAsync(
+                new TradeClosePairRequest(
+                    LegA: new TradeCloseLegRequest(
+                        Exchange: selectA.Request.Exchange,
+                        Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformA),
+                        TradeHwnd: selectA.Request.TradeHwnd,
+                        Ticket: selectA.Request.Ticket,
+                        Action: TradeLegAction.Close,
+                        RowIndex: selectA.Request.RowIndex),
+                    LegB: new TradeCloseLegRequest(
+                        Exchange: selectB.Request.Exchange,
+                        Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB),
+                        TradeHwnd: selectB.Request.TradeHwnd,
+                        Ticket: selectB.Request.Ticket,
+                        Action: TradeLegAction.Close,
+                        RowIndex: selectB.Request.RowIndex)));
+
+            NotifyOpenCloseFailures("CLOSE", result, slot.PairId);
+            AppendCloseSelectionDiagnostics(selectA, selectB);
+            ShowManualTradeFeedback("CLOSE", result);
+            SafeVmLog($"[CYCLE][INFO] Manual close dispatched: pairId={slot.PairId} slot={slot.SlotId} success={result.Success}");
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[VM][ERROR] Manual close error pairId={pairId}: {ex}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _autoCloseInFlight, 0);
+        }
     }
 
     private async Task DispatchSignalTradeAsync(GapSignalTriggerResult trigger)
@@ -2017,6 +2142,16 @@ public sealed class DashboardViewModel : ObservableObject
         Debug.WriteLine($"[ExecClose][Capture] map={key}, ticket={(ticket.HasValue ? ticket.Value.ToString(CultureInfo.InvariantCulture) : "-")}, type={tradeType}, slot={slotNumber}, label={exchangeLabel}, app_close_request_time={pending.AppCloseRequestTimeLocal:O}, app_close_request_raw_ms={pending.AppCloseRequestRawMs}");
     }
 
+    // Close pending timeout dùng làm khoảng chờ giữa các lần retry confirm close.
+    // Random hóa trong [base, base+jitter] để khoảng retry không đều nhau; giữ semantics
+    // disable khi base<=0 (timeout<=0 → skip retry). Sinh mới cho MỖI chu kỳ chờ.
+    private static int NextClosePendingTimeoutMs(int baseMs)
+    {
+        var b = Math.Max(0, baseMs);
+        if (b <= 0) return 0;
+        return Random.Shared.Next(b, b + ClosePendingTimeJitterMs + 1); // [b, b+200]
+    }
+
     private void RegisterOrUpdatePendingClosePairState(PendingCloseRequest pending)
     {
         if (!_pendingClosePairById.TryGetValue(pending.PairId, out var state))
@@ -2028,12 +2163,12 @@ public sealed class DashboardViewModel : ObservableObject
                 SlotNumber = pending.SlotNumber,
                 CreatedAtLocal = pending.AppCloseRequestTimeLocal,
                 LastCheckedAtLocal = pending.AppCloseRequestTimeLocal,
-                ClosePendingTimeoutMs = Math.Max(0, _runtimeConfigState.CurrentClosePendingTimeMs)
+                ClosePendingTimeoutMs = NextClosePendingTimeoutMs(_runtimeConfigState.CurrentClosePendingTimeMs)
             };
             _pendingClosePairById[pending.PairId] = state;
         }
 
-        state.ClosePendingTimeoutMs = Math.Max(0, _runtimeConfigState.CurrentClosePendingTimeMs);
+        state.ClosePendingTimeoutMs = NextClosePendingTimeoutMs(_runtimeConfigState.CurrentClosePendingTimeMs);
 
         if (string.Equals(pending.ExchangeLabel, "A", StringComparison.OrdinalIgnoreCase))
         {
@@ -3410,11 +3545,19 @@ public sealed class DashboardViewModel : ObservableObject
                 continue;
             }
 
-            state.ClosePendingTimeoutMs = Math.Max(0, _runtimeConfigState.CurrentClosePendingTimeMs);
+            var configMs = Math.Max(0, _runtimeConfigState.CurrentClosePendingTimeMs);
+            if (configMs <= 0)
+            {
+                continue; // disable mid-flight qua config vẫn hoạt động
+            }
+
+            // Dùng giá trị random đã sinh cho chu kỳ hiện tại — KHÔNG random lại mỗi tick
+            // (tránh nhảy ngưỡng so sánh). Chỉ sinh mới nếu chưa có (registration từng =0 do config=0).
             var timeoutMs = state.ClosePendingTimeoutMs;
             if (timeoutMs <= 0)
             {
-                continue;
+                timeoutMs = NextClosePendingTimeoutMs(configMs);
+                state.ClosePendingTimeoutMs = timeoutMs;
             }
 
             if (now - state.LastCheckedAtLocal < TimeSpan.FromMilliseconds(timeoutMs))
@@ -3423,6 +3566,7 @@ public sealed class DashboardViewModel : ObservableObject
             }
 
             state.LastCheckedAtLocal = now;
+            state.ClosePendingTimeoutMs = NextClosePendingTimeoutMs(configMs); // fresh jitter cho chu kỳ retry kế tiếp
 
             var needCheckA = state.CloseConfirmedA == false && state.TicketA.HasValue;
             var needCheckB = state.CloseConfirmedB == false && state.TicketB.HasValue;
@@ -3541,6 +3685,14 @@ public sealed class DashboardViewModel : ObservableObject
     {
         if (!state.IsAutoFlow)
         {
+            // Đóng tay theo pairId: remove slot khỏi coordinator (coordinator-only, không đụng auto state).
+            if (state.IsManualCoordinatorClose)
+            {
+                _portfolioCoordinator.CloseSlotManually(state.PairId, DateTime.UtcNow);
+                SafeVmLog($"[CYCLE][INFO] Manual close resolved: pairId={state.PairId}");
+                RaiseCurrentPositionTextChanged();
+            }
+
             return;
         }
 
@@ -4589,15 +4741,17 @@ public sealed class DashboardViewModel : ObservableObject
     private void RebuildTradeRealtimeProfitRows()
     {
         var sumByStt = new Dictionary<int, double>();
+        var pairIdByStt = new Dictionary<int, string>();
 
-        AccumulateTradeProfitRows(TradeTab.LeftPanel.TradeRows, sumByStt);
-        AccumulateTradeProfitRows(TradeTab.RightPanel.TradeRows, sumByStt);
+        AccumulateTradeProfitRows(TradeTab.LeftPanel.TradeRows, sumByStt, pairIdByStt);
+        AccumulateTradeProfitRows(TradeTab.RightPanel.TradeRows, sumByStt, pairIdByStt);
 
         var rebuilt = sumByStt
             .OrderBy(x => x.Key)
             .Select(x => new TradePairRealtimeProfitRowViewModel(
                 stt: x.Key.ToString(CultureInfo.InvariantCulture),
-                profitRealtime: x.Value.ToString("0.00", CultureInfo.InvariantCulture)))
+                profitRealtime: x.Value.ToString("0.00", CultureInfo.InvariantCulture),
+                pairId: pairIdByStt.TryGetValue(x.Key, out var pid) ? pid : string.Empty))
             .ToList();
 
         TradeRealtimeProfitRows.Clear();
@@ -4609,7 +4763,8 @@ public sealed class DashboardViewModel : ObservableObject
 
     private static void AccumulateTradeProfitRows(
         IEnumerable<TradeRowViewModel> rows,
-        Dictionary<int, double> sumByStt)
+        Dictionary<int, double> sumByStt,
+        Dictionary<int, string> pairIdByStt)
     {
         foreach (var row in rows)
         {
@@ -4626,6 +4781,12 @@ public sealed class DashboardViewModel : ObservableObject
             sumByStt[stt] = sumByStt.TryGetValue(stt, out var existing)
                 ? existing + profit
                 : profit;
+
+            if (!string.IsNullOrWhiteSpace(row.PairId) && row.PairId != "-"
+                && !pairIdByStt.ContainsKey(stt))
+            {
+                pairIdByStt[stt] = row.PairId;
+            }
         }
     }
 

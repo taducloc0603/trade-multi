@@ -466,6 +466,22 @@
                                                     <DataGrid.Columns>
                                                         <DataGridTextColumn Header="STT" Binding="{Binding Stt}" Width="55" />
                                                         <DataGridTextColumn Header="Profit realtime" Binding="{Binding ProfitRealtime}" Width="120" />
+                                                        <DataGridTemplateColumn Header="" Width="70">
+                                                            <DataGridTemplateColumn.CellTemplate>
+                                                                <DataTemplate>
+                                                                    <Button Content="Đóng"
+                                                                            FontSize="11"
+                                                                            Padding="4,1"
+                                                                            Foreground="White"
+                                                                            Background="#D92D20"
+                                                                            BorderBrush="#D92D20"
+                                                                            BorderThickness="1"
+                                                                            Cursor="Hand"
+                                                                            Command="{Binding DataContext.ClosePairManuallyCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                            CommandParameter="{Binding}" />
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellTemplate>
+                                                        </DataGridTemplateColumn>
                                                     </DataGrid.Columns>
                                                 </DataGrid>
                                             </ScrollViewer>
