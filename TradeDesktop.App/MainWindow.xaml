@@ -1,4 +1,5 @@
 <Window x:Class="TradeDesktop.App.MainWindow"
+        x:Name="RootWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -540,7 +541,8 @@
                                                         <DataGridTemplateColumn Header="" Width="*">
                                                             <DataGridTemplateColumn.CellTemplate>
                                                                 <DataTemplate>
-                                                                    <Button Content="{Binding Stt, StringFormat='Close({0})'}"
+                                                                    <Button Content="{Binding Stt}"
+                                                                            ContentStringFormat="Close({0})"
                                                                             FontSize="11"
                                                                             Padding="4,1"
                                                                             Margin="0,1"
@@ -550,7 +552,7 @@
                                                                             BorderBrush="#D92D20"
                                                                             BorderThickness="1"
                                                                             Cursor="Hand"
-                                                                            Command="{Binding DataContext.ClosePairManuallyCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                            Command="{Binding DataContext.ClosePairManuallyCommand, ElementName=RootWindow}"
                                                                             CommandParameter="{Binding}" />
                                                                 </DataTemplate>
                                                             </DataGridTemplateColumn.CellTemplate>

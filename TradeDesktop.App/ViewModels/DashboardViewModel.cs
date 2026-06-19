@@ -962,8 +962,11 @@ public sealed class DashboardViewModel : ObservableObject
     // qua MarkSlotCloseTriggered (dispatch) + CloseSlotManually (finalize, qua polling).
     private async Task ManualClosePairBySlotAsync(string pairId)
     {
+        SafeVmLog($"[CYCLE][INFO] Manual close requested: pairId={pairId}");
+
         if (string.IsNullOrWhiteSpace(pairId))
         {
+            SafeVmLog("[VM][WARN] Manual close skipped: empty pairId (row chưa resolve pairId)");
             return;
         }
 
