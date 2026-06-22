@@ -126,8 +126,11 @@ public sealed class TradingFlowEngine(
     public void BeginWaitAfterClose(
         DateTime closeCompletedAtUtc,
         int startWaitSeconds,
-        int endWaitSeconds)
+        int endWaitSeconds,
+        string? closingPairId = null)
     {
+        // Legacy single-slot engine ignores closingPairId (only one position exists).
+        _ = closingPairId;
         var isWaitingClosePhase = CurrentPhase == TradingFlowPhase.WaitingCloseFromGapBuy
             || CurrentPhase == TradingFlowPhase.WaitingCloseFromGapSell;
 

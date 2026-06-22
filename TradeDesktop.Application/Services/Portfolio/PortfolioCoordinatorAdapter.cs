@@ -103,10 +103,36 @@ public sealed class PortfolioCoordinatorAdapter : ITradingFlowEngine
     public void BeginWaitAfterClose(
         DateTime closeCompletedAtUtc,
         int startWaitSeconds,
-        int endWaitSeconds)
+        int endWaitSeconds,
+        string? closingPairId = null)
     {
-        // Find any PendingClose slot. If none, also accept Live slot
-        // (resilience for race where AbortPendingCloseExecution cleared the flag).
+        if (!string.IsNullOrEmpty(closingPairId))
+        {
+            // Multi-slot: finalize EXACTLY the slot whose pairId just closed. Never fall back
+            // to an arbitrary Live slot — that would remove a still-open pair (the bug that left
+            // a live pair untracked and unclosable by hand).
+            var keyed = _coordinator.State.GetSlotByPairId(closingPairId);
+            if (keyed is not null)
+            {
+                // Mark close confirmed in coordinator (also kicks cooldown if configured).
+                _coordinator.MarkSlotCloseConfirmed(keyed.PairId, closeCompletedAtUtc);
+
+                // Remove the slot so adapter's CurrentPhase maps back to WaitingOpen.
+                _coordinator.State.RemoveSlot(keyed);
+            }
+            // else: slot already removed by another path — still finalize the wait/cooldown
+            // bookkeeping below so the cycle transitions to WaitingOpen, but touch no other slot.
+
+            _adapterClosedAtUtc = closeCompletedAtUtc;
+            _adapterClosedAtRuntimeUtc = DateTime.UtcNow;
+            _adapterCurrentWaitSeconds = NextSecondsInRange(startWaitSeconds, endWaitSeconds);
+
+            ResetQualifyingCounters();
+            return;
+        }
+
+        // Legacy single-slot path (no pairId supplied): find any PendingClose slot. If none, also
+        // accept Live slot (resilience for race where AbortPendingCloseExecution cleared the flag).
         var slot = _coordinator.PendingCloseSlots.FirstOrDefault()
                    ?? _coordinator.LiveSlots.FirstOrDefault();
         if (slot is null)

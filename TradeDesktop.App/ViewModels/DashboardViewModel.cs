@@ -3899,7 +3899,8 @@ public sealed class DashboardViewModel : ObservableObject
         _tradingFlowEngine.BeginWaitAfterClose(
             closeCompletedAtUtc,
             _portfolioCoordinator.GlobalCooldownMinSec,
-            _portfolioCoordinator.GlobalCooldownMaxSec);
+            _portfolioCoordinator.GlobalCooldownMaxSec,
+            state.PairId);
         LogFlowTransitionIfChanged("begin-wait-after-close-from-pending");
 
         if (_tradingFlowEngine.ClosedAtUtc != closeCompletedAtUtc)
@@ -4256,7 +4257,8 @@ public sealed class DashboardViewModel : ObservableObject
         _tradingFlowEngine.BeginWaitAfterClose(
             closeCompletedAtUtc,
             _portfolioCoordinator.GlobalCooldownMinSec,
-            _portfolioCoordinator.GlobalCooldownMaxSec);
+            _portfolioCoordinator.GlobalCooldownMaxSec,
+            _activeAutoCloseRecoveryCycle?.PairIdA ?? _activeAutoCloseRecoveryCycle?.PairIdB);
         LogFlowTransitionIfChanged($"finalize-close-flow source={source}");
 
         if (_tradingFlowEngine.ClosedAtUtc != closeCompletedAtUtc)
@@ -4296,7 +4298,8 @@ public sealed class DashboardViewModel : ObservableObject
         _tradingFlowEngine.BeginWaitAfterClose(
             closeCompletedAtUtc,
             _portfolioCoordinator.GlobalCooldownMinSec,
-            _portfolioCoordinator.GlobalCooldownMaxSec);
+            _portfolioCoordinator.GlobalCooldownMaxSec,
+            _activeAutoCloseRecoveryCycle?.PairIdA ?? _activeAutoCloseRecoveryCycle?.PairIdB);
         LogFlowTransitionIfChanged($"finalize-close-flow(cached) source={source}");
 
         if (_tradingFlowEngine.ClosedAtUtc != closeCompletedAtUtc)
@@ -5375,7 +5378,8 @@ public sealed class DashboardViewModel : ObservableObject
                     _tradingFlowEngine.BeginWaitAfterClose(
                         closeCompletedAtUtc,
                         _portfolioCoordinator.GlobalCooldownMinSec,
-                        _portfolioCoordinator.GlobalCooldownMaxSec);
+                        _portfolioCoordinator.GlobalCooldownMaxSec,
+                        pendingRequest.PairId);
                     LogFlowTransitionIfChanged("history-close-confirm-both-legs");
 
                     if (_tradingFlowEngine.ClosedAtUtc == closeCompletedAtUtc)

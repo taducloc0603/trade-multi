@@ -22,7 +22,8 @@ public interface ITradingFlowEngine
     void BeginWaitAfterClose(
         DateTime closeCompletedAtUtc,
         int startWaitSeconds,
-        int endWaitSeconds);
+        int endWaitSeconds,
+        string? closingPairId = null);
 
     void AbortPendingCloseExecution();
 
