@@ -108,6 +108,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public event EventHandler? StateChanged;
     public event EventHandler? QualifyingConfigChanged;
 
+    /// <summary>
+    /// Bắn riêng khi cấu hình HWND (manual columns) thay đổi — KHÁC <see cref="StateChanged"/>
+    /// (vốn bị raise mỗi ~50ms bởi UpdateDashboardMetrics). Dùng để chạy HWND health-check
+    /// đắt (native) chỉ khi config HWND thật sự đổi.
+    /// </summary>
+    public event EventHandler? ManualHwndChanged;
+
     public void Update(
         string machineHostName,
         string mapName1,
@@ -463,6 +470,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentTradeHwndB = first.TradeHwndB;
 
         StateChanged?.Invoke(this, EventArgs.Empty);
+        ManualHwndChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public (int Index, ManualHwndColumnConfig Column) GetRandomManualHwndColumn()

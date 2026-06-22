@@ -15,6 +15,7 @@ public sealed class ConfigViewModel : ObservableObject
     private readonly RuntimeConfigState _runtimeConfigState;
     private readonly IConfigService _configService;
     private readonly ITradeSessionFileLogger _tradeSessionFileLogger;
+    private readonly IHwndHealthChecker _hwndHealthChecker;
     private string _machineHostName = string.Empty;
 
     private string _mapName1 = string.Empty;
@@ -38,11 +39,13 @@ public sealed class ConfigViewModel : ObservableObject
     public ConfigViewModel(
         RuntimeConfigState runtimeConfigState,
         IConfigService configService,
-        ITradeSessionFileLogger tradeSessionFileLogger)
+        ITradeSessionFileLogger tradeSessionFileLogger,
+        IHwndHealthChecker hwndHealthChecker)
     {
         _runtimeConfigState = runtimeConfigState;
         _configService = configService;
         _tradeSessionFileLogger = tradeSessionFileLogger;
+        _hwndHealthChecker = hwndHealthChecker;
 
         CheckMap1Command = new AsyncRelayCommand(CheckMap1Async, CanCheckMap1);
         CheckMap2Command = new AsyncRelayCommand(CheckMap2Async, CanCheckMap2);
@@ -483,6 +486,19 @@ public sealed class ConfigViewModel : ObservableObject
         {
             ClearError();
             var columns = BuildManualHwndColumns();
+
+            // Re-validate HWND trước khi persist: chặn lưu nếu có handle sai định dạng /
+            // trống / cửa sổ không tồn tại (tránh lưu cấu hình hỏng rồi vẫn skip).
+            var hwndIssues = _hwndHealthChecker.Check(columns);
+            if (hwndIssues.Count > 0)
+            {
+                LoadStatus = "✖ Save thất bại";
+                ErrorMessage = "HWND không hợp lệ:" + Environment.NewLine +
+                    string.Join(Environment.NewLine,
+                        hwndIssues.Select(i => $"• {i.Label}: {(string.IsNullOrEmpty(i.Value) ? "(trống)" : i.Value)} — {ReasonText(i.Kind)}"));
+                return;
+            }
+
             var saveResult = await _configService.SaveByMachineHostNameAsync(MapName1, MapName2, PlatformA, PlatformB, columns);
             if (!saveResult.IsSuccess)
             {
@@ -520,6 +536,14 @@ public sealed class ConfigViewModel : ObservableObject
         RequestClose?.Invoke(false);
         return Task.CompletedTask;
     }
+
+    private static string ReasonText(HwndIssueKind kind) => kind switch
+    {
+        HwndIssueKind.Empty => "để trống",
+        HwndIssueKind.BadFormat => "sai định dạng (cần 0x... hoặc số thập phân)",
+        HwndIssueKind.WindowMissing => "cửa sổ không tồn tại",
+        _ => "không hợp lệ"
+    };
 
     private void RefreshDerivedState()
     {

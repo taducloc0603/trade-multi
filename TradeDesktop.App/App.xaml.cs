@@ -11,6 +11,7 @@ using TradeDesktop.App.ViewModels;
 using TradeDesktop.App.State;
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application;
+using TradeDesktop.Application.Services;
 using TradeDesktop.Infrastructure;
 
 namespace TradeDesktop.App;
@@ -50,6 +51,8 @@ public partial class App : System.Windows.Application
                     services.AddSingleton<ITradePlatformExecutor, Mt5TradeExecutor>();
                     services.AddSingleton<ITradePlatformExecutor, Mt4TradeExecutor>();
                     services.AddSingleton<ITradeExecutionRouter, TradeExecutionRouter>();
+                    services.AddSingleton<IWindowProbe, NativeWindowProbe>();
+                    services.AddSingleton<IHwndHealthChecker, HwndHealthChecker>();
                     services.AddSingleton<IRuntimeConfigProvider>(sp => sp.GetRequiredService<RuntimeConfigState>());
                     services.AddSingleton<IRuntimeConfigStateUpdater>(sp => sp.GetRequiredService<RuntimeConfigState>());
                     services.AddSingleton<DashboardViewModel>();

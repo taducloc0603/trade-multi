@@ -37,6 +37,7 @@ public sealed class DashboardViewModel : ObservableObject
     private readonly IMt5ManualTradeService _mt5ManualTradeService;
     private readonly ITradeSessionFileLogger _tradeSessionFileLogger;
     private readonly ITelegramNotifier _telegramNotifier;
+    private readonly IHwndHealthChecker _hwndHealthChecker;
     private readonly string _normalizedHostName;
     private readonly CancellationTokenSource _orderInfoPollingCts = new();
     private readonly Dictionary<string, ulong> _lastTradeTimestampByMap = new(StringComparer.Ordinal);
@@ -334,6 +335,12 @@ public sealed class DashboardViewModel : ObservableObject
     private int _selectedOrderTabIndex;
     private string _historyRealtimeProfitSummary = "0.00 | 0.00 $";
 
+    // HWND health-check / SKIP state (xem plan: phát hiện MT4/MT5 out → bỏ qua mở/đóng).
+    private volatile bool _isHwndInvalid;
+    private bool _hwndPopupShownForCurrentEpisode;
+    private DateTime _lastHwndCheckUtc = DateTime.MinValue;
+    private DateTime _lastHwndSkipLogUtc = DateTime.MinValue;
+
     public DashboardViewModel(
         IServiceProvider serviceProvider,
         RuntimeConfigState runtimeConfigState,
@@ -350,7 +357,8 @@ public sealed class DashboardViewModel : ObservableObject
         ITradeExecutionRouter tradeExecutionRouter,
         IMt5ManualTradeService mt5ManualTradeService,
         ITradeSessionFileLogger tradeSessionFileLogger,
-        ITelegramNotifier telegramNotifier)
+        ITelegramNotifier telegramNotifier,
+        IHwndHealthChecker hwndHealthChecker)
     {
         _serviceProvider = serviceProvider;
         _runtimeConfigState = runtimeConfigState;
@@ -368,6 +376,7 @@ public sealed class DashboardViewModel : ObservableObject
         _mt5ManualTradeService = mt5ManualTradeService;
         _tradeSessionFileLogger = tradeSessionFileLogger;
         _telegramNotifier = telegramNotifier;
+        _hwndHealthChecker = hwndHealthChecker;
 
         var normalizedHostName = _machineIdentityService.GetHostName();
         _normalizedHostName = normalizedHostName;
@@ -403,6 +412,7 @@ public sealed class DashboardViewModel : ObservableObject
 
         _runtimeConfigState.StateChanged += (_, _) => ApplyRuntimeConfig();
         _runtimeConfigState.QualifyingConfigChanged += OnQualifyingConfigChanged;
+        _runtimeConfigState.ManualHwndChanged += (_, _) => RunHwndHealthCheck("config-save");
         ApplyRuntimeConfig();
         _ = InitializeRuntimeConfigAsync();
 
@@ -661,6 +671,121 @@ public sealed class DashboardViewModel : ObservableObject
         RaiseManualOpenCanExecuteChanged();
     }
 
+    // ===== HWND health-check + SKIP guard =====
+
+    /// <summary>
+    /// Kiểm tra toàn bộ HWND trong config. Nếu có giá trị không hợp lệ → bật cờ SKIP,
+    /// log, và popup 1 lần/đợt lỗi. Nếu trở lại hợp lệ → gỡ SKIP + log resume.
+    /// Gọi tại: Start, định kỳ 60s (polling), và sau khi lưu config (ManualHwndChanged).
+    /// </summary>
+    private void RunHwndHealthCheck(string source)
+    {
+        IReadOnlyList<HwndIssue> issues;
+        try
+        {
+            issues = _hwndHealthChecker.Check(_runtimeConfigState.CurrentManualHwndColumns);
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[HWND][ERROR] Health-check ({source}) threw: {ex.Message}");
+            return;
+        }
+
+        if (issues.Count > 0)
+        {
+            var wasValid = !_isHwndInvalid;
+            _isHwndInvalid = true;
+            SafeVmLog($"[HWND][WARN] SKIP bật ({source}): " +
+                      string.Join("; ", issues.Select(i => $"{i.Label}={Quote(i.Value)}|{i.Kind}")));
+
+            if (wasValid)
+            {
+                _hwndPopupShownForCurrentEpisode = false; // đợt lỗi mới
+            }
+
+            if (!_hwndPopupShownForCurrentEpisode)
+            {
+                _hwndPopupShownForCurrentEpisode = true;
+                ShowHwndInvalidPopup(issues);
+            }
+
+            // TODO(telegram): sau này gửi noti khi gặp HWND invalid.
+            // _ = Task.Run(() => _telegramNotifier.NotifyAsync("HWND_INVALID", "CRITICAL",
+            //     string.Join("; ", issues.Select(i => $"{i.Label}={i.Value}|{i.Kind}"))));
+        }
+        else if (_isHwndInvalid)
+        {
+            _isHwndInvalid = false;
+            _hwndPopupShownForCurrentEpisode = false;
+            SafeVmLog($"[HWND][INFO] HWND hợp lệ trở lại ({source}) — KHÔNG skip nữa, tiếp tục giao dịch.");
+        }
+    }
+
+    /// <summary>
+    /// Trả true nếu đang ở trạng thái HWND invalid → caller phải bỏ qua thao tác lệnh.
+    /// Log throttle 5s để tránh spam (snapshot ~50ms).
+    /// </summary>
+    private bool SkipIfHwndInvalid(string op)
+    {
+        if (!_isHwndInvalid)
+        {
+            return false;
+        }
+
+        var now = DateTime.UtcNow;
+        if ((now - _lastHwndSkipLogUtc).TotalSeconds >= 5)
+        {
+            _lastHwndSkipLogUtc = now;
+            SafeVmLog($"[HWND][SKIP] Bỏ qua {op}: HWND không hợp lệ — chờ sửa config & lưu.");
+        }
+
+        return true;
+    }
+
+    private void ShowHwndInvalidPopup(IReadOnlyList<HwndIssue> issues)
+    {
+        var lines = string.Join(Environment.NewLine,
+            issues.Select(i => $"• {i.Label}: {Quote(i.Value)} — {ReasonText(i.Kind)}"));
+        var message =
+            "Phát hiện HWND không hợp lệ. Đã TẠM DỪNG mọi thao tác mở/đóng lệnh." + Environment.NewLine +
+            Environment.NewLine +
+            lines + Environment.NewLine +
+            Environment.NewLine +
+            "Vui lòng mở Config, cập nhật lại HWND và bấm Lưu để tiếp tục giao dịch.";
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null)
+        {
+            return;
+        }
+
+        dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                System.Windows.MessageBox.Show(
+                    message,
+                    "HWND không hợp lệ",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Warning);
+            }
+            catch
+            {
+                // ignored by design
+            }
+        }));
+    }
+
+    private static string ReasonText(HwndIssueKind kind) => kind switch
+    {
+        HwndIssueKind.Empty => "để trống",
+        HwndIssueKind.BadFormat => "sai định dạng",
+        HwndIssueKind.WindowMissing => "cửa sổ không tồn tại",
+        _ => "không hợp lệ"
+    };
+
+    private static string Quote(string value) => string.IsNullOrEmpty(value) ? "(trống)" : value;
+
     private async Task StartTradingLogicAsync()
     {
         if (IsTradingLogicEnabled)
@@ -696,6 +821,10 @@ public sealed class DashboardViewModel : ObservableObject
         SignalLogItems.Clear();
 
         await ResyncOpenTradesAsync();
+
+        // Kiểm tra HWND ngay khi Start: nếu MT4/MT5 không còn cửa sổ hợp lệ thì vẫn
+        // vào running nhưng bật cờ SKIP (không mở/đóng) + popup cảnh báo.
+        RunHwndHealthCheck("start");
 
         IsTradingLogicEnabled = true;
         SyncTradingFlowWithLivePairState(GetLivePairTradeStateStrict());
@@ -761,6 +890,11 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task BuyAsync()
     {
+        if (SkipIfHwndInvalid("manual-buy"))
+        {
+            return;
+        }
+
         _isManualOpenInFlight = true;
         RaiseManualOpenCanExecuteChanged();
 
@@ -825,6 +959,11 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task SellAsync()
     {
+        if (SkipIfHwndInvalid("manual-sell"))
+        {
+            return;
+        }
+
         _isManualOpenInFlight = true;
         RaiseManualOpenCanExecuteChanged();
 
@@ -887,6 +1026,11 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task CloseOrderAsync()
     {
+        if (SkipIfHwndInvalid("manual-close-legacy"))
+        {
+            return;
+        }
+
         var snapshot = _runtimeConfigState.CurrentDashboardMetrics;
         var slot = Math.Max(0, _manualSlot - 1);
         var selectA = SelectCloseCandidateForExchange(
@@ -967,6 +1111,11 @@ public sealed class DashboardViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(pairId))
         {
             SafeVmLog("[VM][WARN] Manual close skipped: empty pairId (row chưa resolve pairId)");
+            return;
+        }
+
+        if (SkipIfHwndInvalid($"manual-close pairId={pairId}"))
+        {
             return;
         }
 
@@ -1130,7 +1279,14 @@ public sealed class DashboardViewModel : ObservableObject
     /// build pairId — đảm bảo pairId của ViewModel và coordinator slot match.
     /// </summary>
     private Task DispatchOpenTriggerAsync(GapSignalTriggerResult trigger)
-        => DispatchSignalTradeAsync(trigger);
+    {
+        if (SkipIfHwndInvalid("auto-open"))
+        {
+            return Task.CompletedTask;
+        }
+
+        return DispatchSignalTradeAsync(trigger);
+    }
 
     /// <summary>
     /// Phase 4: close dispatch uses slot.TicketA/B for ticket-precise RowIndex lookup.
@@ -1138,6 +1294,11 @@ public sealed class DashboardViewModel : ObservableObject
     /// </summary>
     private async Task DispatchCloseTriggerAsync(PositionSlot targetSlot, GapSignalTriggerResult trigger)
     {
+        if (SkipIfHwndInvalid("auto-close"))
+        {
+            return;
+        }
+
         try
         {
             await AutoCloseOrderAsync(trigger, targetSlot);
@@ -2895,6 +3056,14 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 await ExecutePendingCloseRetryActionsAsync(closeRetryActions, cancellationToken);
             }
+
+            // HWND health-check định kỳ 60s (chỉ khi Auto đang chạy) — phát hiện MT4/MT5 tự out.
+            // Chạy ngoài Dispatcher.Invoke (native, không block UI thread).
+            if (IsTradingLogicEnabled && (DateTime.UtcNow - _lastHwndCheckUtc).TotalSeconds >= 60)
+            {
+                _lastHwndCheckUtc = DateTime.UtcNow;
+                RunHwndHealthCheck("periodic");
+            }
         }
     }
 
@@ -3469,6 +3638,11 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task CloseOpenedLegByTimeoutAsync(PendingOpenTimeoutAction action, CancellationToken cancellationToken)
     {
+        if (SkipIfHwndInvalid($"recovery-timeout-close pairId={action.PairId}"))
+        {
+            return;
+        }
+
         var isExchangeA = string.Equals(action.OpenedExchange, "A", StringComparison.OrdinalIgnoreCase);
         var platform = ResolveTradeLegPlatform(isExchangeA ? _runtimeConfigState.CurrentPlatformA : _runtimeConfigState.CurrentPlatformB);
         var tradeHwnd = isExchangeA ? _runtimeConfigState.CurrentTradeHwndA : _runtimeConfigState.CurrentTradeHwndB;
@@ -4354,6 +4528,11 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task CloseRemainingLegAfterExternalCloseAsync(string remainingExchange, ulong? knownTicket)
     {
+        if (SkipIfHwndInvalid($"recovery-external-close exch={remainingExchange}"))
+        {
+            return;
+        }
+
         try
         {
             var isExchangeA = string.Equals(remainingExchange, "A", StringComparison.OrdinalIgnoreCase);
@@ -4572,6 +4751,11 @@ public sealed class DashboardViewModel : ObservableObject
     private async Task RetryCloseLegByPendingAsync(PendingCloseRetryAction action, CancellationToken cancellationToken)
     {
         if (!_pendingClosePairById.TryGetValue(action.PairId, out var state) || state.IsResolved)
+        {
+            return;
+        }
+
+        if (SkipIfHwndInvalid($"recovery-retry-close pairId={action.PairId}"))
         {
             return;
         }
