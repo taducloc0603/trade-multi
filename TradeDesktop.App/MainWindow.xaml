@@ -537,6 +537,14 @@
                                                         </Style>
                                                     </DataGrid.ColumnHeaderStyle>
 
+                                                    <!-- Cell không nhận focus → click đầu đi thẳng vào Button Close,
+                                                         tránh lỗi WPF DataGrid nuốt click đầu (phải nhấn 2 lần mới đóng). -->
+                                                    <DataGrid.CellStyle>
+                                                        <Style TargetType="DataGridCell">
+                                                            <Setter Property="Focusable" Value="False" />
+                                                        </Style>
+                                                    </DataGrid.CellStyle>
+
                                                     <DataGrid.Columns>
                                                         <DataGridTemplateColumn Header="" Width="*">
                                                             <DataGridTemplateColumn.CellTemplate>
