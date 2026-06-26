@@ -6036,6 +6036,11 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
+            // Gốc fix: profit nuôi quyết định TP phải tươi MỖI tick, đồng bộ với gap-snapshot
+            // dùng ngay dưới — KHÔNG kẹp vào throttle render UI (canRenderUi ~200ms). Nếu không,
+            // _tpState.Profits bị nhồi-lặp giá trị cũ và có thể latch spike ảo.
+            RefreshSlotProfitsEveryTick(metrics, _runtimeConfigState.CurrentPoint);
+
             // Phase 1: business decision flows through PortfolioCoordinator directly.
             // Adapter (_tradingFlowEngine) only used for legacy scalar reads (CurrentPhase, etc.).
             var portfolioResult = _portfolioCoordinator.ProcessSnapshot(
@@ -6279,6 +6284,38 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         return true;
+    }
+
+    // Cập nhật profit slot MỖI tick, tách khỏi throttle render UI (canRenderUi).
+    // Dùng cache records (giá mở/ticket tĩnh) + metrics hiện tại (bid/ask tươi) →
+    // LastProfitSnapshot đồng bộ với gap-snapshot mà ProcessSnapshot dùng ngay dưới.
+    // KHÔNG đụng UI; phần vẽ panel + RebuildTradeRealtimeProfitRows vẫn throttle 200ms như cũ.
+    private void RefreshSlotProfitsEveryTick(DashboardMetrics metrics, int point)
+    {
+        UpdateSlotProfitsFromCachedTrades(_latestTradeLeftResult, metrics, isExchangeA: true, point);
+        UpdateSlotProfitsFromCachedTrades(_latestTradeRightResult, metrics, isExchangeA: false, point);
+    }
+
+    private void UpdateSlotProfitsFromCachedTrades(
+        SharedMapReadResult<TradeSharedRecord>? cached,
+        DashboardMetrics metrics,
+        bool isExchangeA,
+        int point)
+    {
+        if (cached is null || !cached.IsMapAvailable || !cached.IsParseSuccess)
+        {
+            return;
+        }
+
+        foreach (var record in cached.Records)
+        {
+            if (!IsAppGeneratedTicket(record.Ticket))
+            {
+                continue;
+            }
+
+            _portfolioCoordinator.UpdateProfit(record.Ticket, CalculateTradeProfit(record, metrics, isExchangeA, point));
+        }
     }
 
     private void RefreshTradeRowsFromSnapshot(DashboardMetrics metrics, int point)

@@ -186,6 +186,16 @@ TradeDesktop.Tests/            # xUnit tests
 - Per-side debounce: `_lastAutoOpenBuyAtLocal` / `Sell`. KHÔNG dùng chung `_lastAutoOpenClickAtLocal`.
 - Per-side in-flight lock: `_autoOpenInFlightBuy` / `Sell` (Phase 3).
 
+### Profit feed cho quyết định TP (logic-critical, KHÔNG throttle theo UI)
+- `slot.LastProfitSnapshot` nuôi quyết định TP + priority-close PHẢI được refresh **mỗi tick**,
+  đồng bộ với `metrics` mà `ProcessSnapshot` dùng. `DashboardViewModel.RefreshSlotProfitsEveryTick`
+  chạy ngay trước `ProcessSnapshot` trong `OnSnapshotReceived` lo việc này.
+- **KHÔNG** kẹp update profit vào nhánh `canRenderUi` (`RefreshTradeRowsFromSnapshot`, throttle
+  `SnapshotUiRenderMinIntervalMs=200`) — đó chỉ để vẽ panel. Nếu kẹp → profit ôi tới ~200ms, lệch
+  tick so với gap-snapshot, `_tpState.Profits` bị nhồi-lặp giá trị cũ và có thể latch spike ảo
+  (lời lúc tín hiệu hoá lỗ lúc khớp). `RefreshTradeRowsFromSnapshot` vẫn gọi `UpdateProfit` (dư
+  thừa, vô hại) — đừng coi nó là nguồn profit cho logic.
+
 ### Cooldown
 - Cooldown kick tại **DISPATCH time** (lúc tool gửi request — qua `AllocatePendingOpenSlot` / `MarkSlotCloseTriggered`), KHÔNG phải confirm time (Phase 8). MAX semantics: lock chỉ extend, confirm không reset.
 - App restart luôn kích cooldown mới (`coordinator.RecoverSlotsFromPersisted` kicks startup cooldown).
