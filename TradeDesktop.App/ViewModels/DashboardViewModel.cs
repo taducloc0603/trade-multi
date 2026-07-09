@@ -341,6 +341,12 @@ public sealed class DashboardViewModel : ObservableObject
     private DateTime _lastHwndCheckUtc = DateTime.MinValue;
     private DateTime _lastHwndSkipLogUtc = DateTime.MinValue;
 
+    // Connection kill-switch state (TERMINAL_CONNECTED từ trades-header → tự off switch).
+    private readonly ConnectionStatusEvaluator _connectionEvaluator = new();
+    private volatile bool _isConnectionDown;
+    private bool _connPopupShownForCurrentEpisode;
+    private DateTime _lastConnSkipLogUtc = DateTime.MinValue;
+
     public DashboardViewModel(
         IServiceProvider serviceProvider,
         RuntimeConfigState runtimeConfigState,
@@ -598,6 +604,26 @@ public sealed class DashboardViewModel : ObservableObject
 
     public string TradingLogicStatusText => IsTradingLogicEnabled ? "Running" : "Stopped";
     public Brush TradingLogicStatusBrush => IsTradingLogicEnabled ? Brushes.ForestGreen : Brushes.Gray;
+
+    // Switch cho phép thao tác lệnh (open/close). Tự OFF khi monitor phát hiện mất kết nối;
+    // user tự bật lại. OFF → mọi open/close bị skip (xem SkipIfTradeOpsDisabled).
+    private bool _allowTradeOperations = true;
+    public bool AllowTradeOperations
+    {
+        get => _allowTradeOperations;
+        set
+        {
+            if (!SetProperty(ref _allowTradeOperations, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(TradeOperationsStatusText));
+            SafeVmLog($"[CONN][INFO] AllowTradeOperations={value}");
+        }
+    }
+
+    public string TradeOperationsStatusText => AllowTradeOperations ? "Cho phép lệnh" : "Đã chặn lệnh";
     public string CurrentPositionTextA => ResolveCurrentPositionText(isExchangeA: true);
     public string CurrentPositionTextB => ResolveCurrentPositionText(isExchangeA: false);
     public string CurrentPhaseText => ResolveCurrentPhaseText();
@@ -786,6 +812,106 @@ public sealed class DashboardViewModel : ObservableObject
 
     private static string Quote(string value) => string.IsNullOrEmpty(value) ? "(trống)" : value;
 
+    // ===== Connection kill-switch =====
+
+    private static ChannelConnectionInput ToChannelConnectionInput<T>(SharedMapReadResult<T> result)
+        => new(result.IsMapAvailable, result.IsParseSuccess, result.Timestamp, result.Connected);
+
+    /// <summary>
+    /// Áp dụng trạng thái kết nối (gọi trên UI thread). Down → tự OFF switch + popup 1 lần/đợt + log.
+    /// Reconnect → log nhưng KHÔNG tự bật lại (user tự bật). Idempotent qua các poll.
+    /// </summary>
+    private void ApplyConnectionStatus(ConnectionStatus status)
+    {
+        if (status.IsDown)
+        {
+            var wasUp = !_isConnectionDown;
+            _isConnectionDown = true;
+
+            if (wasUp)
+            {
+                _connPopupShownForCurrentEpisode = false; // đợt mất kết nối mới
+                SafeVmLog($"[CONN][WARN] Mất kết nối — chặn thao tác lệnh: {string.Join("; ", status.Reasons)}");
+            }
+
+            if (AllowTradeOperations)
+            {
+                AllowTradeOperations = false; // tự tắt switch → skip mọi open/close
+            }
+
+            if (!_connPopupShownForCurrentEpisode)
+            {
+                _connPopupShownForCurrentEpisode = true;
+                ShowConnectionLostPopup(status.Reasons);
+            }
+        }
+        else if (_isConnectionDown)
+        {
+            _isConnectionDown = false;
+            _connPopupShownForCurrentEpisode = false;
+            SafeVmLog("[CONN][INFO] Kết nối trở lại — switch VẪN off, bật tay để giao dịch lại.");
+        }
+    }
+
+    /// <summary>
+    /// Trả true nếu switch đang OFF → caller phải bỏ qua thao tác lệnh. Log throttle 5s (poll ~500ms).
+    /// </summary>
+    private bool SkipIfTradeOpsDisabled(string op)
+    {
+        if (AllowTradeOperations)
+        {
+            return false;
+        }
+
+        var now = DateTime.UtcNow;
+        if ((now - _lastConnSkipLogUtc).TotalSeconds >= 5)
+        {
+            _lastConnSkipLogUtc = now;
+            SafeVmLog($"[CONN][SKIP] Bỏ qua {op}: switch OFF (mất kết nối hoặc user tắt) — bật lại để tiếp tục.");
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Gate chung cho MỌI thao tác mở/đóng: bỏ qua nếu HWND invalid HOẶC switch cho phép lệnh OFF.
+    /// Short-circuit nên chỉ một guard log mỗi lần.
+    /// </summary>
+    private bool ShouldSkipTradeOp(string op) => SkipIfHwndInvalid(op) || SkipIfTradeOpsDisabled(op);
+
+    private void ShowConnectionLostPopup(IReadOnlyList<string> reasons)
+    {
+        var lines = string.Join(Environment.NewLine, reasons.Select(r => $"• {r}"));
+        var message =
+            "Phát hiện MẤT KẾT NỐI. Đã TẠM DỪNG mọi thao tác mở/đóng lệnh (switch OFF)." + Environment.NewLine +
+            Environment.NewLine +
+            lines + Environment.NewLine +
+            Environment.NewLine +
+            "Kiểm tra lại kết nối MT4/MT5. Khi ổn định, bật lại switch để tiếp tục giao dịch.";
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null)
+        {
+            return;
+        }
+
+        dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                System.Windows.MessageBox.Show(
+                    message,
+                    "Mất kết nối MT4/MT5",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Warning);
+            }
+            catch
+            {
+                // ignored by design
+            }
+        }));
+    }
+
     private async Task StartTradingLogicAsync()
     {
         if (IsTradingLogicEnabled)
@@ -825,6 +951,13 @@ public sealed class DashboardViewModel : ObservableObject
         // Kiểm tra HWND ngay khi Start: nếu MT4/MT5 không còn cửa sổ hợp lệ thì vẫn
         // vào running nhưng bật cờ SKIP (không mở/đóng) + popup cảnh báo.
         RunHwndHealthCheck("start");
+
+        // Connection kill-switch: bật cho phép lệnh + reset monitor. Từ đây poll order-info
+        // sẽ giám sát kết nối liên tục và tự OFF switch nếu 1 trong 2 sàn rớt.
+        _connectionEvaluator.Reset();
+        _isConnectionDown = false;
+        _connPopupShownForCurrentEpisode = false;
+        AllowTradeOperations = true;
 
         IsTradingLogicEnabled = true;
         SyncTradingFlowWithLivePairState(GetLivePairTradeStateStrict());
@@ -890,7 +1023,7 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task BuyAsync()
     {
-        if (SkipIfHwndInvalid("manual-buy"))
+        if (ShouldSkipTradeOp("manual-buy"))
         {
             return;
         }
@@ -959,7 +1092,7 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task SellAsync()
     {
-        if (SkipIfHwndInvalid("manual-sell"))
+        if (ShouldSkipTradeOp("manual-sell"))
         {
             return;
         }
@@ -1026,7 +1159,7 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task CloseOrderAsync()
     {
-        if (SkipIfHwndInvalid("manual-close-legacy"))
+        if (ShouldSkipTradeOp("manual-close-legacy"))
         {
             return;
         }
@@ -1114,7 +1247,7 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
-        if (SkipIfHwndInvalid($"manual-close pairId={pairId}"))
+        if (ShouldSkipTradeOp($"manual-close pairId={pairId}"))
         {
             return;
         }
@@ -1280,7 +1413,7 @@ public sealed class DashboardViewModel : ObservableObject
     /// </summary>
     private Task DispatchOpenTriggerAsync(GapSignalTriggerResult trigger)
     {
-        if (SkipIfHwndInvalid("auto-open"))
+        if (ShouldSkipTradeOp("auto-open"))
         {
             return Task.CompletedTask;
         }
@@ -1294,7 +1427,7 @@ public sealed class DashboardViewModel : ObservableObject
     /// </summary>
     private async Task DispatchCloseTriggerAsync(PositionSlot targetSlot, GapSignalTriggerResult trigger)
     {
-        if (SkipIfHwndInvalid("auto-close"))
+        if (ShouldSkipTradeOp("auto-close"))
         {
             return;
         }
@@ -2991,6 +3124,15 @@ public sealed class DashboardViewModel : ObservableObject
 
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
+                // Connection kill-switch: chỉ giám sát khi đang chạy Auto. Evaluate + Reset (lúc Start)
+                // cùng chạy trên UI thread ở đây → tránh data race trên state của evaluator.
+                if (IsTradingLogicEnabled)
+                {
+                    ApplyConnectionStatus(_connectionEvaluator.Evaluate(
+                        ToChannelConnectionInput(tradeLeftResult),
+                        ToChannelConnectionInput(tradeRightResult)));
+                }
+
                 if (shouldApplyTradeLeft)
                 {
                     _latestTradeLeftResult = tradeLeftResult;
@@ -3638,7 +3780,7 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task CloseOpenedLegByTimeoutAsync(PendingOpenTimeoutAction action, CancellationToken cancellationToken)
     {
-        if (SkipIfHwndInvalid($"recovery-timeout-close pairId={action.PairId}"))
+        if (ShouldSkipTradeOp($"recovery-timeout-close pairId={action.PairId}"))
         {
             return;
         }
@@ -4531,7 +4673,7 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task CloseRemainingLegAfterExternalCloseAsync(string remainingExchange, ulong? knownTicket)
     {
-        if (SkipIfHwndInvalid($"recovery-external-close exch={remainingExchange}"))
+        if (ShouldSkipTradeOp($"recovery-external-close exch={remainingExchange}"))
         {
             return;
         }
@@ -4758,7 +4900,7 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
-        if (SkipIfHwndInvalid($"recovery-retry-close pairId={action.PairId}"))
+        if (ShouldSkipTradeOp($"recovery-retry-close pairId={action.PairId}"))
         {
             return;
         }

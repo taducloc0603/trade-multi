@@ -6,7 +6,8 @@ public sealed record SharedMapReadResult<T>(
     string? ErrorMessage,
     int Count,
     ulong Timestamp,
-    IReadOnlyList<T> Records)
+    IReadOnlyList<T> Records,
+    int Connected = -1)
 {
     public static SharedMapReadResult<T> MapNotFound(string mapName)
         => new(
@@ -15,7 +16,8 @@ public sealed record SharedMapReadResult<T>(
             ErrorMessage: $"Không tìm thấy map: {mapName}",
             Count: 0,
             Timestamp: 0,
-            Records: Array.Empty<T>());
+            Records: Array.Empty<T>(),
+            Connected: -1);
 
     public static SharedMapReadResult<T> ParseError(string errorMessage, bool isMapAvailable = true)
         => new(
@@ -24,14 +26,16 @@ public sealed record SharedMapReadResult<T>(
             ErrorMessage: errorMessage,
             Count: 0,
             Timestamp: 0,
-            Records: Array.Empty<T>());
+            Records: Array.Empty<T>(),
+            Connected: -1);
 
-    public static SharedMapReadResult<T> Success(ulong timestamp, IReadOnlyList<T> records, int count)
+    public static SharedMapReadResult<T> Success(ulong timestamp, IReadOnlyList<T> records, int count, int connected = -1)
         => new(
             IsMapAvailable: true,
             IsParseSuccess: true,
             ErrorMessage: null,
             Count: count,
             Timestamp: timestamp,
-            Records: records);
+            Records: records,
+            Connected: connected);
 }

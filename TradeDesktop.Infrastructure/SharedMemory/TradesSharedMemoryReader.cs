@@ -35,6 +35,7 @@ public sealed class TradesSharedMemoryReader : ITradesSharedMemoryReader
 
             var rawCount = accessor.ReadInt32(0);
             var timestamp = accessor.ReadUInt64(4);
+            var connected = accessor.ReadInt32(12); // TERMINAL_CONNECTED flag (EA ghi vào padding header)
             var safeCount = Math.Max(0, rawCount);
             var maxCountByCapacity = (int)Math.Max(0, (capacity - HeaderSize) / RecordSize);
             var countToRead = Math.Min(safeCount, maxCountByCapacity);
@@ -46,7 +47,7 @@ public sealed class TradesSharedMemoryReader : ITradesSharedMemoryReader
 
             if (countToRead == 0)
             {
-                return SharedMapReadResult<TradeSharedRecord>.Success(timestamp, Array.Empty<TradeSharedRecord>(), safeCount);
+                return SharedMapReadResult<TradeSharedRecord>.Success(timestamp, Array.Empty<TradeSharedRecord>(), safeCount, connected);
             }
 
             var records = new List<TradeSharedRecord>(countToRead);
@@ -69,7 +70,7 @@ public sealed class TradesSharedMemoryReader : ITradesSharedMemoryReader
                     OpenEaTimeLocal: accessor.ReadUInt64(offset + 60)));
             }
 
-            return SharedMapReadResult<TradeSharedRecord>.Success(timestamp, records, safeCount);
+            return SharedMapReadResult<TradeSharedRecord>.Success(timestamp, records, safeCount, connected);
         }
         catch (FileNotFoundException)
         {
