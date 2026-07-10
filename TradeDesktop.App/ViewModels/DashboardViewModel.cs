@@ -6082,7 +6082,8 @@ public sealed class DashboardViewModel : ObservableObject
                     coolDownGapTick: result.CoolDownGapTick,
                     maxLifeTimeBySecond: result.MaxLifeTimeBySecond,
                     closeMaxTpProfit: result.CloseMaxTpProfit,
-                    limitMaxTp: result.LimitMaxTp);
+                    limitMaxTp: result.LimitMaxTp,
+                    freezeLastN: result.FreezeLastN);
                 _runtimeConfigState.UpdateQuota(
                     result.MaxTotalOpens,
                     result.MaxBuyOpens,
