@@ -93,7 +93,8 @@ public sealed class ConfigService(
             limitMaxTp: record.LimitMaxTp,
             maxBuyOpens: record.MaxBuyOpens,
             maxSellOpens: record.MaxSellOpens,
-            maxTotalOpens: record.MaxTotalOpens);
+            maxTotalOpens: record.MaxTotalOpens,
+            freezeLastN: record.FreezeLastN);
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -218,7 +219,8 @@ public sealed record ConfigLoadResult(
     int MaxLifeTimeBySecond = 0,
     int MaxBuyOpens = 3,
     int MaxSellOpens = 3,
-    int MaxTotalOpens = 5)
+    int MaxTotalOpens = 5,
+    int FreezeLastN = 0)
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -270,7 +272,8 @@ public sealed record ConfigLoadResult(
         double limitMaxTp = 0,
         int maxBuyOpens = 3,
         int maxSellOpens = 3,
-        int maxTotalOpens = 5) =>
+        int maxTotalOpens = 5,
+        int freezeLastN = 0) =>
         new(
             true,
             true,
@@ -324,7 +327,8 @@ public sealed record ConfigLoadResult(
             Math.Max(0, maxLifeTimeBySecond),
             Math.Max(1, maxBuyOpens),
             Math.Max(1, maxSellOpens),
-            Math.Max(1, maxTotalOpens));
+            Math.Max(1, maxTotalOpens),
+            Math.Max(0, freezeLastN));
 
     public static ConfigLoadResult NotFound(string machineHostName) =>
         new(false, false, machineHostName, [ManualHwndColumnConfig.Empty], "mt5", "mt5", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0d, 0, 0, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, "[]", null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "", "", "");

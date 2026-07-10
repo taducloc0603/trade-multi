@@ -47,4 +47,5 @@ public sealed record ConfigRecord(
     int MaxLifeTimeBySecond = 0,
     int MaxBuyOpens = 3,
     int MaxSellOpens = 3,
-    int MaxTotalOpens = 5);
+    int MaxTotalOpens = 5,
+    int FreezeLastN = 0);

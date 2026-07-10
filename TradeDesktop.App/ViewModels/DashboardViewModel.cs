@@ -3126,12 +3126,13 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 // Connection kill-switch: chỉ giám sát khi đang chạy Auto. Evaluate + Reset (lúc Start)
                 // cùng chạy trên UI thread ở đây → tránh data race trên state của evaluator.
-                if (IsTradingLogicEnabled)
-                {
-                    ApplyConnectionStatus(_connectionEvaluator.Evaluate(
-                        ToChannelConnectionInput(tradeLeftResult),
-                        ToChannelConnectionInput(tradeRightResult)));
-                }
+                // --- Tạm vô hiệu hoá kill-switch mất kết nối (comment feature f3ab5ee) ---
+                // if (IsTradingLogicEnabled)
+                // {
+                //     ApplyConnectionStatus(_connectionEvaluator.Evaluate(
+                //         ToChannelConnectionInput(tradeLeftResult),
+                //         ToChannelConnectionInput(tradeRightResult)));
+                // }
 
                 if (shouldApplyTradeLeft)
                 {
@@ -3780,11 +3781,6 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task CloseOpenedLegByTimeoutAsync(PendingOpenTimeoutAction action, CancellationToken cancellationToken)
     {
-        if (ShouldSkipTradeOp($"recovery-timeout-close pairId={action.PairId}"))
-        {
-            return;
-        }
-
         var isExchangeA = string.Equals(action.OpenedExchange, "A", StringComparison.OrdinalIgnoreCase);
         var platform = ResolveTradeLegPlatform(isExchangeA ? _runtimeConfigState.CurrentPlatformA : _runtimeConfigState.CurrentPlatformB);
         var tradeHwnd = isExchangeA ? _runtimeConfigState.CurrentTradeHwndA : _runtimeConfigState.CurrentTradeHwndB;
@@ -3793,6 +3789,9 @@ public sealed class DashboardViewModel : ObservableObject
         var appCloseRequestTimeLocal = DateTimeOffset.Now;
         var appCloseRequestRawMs = Environment.TickCount64;
 
+        // Đăng ký leg vào hệ retry-close TRƯỚC khi check skip: kể cả khi lần dispatch đầu bị hoãn
+        // (switch OFF / HWND invalid), CollectPendingCloseRetryActions vẫn retry tới khi MMF xác nhận
+        // leg đóng — tránh bỏ leg mồ côi như bug fire-once cũ.
         if (action.TradeType.HasValue)
         {
             var expectedClose = ResolveExpectedClosePrice(_runtimeConfigState.CurrentDashboardMetrics, isExchangeA, action.TradeType.Value);
@@ -3808,6 +3807,36 @@ public sealed class DashboardViewModel : ObservableObject
                 isAutoFlow: action.IsAutoFlow,
                 slotNumber: action.SlotNumber,
                 exchangeLabel: action.OpenedExchange);
+        }
+        else
+        {
+            // Không biết TradeType → không đăng ký được retry-close → KHÔNG bỏ âm thầm, escalate.
+            SafeVmLog($"[CYCLE][ERROR] Timeout rollback thiếu TradeType, không auto-retry đóng leg được: pairId={action.PairId} exch={action.OpenedExchange} ticket={action.Ticket} — CẦN xử lý tay.");
+            NotifyTelegram(
+                eventCode: "OPEN_ROLLBACK_NO_RETRY",
+                severity: "CRITICAL",
+                detail: $"Rollback mở-lệch không có TradeType, không thể auto-retry đóng leg {action.OpenedExchange} (ticket={action.Ticket})",
+                pairId: action.PairId,
+                meta: new Dictionary<string, string?>
+                {
+                    ["openedExchange"] = action.OpenedExchange,
+                    ["ticket"] = action.Ticket.ToString(CultureInfo.InvariantCulture)
+                });
+        }
+
+        // Open-cycle coi như xử lý xong (leg do hệ retry-close sở hữu, hoặc đã escalate ở trên).
+        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        {
+            if (_pendingOpenPairById.TryGetValue(action.PairId, out var openState))
+            {
+                openState.IsResolved = true;
+            }
+        });
+
+        // Hoãn dispatch lần đầu khi đang bị chặn (switch OFF / HWND invalid) — retry-close lo tiếp.
+        if (ShouldSkipTradeOp($"recovery-timeout-close pairId={action.PairId}"))
+        {
+            return;
         }
 
         var closeResult = await _tradeExecutionRouter.ClosePairAsync(
@@ -3838,11 +3867,6 @@ public sealed class DashboardViewModel : ObservableObject
         {
             SignalLogItems.Insert(0,
                 $"[{DateTime.Now:HH:mm:ss.fff}] {action.OpenedExchange} close by {action.MissingExchange} can not open.");
-
-            if (_pendingOpenPairById.TryGetValue(action.PairId, out var state))
-            {
-                state.IsResolved = true;
-            }
         });
 
         Debug.WriteLine($"[ExecOpen][TimeoutClose] pairId={action.PairId}, opened={action.OpenedExchange}, missing={action.MissingExchange}, ticket={action.Ticket}, success={closeResult.Success}");
@@ -6077,7 +6101,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
                     DbInlineData =
-                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | start_wait_time={result.StartWaitTime} | end_wait_time={result.EndWaitTime} | sans={result.SansJson}";
+                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | freeze_last_n={result.FreezeLastN} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | start_wait_time={result.StartWaitTime} | end_wait_time={result.EndWaitTime} | sans={result.SansJson}";
                     IsDbInlineDataVisible = true;
                 }
                 else
@@ -6243,7 +6267,8 @@ public sealed class DashboardViewModel : ObservableObject
                 ConfirmLatencyMs: _runtimeConfigState.CurrentConfirmLatencyMs,
                 MaxGap: _runtimeConfigState.CurrentMaxGap,
                 MaxSpread: _runtimeConfigState.CurrentMaxSpread,
-                PointMultiplier: _runtimeConfigState.CurrentPoint);
+                PointMultiplier: _runtimeConfigState.CurrentPoint,
+                FreezeLastN: _runtimeConfigState.CurrentFreezeLastN);
             var guardResult = SignalEntryGuard.Check(
                 trigger, metrics, guardConfig, _priceHistory, holdMs,
                 _runtimeConfigState.CurrentCloseHoldConfirmMs);

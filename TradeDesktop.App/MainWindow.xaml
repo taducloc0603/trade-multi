@@ -108,12 +108,14 @@
                             Height="36"
                             Margin="0,0,8,0"
                             Command="{Binding StopTradingLogicCommand}" />
+                    <!-- Kill-switch UI tạm vô hiệu hoá (comment feature f3ab5ee)
                     <ToggleButton Content="{Binding TradeOperationsStatusText}"
                                   Width="110"
                                   Height="36"
                                   Margin="0,0,8,0"
                                   IsChecked="{Binding AllowTradeOperations, Mode=TwoWay}"
                                   Visibility="{Binding IsTradingLogicEnabled, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    -->
                     <Button Content="Log Folder"
                             Width="90"
                             Height="36"

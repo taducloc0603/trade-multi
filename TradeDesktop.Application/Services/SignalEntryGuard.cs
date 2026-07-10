@@ -18,7 +18,8 @@ public static class SignalEntryGuard
         int ConfirmLatencyMs,
         int MaxGap,
         int MaxSpread,
-        int PointMultiplier);
+        int PointMultiplier,
+        int FreezeLastN = 0);
 
     public sealed record GuardResult(bool CanTrade, string? SkipReason);
 
@@ -80,6 +81,14 @@ public static class SignalEntryGuard
         // 5. TP freeze (chỉ áp dụng close theo TP) — profit đi ngang suốt cửa sổ confirm
         var tpFreezeResult = CheckTpFreeze(trigger, closeHoldConfirmMs);
         if (!tpFreezeResult.CanTrade) return tpFreezeResult;
+
+        // 6. Trailing-equal freeze OPEN — N mẫu gap CUỐI bằng nhau (feed đứng/lặp) → skip.
+        var openTrailingResult = CheckOpenGapTrailingEqual(trigger, config.FreezeLastN);
+        if (!openTrailingResult.CanTrade) return openTrailingResult;
+
+        // 7. Trailing-equal freeze TP — N mẫu profit CUỐI bằng nhau → skip.
+        var tpTrailingResult = CheckTpTrailingEqual(trigger, config.FreezeLastN);
+        if (!tpTrailingResult.CanTrade) return tpTrailingResult;
 
         return new GuardResult(true, null);
     }
@@ -217,6 +226,52 @@ public static class SignalEntryGuard
         if (profits.All(p => p.ToString("0.00", CultureInfo.InvariantCulture) == first))
             return new GuardResult(false,
                 $"TP đóng băng suốt {closeHoldConfirmMs} ms ({first})");
+
+        return new GuardResult(true, null);
+    }
+
+    /// <summary>
+    /// OPEN: nếu <paramref name="freezeLastN"/> mẫu gap CUỐI (side chính) trong cửa sổ confirm
+    /// bằng nhau hết → coi feed đứng/lặp → reject. freezeLastN &lt; 2 = tắt; &lt; N mẫu = cho phép.
+    /// So sánh int bằng tuyệt đối.
+    /// </summary>
+    private static GuardResult CheckOpenGapTrailingEqual(GapSignalTriggerResult trigger, int freezeLastN)
+    {
+        if (trigger.Action != GapSignalAction.Open || freezeLastN < 2)
+            return new GuardResult(true, null);
+
+        var series = trigger.PrimarySide == GapSignalSide.Buy ? trigger.BuyGaps : trigger.SellGaps;
+        if (series is null || series.Count < freezeLastN)
+            return new GuardResult(true, null);
+
+        var lastN = series.Skip(series.Count - freezeLastN).ToList();
+        if (lastN.All(v => v == lastN[0]))
+            return new GuardResult(false,
+                $"Gap {freezeLastN} mẫu cuối bằng nhau (freeze): [{string.Join(",", lastN)}]");
+
+        return new GuardResult(true, null);
+    }
+
+    /// <summary>
+    /// TP: nếu <paramref name="freezeLastN"/> mẫu profit CUỐI trong cửa sổ close-confirm bằng nhau
+    /// (làm tròn "0.00" như <see cref="CheckTpFreeze"/>) → reject. Chỉ áp dụng close theo TP.
+    /// </summary>
+    private static GuardResult CheckTpTrailingEqual(GapSignalTriggerResult trigger, int freezeLastN)
+    {
+        if (trigger.CloseReason != CloseSignalReason.Tp || freezeLastN < 2)
+            return new GuardResult(true, null);
+
+        var series = trigger.CloseTpProfits;
+        if (series is null || series.Count < freezeLastN)
+            return new GuardResult(true, null);
+
+        var lastN = series
+            .Skip(series.Count - freezeLastN)
+            .Select(p => p.ToString("0.00", CultureInfo.InvariantCulture))
+            .ToList();
+        if (lastN.All(s => s == lastN[0]))
+            return new GuardResult(false,
+                $"TP {freezeLastN} mẫu cuối bằng nhau (freeze): [{string.Join(",", lastN)}]");
 
         return new GuardResult(true, null);
     }
