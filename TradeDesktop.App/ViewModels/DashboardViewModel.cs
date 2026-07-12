@@ -320,6 +320,21 @@ public sealed class DashboardViewModel : ObservableObject
     private string _exchangeBTime = "-";
     private string _exchangeBMaxLatMs = "-";
     private string _exchangeBAvgLatMs = "-";
+    // Sàn C: monitor-only (hiển thị cạnh B + gap A-C/B-C, không vào lệnh).
+    private string _exchangeCHeader = "Sàn C";
+    private string _gapBuyAC = "-";
+    private string _gapSellAC = "-";
+    private string _gapBuyBC = "-";
+    private string _gapSellBC = "-";
+    private string _exchangeCSymbol = "-";
+    private string _exchangeCBid = "-";
+    private string _exchangeCAsk = "-";
+    private string _exchangeCSpread = "-";
+    private string _exchangeCLatencyMs = "-";
+    private string _exchangeCTps = "-";
+    private string _exchangeCTime = "-";
+    private string _exchangeCMaxLatMs = "-";
+    private string _exchangeCAvgLatMs = "-";
     private bool _isTradingLogicEnabled;
     private bool _isOpenGapBuyEnabled = true;
     private bool _isOpenGapSellEnabled = true;
@@ -483,6 +498,18 @@ public sealed class DashboardViewModel : ObservableObject
         private set => SetProperty(ref _gapSell, value);
     }
 
+    public string ExchangeCHeader
+    {
+        get => _exchangeCHeader;
+        private set => SetProperty(ref _exchangeCHeader, value);
+    }
+
+    // Gap giám sát A-C / B-C (sàn C không vào lệnh).
+    public string GapBuyAC { get => _gapBuyAC; private set => SetProperty(ref _gapBuyAC, value); }
+    public string GapSellAC { get => _gapSellAC; private set => SetProperty(ref _gapSellAC, value); }
+    public string GapBuyBC { get => _gapBuyBC; private set => SetProperty(ref _gapBuyBC, value); }
+    public string GapSellBC { get => _gapSellBC; private set => SetProperty(ref _gapSellBC, value); }
+
     public string ExchangeASymbol { get => _exchangeASymbol; private set => SetProperty(ref _exchangeASymbol, value); }
     public string ExchangeABid { get => _exchangeABid; private set => SetProperty(ref _exchangeABid, value); }
     public string ExchangeAAsk { get => _exchangeAAsk; private set => SetProperty(ref _exchangeAAsk, value); }
@@ -502,6 +529,16 @@ public sealed class DashboardViewModel : ObservableObject
     public string ExchangeBTime { get => _exchangeBTime; private set => SetProperty(ref _exchangeBTime, value); }
     public string ExchangeBMaxLatMs { get => _exchangeBMaxLatMs; private set => SetProperty(ref _exchangeBMaxLatMs, value); }
     public string ExchangeBAvgLatMs { get => _exchangeBAvgLatMs; private set => SetProperty(ref _exchangeBAvgLatMs, value); }
+
+    public string ExchangeCSymbol { get => _exchangeCSymbol; private set => SetProperty(ref _exchangeCSymbol, value); }
+    public string ExchangeCBid { get => _exchangeCBid; private set => SetProperty(ref _exchangeCBid, value); }
+    public string ExchangeCAsk { get => _exchangeCAsk; private set => SetProperty(ref _exchangeCAsk, value); }
+    public string ExchangeCSpread { get => _exchangeCSpread; private set => SetProperty(ref _exchangeCSpread, value); }
+    public string ExchangeCLatencyMs { get => _exchangeCLatencyMs; private set => SetProperty(ref _exchangeCLatencyMs, value); }
+    public string ExchangeCTps { get => _exchangeCTps; private set => SetProperty(ref _exchangeCTps, value); }
+    public string ExchangeCTime { get => _exchangeCTime; private set => SetProperty(ref _exchangeCTime, value); }
+    public string ExchangeCMaxLatMs { get => _exchangeCMaxLatMs; private set => SetProperty(ref _exchangeCMaxLatMs, value); }
+    public string ExchangeCAvgLatMs { get => _exchangeCAvgLatMs; private set => SetProperty(ref _exchangeCAvgLatMs, value); }
     public bool IsLoading { get => _isLoading; private set => SetProperty(ref _isLoading, value); }
     public string LoadingMessage { get => _loadingMessage; private set => SetProperty(ref _loadingMessage, value); }
     public string MachineHostName { get => _machineHostName; private set => SetProperty(ref _machineHostName, value); }
@@ -1547,6 +1584,10 @@ public sealed class DashboardViewModel : ObservableObject
                     $"    - [{DateTime.Now:HH:mm:ss.fff}] Time delay open B {delayOpenBMs} ms khi open ở sàn B");
             });
 
+            // Chụp gap A-B/A-C/B-C tại tick vào lệnh (TRƯỚC khi await click sàn) để log đúng thời
+            // điểm dispatch — tránh lấy nhầm gap sau broker latency ở khối log phía dưới.
+            var entryMetrics = _runtimeConfigState.CurrentDashboardMetrics;
+
             var openResult = await _tradeExecutionRouter.OpenPairAsync(
                 new TradeOpenPairRequest(
                     new TradeOpenLegRequest(
@@ -1589,6 +1630,11 @@ public sealed class DashboardViewModel : ObservableObject
                 var displayStt = ResolveDisplayStt(pairId, slot);
                 SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "B", "SELL", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
                 SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "A", "BUY", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                // Chỉ log GAP MONITOR khi thực sự có lệnh gửi đi (ít nhất 1 leg) — bỏ qua khi open fail hoàn toàn.
+                if (openResult.Success || openResult.Legs.Any(x => x.Success))
+                {
+                    LogEntryGapMonitor(displayStt, "BUY", entryMetrics?.GapBuy, entryMetrics?.GapBuyAC, entryMetrics?.GapBuyBC);
+                }
                 _autoSlot++;
             });
         }
@@ -1706,6 +1752,10 @@ public sealed class DashboardViewModel : ObservableObject
                     $"    - [{DateTime.Now:HH:mm:ss.fff}] Time delay open B {delayOpenBMs} ms khi open ở sàn B");
             });
 
+            // Chụp gap A-B/A-C/B-C tại tick vào lệnh (TRƯỚC khi await click sàn) để log đúng thời
+            // điểm dispatch — tránh lấy nhầm gap sau broker latency ở khối log phía dưới.
+            var entryMetrics = _runtimeConfigState.CurrentDashboardMetrics;
+
             var openResult = await _tradeExecutionRouter.OpenPairAsync(
                 new TradeOpenPairRequest(
                     new TradeOpenLegRequest(
@@ -1748,6 +1798,11 @@ public sealed class DashboardViewModel : ObservableObject
                 var displayStt = ResolveDisplayStt(pairId, slot);
                 SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "B", "BUY", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
                 SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "A", "SELL", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                // Chỉ log GAP MONITOR khi thực sự có lệnh gửi đi (ít nhất 1 leg) — bỏ qua khi open fail hoàn toàn.
+                if (openResult.Success || openResult.Legs.Any(x => x.Success))
+                {
+                    LogEntryGapMonitor(displayStt, "SELL", entryMetrics?.GapSell, entryMetrics?.GapSellAC, entryMetrics?.GapSellBC);
+                }
                 _autoSlot++;
             });
         }
@@ -3021,6 +3076,10 @@ public sealed class DashboardViewModel : ObservableObject
         ExchangeBHeader = string.IsNullOrWhiteSpace(_runtimeConfigState.MapName2)
             ? "Sàn B"
             : $"Sàn B ({_runtimeConfigState.MapName2})";
+
+        ExchangeCHeader = string.IsNullOrWhiteSpace(_runtimeConfigState.MapName3)
+            ? "Sàn C"
+            : $"Sàn C ({_runtimeConfigState.MapName3})";
 
         RuntimeSummary =
             $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  StartWaitTime: {_runtimeConfigState.CurrentStartWaitTime}  |  EndWaitTime: {_runtimeConfigState.CurrentEndWaitTime}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
@@ -6625,8 +6684,39 @@ public sealed class DashboardViewModel : ObservableObject
         ExchangeBMaxLatMs = FormatNumberOrDash(metrics.ExchangeB.MaxLatMs, 0);
         ExchangeBAvgLatMs = FormatNumberOrDash(metrics.ExchangeB.AvgLatMs, 0);
 
+        // Sàn C monitor-only: ExchangeC null (chưa cấu hình map) => tất cả "-".
+        var exchangeC = metrics.ExchangeC;
+        ExchangeCSymbol = FormatTextOrDash(exchangeC?.Symbol);
+        ExchangeCBid = FormatTrimmedNumberOrDash(exchangeC?.Bid);
+        ExchangeCAsk = FormatTrimmedNumberOrDash(exchangeC?.Ask);
+        ExchangeCSpread = FormatTrimmedNumberOrDash(exchangeC?.Spread);
+        ExchangeCLatencyMs = FormatNumberOrDash(exchangeC?.LatencyMs, 0);
+        ExchangeCTps = FormatOneDecimalOrDash(exchangeC?.Tps);
+        ExchangeCTime = FormatTextOrDash(exchangeC?.Time);
+        ExchangeCMaxLatMs = FormatNumberOrDash(exchangeC?.MaxLatMs, 0);
+        ExchangeCAvgLatMs = FormatNumberOrDash(exchangeC?.AvgLatMs, 0);
+
         GapBuy = FormatIntegerOrDash(metrics.GapBuy);
         GapSell = FormatIntegerOrDash(metrics.GapSell);
+        GapBuyAC = FormatIntegerOrDash(metrics.GapBuyAC);
+        GapSellAC = FormatIntegerOrDash(metrics.GapSellAC);
+        GapBuyBC = FormatIntegerOrDash(metrics.GapBuyBC);
+        GapSellBC = FormatIntegerOrDash(metrics.GapSellBC);
+    }
+
+    // Log giám sát gap A-C / B-C ngay lúc vào lệnh (open ở A và B). Mục đích: đối chiếu gap A-B
+    // dùng để trigger với gap A-C / B-C. Cả 3 gap phải là ảnh chụp CÙNG tick vào lệnh — caller
+    // capture từ CurrentDashboardMetrics TRƯỚC khi await click sàn (tránh lệch do broker latency).
+    // Chỉ đọc-để-log, KHÔNG tham gia quyết định giao dịch. Sàn C chưa cấu hình => giá trị "-".
+    private void LogEntryGapMonitor(int displayStt, string side, int? gapAB, int? gapAC, int? gapBC)
+    {
+        SignalLogItems.Insert(0,
+            $"[STT {displayStt}] GAP MONITOR ({side}) A-B={FormatIntegerOrDash(gapAB)} " +
+            $"A-C={FormatIntegerOrDash(gapAC)} B-C={FormatIntegerOrDash(gapBC)}");
+
+        SafeVmLog(
+            $"[GAP_MONITOR][INFO] open stt={displayStt} side={side} " +
+            $"gapAB={FormatIntegerOrDash(gapAB)} gapAC={FormatIntegerOrDash(gapAC)} gapBC={FormatIntegerOrDash(gapBC)}");
     }
 
     private string BuildAutoSignalSummary(GapSignalTriggerResult trigger)

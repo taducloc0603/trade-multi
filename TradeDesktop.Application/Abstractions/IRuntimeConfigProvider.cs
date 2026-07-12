@@ -40,5 +40,7 @@ public interface IRuntimeConfigProvider
     int CurrentCoolDownGapTick { get; }
     string CurrentMapName1 { get; }
     string CurrentMapName2 { get; }
+    // Sàn C: monitor-only. Reader đọc map này để tính gap A-C/B-C (rỗng => bỏ qua).
+    string CurrentMapName3 { get; }
     DashboardMetrics? CurrentDashboardMetrics { get; }
 }

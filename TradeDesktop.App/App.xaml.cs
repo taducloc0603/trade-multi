@@ -65,6 +65,11 @@ public partial class App : System.Windows.Application
             await _host.StartAsync();
             WriteStartupLog("Host started successfully.");
 
+            // Nạp cấu hình sàn C (monitor-only) từ local file vào runtime state (không qua DB).
+            var sanCConfig = SanCLocalConfigStore.Load();
+            _host.Services.GetRequiredService<RuntimeConfigState>()
+                .UpdateSanCConfig(sanCConfig.MapName3, sanCConfig.PlatformC);
+
             var mainWindow = _host.Services.GetRequiredService<MainWindow>();
             MainWindow = mainWindow;
             mainWindow.Show();

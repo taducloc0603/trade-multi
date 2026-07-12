@@ -13,6 +13,17 @@ public sealed class DashboardMetricsMapper(IGapCalculator gapCalculator) : IDash
         var exchangeB = MapExchange(snapshot.SanB, snapshot.TimestampUtc);
         var (gapBuy, gapSell) = gapCalculator.Calculate(snapshot.SanA, snapshot.SanB);
 
+        // Sàn C monitor-only: chỉ tính khi có dữ liệu C. Gap A-C/B-C dùng C làm "chân gần"
+        // (Calculate(x, y) => GapBuy = y.Bid - x.Ask), nên Calculate(SanC, SanA) => A.Bid - C.Ask.
+        ExchangeDashboardMetrics? exchangeC = null;
+        int? gapBuyAC = null, gapSellAC = null, gapBuyBC = null, gapSellBC = null;
+        if (snapshot.SanC is not null)
+        {
+            exchangeC = MapExchange(snapshot.SanC, snapshot.TimestampUtc);
+            (gapBuyAC, gapSellAC) = gapCalculator.Calculate(snapshot.SanC, snapshot.SanA);
+            (gapBuyBC, gapSellBC) = gapCalculator.Calculate(snapshot.SanC, snapshot.SanB);
+        }
+
         return new DashboardMetrics(
             ExchangeA: exchangeA,
             ExchangeB: exchangeB,
@@ -20,7 +31,12 @@ public sealed class DashboardMetricsMapper(IGapCalculator gapCalculator) : IDash
             GapSell: gapSell,
             IsConnectedA: exchangeA.IsConnected,
             IsConnectedB: exchangeB.IsConnected,
-            TimestampUtc: snapshot.TimestampUtc);
+            TimestampUtc: snapshot.TimestampUtc,
+            ExchangeC: exchangeC,
+            GapBuyAC: gapBuyAC,
+            GapSellAC: gapSellAC,
+            GapBuyBC: gapBuyBC,
+            GapSellBC: gapSellBC);
     }
 
     private static ExchangeDashboardMetrics MapExchange(ExchangeMetrics source, DateTime timestampUtc)

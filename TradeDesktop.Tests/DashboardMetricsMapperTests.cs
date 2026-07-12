@@ -5,43 +5,59 @@ using TradeDesktop.Domain.Models;
 
 namespace TradeDesktop.Tests;
 
-public sealed class GapCalculatorTests
+public sealed class DashboardMetricsMapperTests
 {
+    // A: bid 100.00 / ask 100.01, B: bid 100.10 / ask 100.11, C: bid 100.05 / ask 100.06 (point = 100).
+    // Gap A-B (giữ nguyên): Buy = B.Bid - A.Ask = 9, Sell = B.Ask - A.Bid = 11.
+    // Gap A-C ("C là chân gần" => Calculate(C, A)): Buy = A.Bid - C.Ask = -6, Sell = A.Ask - C.Bid = -4.
+    // Gap B-C (Calculate(C, B)): Buy = B.Bid - C.Ask = 4, Sell = B.Ask - C.Bid = 6.
     [Fact]
-    public void Calculate_ReturnsExpectedGapSigns_ForBuyAndSellContracts()
+    public void Map_WithSanC_ComputesAcAndBcGaps_WithCAsNearLeg()
     {
-        var sut = new GapCalculator(new StubRuntimeConfigProvider(point: 100));
+        var mapper = new DashboardMetricsMapper(new GapCalculator(new StubRuntimeConfigProvider(point: 100)));
+        var snapshot = new SharedMemorySnapshot(
+            SanA: CreateExchange(bid: 100.00m, ask: 100.01m),
+            SanB: CreateExchange(bid: 100.10m, ask: 100.11m),
+            TimestampUtc: DateTime.UtcNow,
+            SanC: CreateExchange(bid: 100.05m, ask: 100.06m));
 
-        // BUY opportunity: SanB.Bid > SanA.Ask => positive buy gap
-        // SELL opportunity: SanB.Ask > SanA.Bid => positive sell gap
-        var sanA = CreateExchange(bid: 100.00m, ask: 100.01m);
-        var sanB = CreateExchange(bid: 100.10m, ask: 100.11m);
+        var result = mapper.Map(snapshot);
 
-        var (gapBuy, gapSell) = sut.Calculate(sanA, sanB);
-
-        Assert.Equal(9, gapBuy);
-        Assert.Equal(11, gapSell);
+        // A-B không đổi.
+        Assert.Equal(9, result.GapBuy);
+        Assert.Equal(11, result.GapSell);
+        // A-C: A.Bid - C.Ask / A.Ask - C.Bid.
+        Assert.Equal(-6, result.GapBuyAC);
+        Assert.Equal(-4, result.GapSellAC);
+        // B-C: B.Bid - C.Ask / B.Ask - C.Bid.
+        Assert.Equal(4, result.GapBuyBC);
+        Assert.Equal(6, result.GapSellBC);
+        Assert.NotNull(result.ExchangeC);
+        Assert.Equal(100.05m, result.ExchangeC!.Bid);
     }
 
     [Fact]
-    public void Calculate_UsesPointMultiplier_AndDefaultsToOneWhenInvalid()
+    public void Map_WithoutSanC_LeavesExchangeCAndAcBcGapsNull_AndAbUnchanged()
     {
-        var sanA = CreateExchange(bid: 100.00m, ask: 100.02m);
-        var sanB = CreateExchange(bid: 100.04m, ask: 100.06m);
+        var mapper = new DashboardMetricsMapper(new GapCalculator(new StubRuntimeConfigProvider(point: 100)));
+        var snapshot = new SharedMemorySnapshot(
+            SanA: CreateExchange(bid: 100.00m, ask: 100.01m),
+            SanB: CreateExchange(bid: 100.10m, ask: 100.11m),
+            TimestampUtc: DateTime.UtcNow);
 
-        var sutWithPoint = new GapCalculator(new StubRuntimeConfigProvider(point: 100));
-        var sutFallback = new GapCalculator(new StubRuntimeConfigProvider(point: 0));
+        var result = mapper.Map(snapshot);
 
-        var withPoint = sutWithPoint.Calculate(sanA, sanB);
-        var fallback = sutFallback.Calculate(sanA, sanB);
-
-        Assert.Equal(2, withPoint.GapBuy);
-        Assert.Equal(6, withPoint.GapSell);
-
-        // (100.04 - 100.02) * 1 = 0.02 -> int cast => 0
-        // (100.06 - 100.00) * 1 = 0.06 -> int cast => 0
-        Assert.Equal(0, fallback.GapBuy);
-        Assert.Equal(0, fallback.GapSell);
+        // Hành vi A/B y hệt trước khi có sàn C.
+        Assert.Equal(9, result.GapBuy);
+        Assert.Equal(11, result.GapSell);
+        Assert.Equal(100.00m, result.ExchangeA.Bid);
+        Assert.Equal(100.10m, result.ExchangeB.Bid);
+        // C chưa cấu hình => null hết.
+        Assert.Null(result.ExchangeC);
+        Assert.Null(result.GapBuyAC);
+        Assert.Null(result.GapSellAC);
+        Assert.Null(result.GapBuyBC);
+        Assert.Null(result.GapSellBC);
     }
 
     private static ExchangeMetrics CreateExchange(decimal bid, decimal ask)

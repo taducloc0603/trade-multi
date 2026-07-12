@@ -24,14 +24,19 @@ public sealed class ConfigViewModel : ObservableObject
     private string _tradeHwndB = string.Empty;
     private string _platformA = "mt5";
     private string _platformB = "mt5";
+    // Sàn C: monitor-only, lưu local (không DB). Chỉ MapName + Platform.
+    private string _mapName3 = string.Empty;
+    private string _platformC = "mt5";
 
     private string _loadStatus = "Đang tải theo host name máy...";
     private string _map1CheckStatus = "Chưa kiểm tra";
     private string _map2CheckStatus = "Chưa kiểm tra";
+    private string _map3CheckStatus = "Chưa kiểm tra";
     private string _errorMessage = string.Empty;
 
     private bool _isMap1Valid;
     private bool _isMap2Valid;
+    private bool _isMap3Valid;
     private bool _isExistingRecordLoaded;
     private bool _areMapNamesEnabled;
     private bool _canSave;
@@ -49,6 +54,7 @@ public sealed class ConfigViewModel : ObservableObject
 
         CheckMap1Command = new AsyncRelayCommand(CheckMap1Async, CanCheckMap1);
         CheckMap2Command = new AsyncRelayCommand(CheckMap2Async, CanCheckMap2);
+        CheckMap3Command = new AsyncRelayCommand(CheckMap3Async, CanCheckMap3);
         SaveCommand = new AsyncRelayCommand(SaveAsync, CanSaveCommand);
         CancelCommand = new AsyncRelayCommand(CancelAsync);
         AddHwndColumnCommand = new AsyncRelayCommand(AddHwndColumnAsync);
@@ -59,6 +65,9 @@ public sealed class ConfigViewModel : ObservableObject
         MapName2 = runtimeConfigState.CurrentMapName2;
         PlatformA = runtimeConfigState.CurrentPlatformA;
         PlatformB = runtimeConfigState.CurrentPlatformB;
+        // Sàn C nạp từ runtime state (App.xaml.cs đã load từ local file lúc startup).
+        MapName3 = runtimeConfigState.CurrentMapName3;
+        PlatformC = runtimeConfigState.CurrentPlatformC;
 
         var hasRuntimeState =
             !string.IsNullOrWhiteSpace(MachineHostName) ||
@@ -123,6 +132,22 @@ public sealed class ConfigViewModel : ObservableObject
         }
     }
 
+    public string MapName3
+    {
+        get => _mapName3;
+        set
+        {
+            if (!SetProperty(ref _mapName3, value))
+            {
+                return;
+            }
+
+            IsMapName3Valid = false;
+            Map3CheckStatus = "Chưa kiểm tra";
+            RefreshButtons();
+        }
+    }
+
     // Backward-compatible properties trỏ về cột CHART đầu tiên.
     public string ChartHwndA
     {
@@ -173,6 +198,12 @@ public sealed class ConfigViewModel : ObservableObject
     {
         get => _map2CheckStatus;
         private set => SetProperty(ref _map2CheckStatus, value);
+    }
+
+    public string Map3CheckStatus
+    {
+        get => _map3CheckStatus;
+        private set => SetProperty(ref _map3CheckStatus, value);
     }
 
     public string ErrorMessage
@@ -279,6 +310,50 @@ public sealed class ConfigViewModel : ObservableObject
         }
     }
 
+    public string PlatformC
+    {
+        get => _platformC;
+        set
+        {
+            var normalized = NormalizePlatform(value);
+            if (!SetProperty(ref _platformC, normalized))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(IsPlatformCMt4));
+            OnPropertyChanged(nameof(IsPlatformCMt5));
+        }
+    }
+
+    public bool IsPlatformCMt4
+    {
+        get => string.Equals(PlatformC, "mt4", StringComparison.OrdinalIgnoreCase);
+        set
+        {
+            if (!value)
+            {
+                return;
+            }
+
+            PlatformC = "mt4";
+        }
+    }
+
+    public bool IsPlatformCMt5
+    {
+        get => string.Equals(PlatformC, "mt5", StringComparison.OrdinalIgnoreCase);
+        set
+        {
+            if (!value)
+            {
+                return;
+            }
+
+            PlatformC = "mt5";
+        }
+    }
+
     public bool IsMapName1Valid
     {
         get => _isMap1Valid;
@@ -289,6 +364,12 @@ public sealed class ConfigViewModel : ObservableObject
     {
         get => _isMap2Valid;
         private set => SetProperty(ref _isMap2Valid, value);
+    }
+
+    public bool IsMapName3Valid
+    {
+        get => _isMap3Valid;
+        private set => SetProperty(ref _isMap3Valid, value);
     }
 
     public bool IsExistingRecordLoaded
@@ -311,6 +392,7 @@ public sealed class ConfigViewModel : ObservableObject
 
     public AsyncRelayCommand CheckMap1Command { get; }
     public AsyncRelayCommand CheckMap2Command { get; }
+    public AsyncRelayCommand CheckMap3Command { get; }
     public AsyncRelayCommand SaveCommand { get; }
     public AsyncRelayCommand CancelCommand { get; }
     public AsyncRelayCommand AddHwndColumnCommand { get; }
@@ -318,6 +400,7 @@ public sealed class ConfigViewModel : ObservableObject
 
     private bool CanCheckMap1() => AreMapNamesEnabled && !string.IsNullOrWhiteSpace(MapName1);
     private bool CanCheckMap2() => AreMapNamesEnabled && !string.IsNullOrWhiteSpace(MapName2);
+    private bool CanCheckMap3() => AreMapNamesEnabled && !string.IsNullOrWhiteSpace(MapName3);
     private bool CanDeleteHwndColumn() => ManualHwndColumns.Count > 1;
 
     private bool CanSaveCommand() =>
@@ -475,6 +558,15 @@ public sealed class ConfigViewModel : ObservableObject
         return Task.CompletedTask;
     }
 
+    private Task CheckMap3Async()
+    {
+        ClearError();
+        IsMapName3Valid = SharedMemoryChecker.MapExists(MapName3.Trim());
+        Map3CheckStatus = IsMapName3Valid ? "✔ Map tồn tại" : "✖ Map không tồn tại";
+        RefreshButtons();
+        return Task.CompletedTask;
+    }
+
     private async Task SaveAsync()
     {
         if (!CanSaveCommand() || !IsExistingRecordLoaded)
@@ -519,10 +611,17 @@ public sealed class ConfigViewModel : ObservableObject
             _runtimeConfigState.Update(MachineHostName, MapName1, MapName2, _runtimeConfigState.CurrentPoint);
             _runtimeConfigState.UpdatePlatform(PlatformA, PlatformB);
             _runtimeConfigState.UpdateManualTradeHwnd(columns);
+
+            // Sàn C monitor-only: lưu local (KHÔNG vào DB) + đẩy vào runtime state.
+            var mapName3 = MapName3.Trim();
+            var platformC = NormalizePlatform(PlatformC);
+            SanCLocalConfigStore.Save(new SanCLocalConfig(mapName3, platformC));
+            _runtimeConfigState.UpdateSanCConfig(mapName3, platformC);
+
             SafeConfigLog(
                 $"[CONFIG][INFO] Runtime config updated: host={MachineHostName} " +
                 $"map1={MapName1} map2={MapName2} platformA={PlatformA} platformB={PlatformB} " +
-                $"manualColumns={columns.Count}");
+                $"map3={mapName3} platformC={platformC} manualColumns={columns.Count}");
             RequestClose?.Invoke(true);
         }
         catch (Exception ex)
@@ -560,6 +659,7 @@ public sealed class ConfigViewModel : ObservableObject
         RefreshDerivedState();
         CheckMap1Command?.RaiseCanExecuteChanged();
         CheckMap2Command?.RaiseCanExecuteChanged();
+        CheckMap3Command?.RaiseCanExecuteChanged();
         SaveCommand?.RaiseCanExecuteChanged();
         DeleteHwndColumnCommand?.RaiseCanExecuteChanged();
     }

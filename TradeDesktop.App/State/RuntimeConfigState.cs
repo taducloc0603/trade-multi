@@ -56,6 +56,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public string CurrentMapName2 { get; private set; } = string.Empty;
     public string CurrentPlatformA { get; private set; } = "mt5";
     public string CurrentPlatformB { get; private set; } = "mt5";
+    // Sàn C: monitor-only (không vào lệnh). Chỉ dùng để đọc giá + tính gap A-C/B-C.
+    public string CurrentMapName3 { get; private set; } = string.Empty;
+    public string CurrentPlatformC { get; private set; } = "mt5";
     public string CurrentChartHwndA { get; private set; } = string.Empty;
     public string CurrentTradeHwndA { get; private set; } = string.Empty;
     public string CurrentChartHwndB { get; private set; } = string.Empty;
@@ -69,6 +72,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public string MapName2 => CurrentMapName2;
     public string PlatformA => CurrentPlatformA;
     public string PlatformB => CurrentPlatformB;
+    public string MapName3 => CurrentMapName3;
+    public string PlatformC => CurrentPlatformC;
     public string ChartHwndA => CurrentChartHwndA;
     public string TradeHwndA => CurrentTradeHwndA;
     public string ChartHwndB => CurrentChartHwndB;
@@ -443,6 +448,15 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     {
         CurrentPlatformA = NormalizePlatform(platformA);
         CurrentPlatformB = NormalizePlatform(platformB);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    // Sàn C là monitor-only và KHÔNG lưu DB — cập nhật qua method riêng, không luồn vào các
+    // overload Update(...) A/B để tránh chạm đường load config chính.
+    public void UpdateSanCConfig(string? mapName3, string? platformC)
+    {
+        CurrentMapName3 = (mapName3 ?? string.Empty).Trim();
+        CurrentPlatformC = NormalizePlatform(platformC);
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 

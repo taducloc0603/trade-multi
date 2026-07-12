@@ -177,6 +177,7 @@
                                 <ColumnDefinition Width="2*" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -187,8 +188,9 @@
                             <TextBlock Text="Thông số" FontWeight="SemiBold" Foreground="#344054" />
                             <TextBlock Grid.Column="1" Text="{Binding ExchangeAHeader}" FontWeight="SemiBold" Foreground="#344054" HorizontalAlignment="Center" />
                             <TextBlock Grid.Column="2" Text="{Binding ExchangeBHeader}" FontWeight="SemiBold" Foreground="#344054" HorizontalAlignment="Center" />
+                            <TextBlock Grid.Column="3" Text="{Binding ExchangeCHeader}" FontWeight="SemiBold" Foreground="#344054" HorizontalAlignment="Center" />
 
-                            <Grid Grid.Row="2" Grid.ColumnSpan="3">
+                            <Grid Grid.Row="2" Grid.ColumnSpan="4">
                                 <Grid.Resources>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="VerticalAlignment" Value="Center" />
@@ -206,19 +208,20 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
-                                <Border Grid.Row="0" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Symbol" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeASymbol}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBSymbol}" HorizontalAlignment="Center"/></Grid></Border>
-                                <Border Grid.Row="1" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Bid" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeABid}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBBid}" HorizontalAlignment="Center"/></Grid></Border>
-                                <Border Grid.Row="2" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Ask" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeAAsk}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBAsk}" HorizontalAlignment="Center"/></Grid></Border>
-                                <Border Grid.Row="3" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Spread" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeASpread}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBSpread}" HorizontalAlignment="Center"/></Grid></Border>
-                                <Border Grid.Row="4" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Latency(ms)" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeALatencyMs}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBLatencyMs}" HorizontalAlignment="Center"/></Grid></Border>
-                                <Border Grid.Row="5" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="TPS" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeATps}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBTps}" HorizontalAlignment="Center"/></Grid></Border>
-                                <Border Grid.Row="6" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Time" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeATime}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBTime}" HorizontalAlignment="Center"/></Grid></Border>
-                                <Border Grid.Row="7" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Max Lat(ms)" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeAMaxLatMs}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBMaxLatMs}" HorizontalAlignment="Center"/></Grid></Border>
-                                <Border Grid.Row="8" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Avg Lat(ms)" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeAAvgLatMs}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBAvgLatMs}" HorizontalAlignment="Center"/></Grid></Border>
+                                <Border Grid.Row="0" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Symbol" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeASymbol}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBSymbol}" HorizontalAlignment="Center"/><TextBlock Grid.Column="3" Text="{Binding ExchangeCSymbol}" HorizontalAlignment="Center"/></Grid></Border>
+                                <Border Grid.Row="1" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Bid" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeABid}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBBid}" HorizontalAlignment="Center"/><TextBlock Grid.Column="3" Text="{Binding ExchangeCBid}" HorizontalAlignment="Center"/></Grid></Border>
+                                <Border Grid.Row="2" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Ask" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeAAsk}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBAsk}" HorizontalAlignment="Center"/><TextBlock Grid.Column="3" Text="{Binding ExchangeCAsk}" HorizontalAlignment="Center"/></Grid></Border>
+                                <Border Grid.Row="3" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Spread" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeASpread}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBSpread}" HorizontalAlignment="Center"/><TextBlock Grid.Column="3" Text="{Binding ExchangeCSpread}" HorizontalAlignment="Center"/></Grid></Border>
+                                <Border Grid.Row="4" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Latency(ms)" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeALatencyMs}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBLatencyMs}" HorizontalAlignment="Center"/><TextBlock Grid.Column="3" Text="{Binding ExchangeCLatencyMs}" HorizontalAlignment="Center"/></Grid></Border>
+                                <Border Grid.Row="5" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="TPS" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeATps}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBTps}" HorizontalAlignment="Center"/><TextBlock Grid.Column="3" Text="{Binding ExchangeCTps}" HorizontalAlignment="Center"/></Grid></Border>
+                                <Border Grid.Row="6" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Time" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeATime}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBTime}" HorizontalAlignment="Center"/><TextBlock Grid.Column="3" Text="{Binding ExchangeCTime}" HorizontalAlignment="Center"/></Grid></Border>
+                                <Border Grid.Row="7" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Max Lat(ms)" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeAMaxLatMs}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBMaxLatMs}" HorizontalAlignment="Center"/><TextBlock Grid.Column="3" Text="{Binding ExchangeCMaxLatMs}" HorizontalAlignment="Center"/></Grid></Border>
+                                <Border Grid.Row="8" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Avg Lat(ms)" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeAAvgLatMs}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBAvgLatMs}" HorizontalAlignment="Center"/><TextBlock Grid.Column="3" Text="{Binding ExchangeCAvgLatMs}" HorizontalAlignment="Center"/></Grid></Border>
                             </Grid>
                         </Grid>
 
-                        <Grid Grid.Row="4">
+                        <StackPanel Grid.Row="4">
+                          <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="8" />
@@ -279,7 +282,40 @@
                                     Visibility="{Binding IsManualTradeButtonsVisible, Converter={StaticResource BoolToVisibilityConverter}}"
                                     Command="{Binding CloseOrderCommand}" />
                             -->
-                        </Grid>
+                          </Grid>
+
+                          <!-- Gap giám sát A-C / B-C (sàn C monitor-only, không vào lệnh). -->
+                          <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="6" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="18" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="6" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="4" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="GAP A-C" FontWeight="SemiBold" Foreground="#344054" VerticalAlignment="Center" />
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="BUY" Foreground="#667085" VerticalAlignment="Center" />
+                            <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding GapBuyAC}" Foreground="#101828" VerticalAlignment="Center" />
+                            <TextBlock Grid.Row="0" Grid.Column="5" Text="SELL" Foreground="#667085" VerticalAlignment="Center" />
+                            <TextBlock Grid.Row="0" Grid.Column="7" Text="{Binding GapSellAC}" Foreground="#101828" VerticalAlignment="Center" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="GAP B-C" FontWeight="SemiBold" Foreground="#344054" VerticalAlignment="Center" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="BUY" Foreground="#667085" VerticalAlignment="Center" />
+                            <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding GapBuyBC}" Foreground="#101828" VerticalAlignment="Center" />
+                            <TextBlock Grid.Row="2" Grid.Column="5" Text="SELL" Foreground="#667085" VerticalAlignment="Center" />
+                            <TextBlock Grid.Row="2" Grid.Column="7" Text="{Binding GapSellBC}" Foreground="#101828" VerticalAlignment="Center" />
+                          </Grid>
+                        </StackPanel>
 
                         <TextBlock Grid.Row="6"
                                    Foreground="#667085"

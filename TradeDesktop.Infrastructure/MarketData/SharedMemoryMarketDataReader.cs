@@ -105,13 +105,18 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
         {
             var mapName1 = _runtimeConfigProvider.CurrentMapName1;
             var mapName2 = _runtimeConfigProvider.CurrentMapName2;
+            // Sàn C monitor-only: chỉ đọc khi có cấu hình map, rỗng => bỏ qua (không tạo reader thừa).
+            var mapName3 = _runtimeConfigProvider.CurrentMapName3;
 
-            RefreshMapReaders(mapName1, mapName2);
+            RefreshMapReaders(mapName1, mapName2, mapName3);
 
             var sanA = ReadExchangeMetrics(mapName1, "SanA");
             var sanB = ReadExchangeMetrics(mapName2, "SanB");
+            var sanC = string.IsNullOrWhiteSpace(mapName3)
+                ? null
+                : ReadExchangeMetrics(mapName3, "SanC");
 
-            SnapshotReceived?.Invoke(this, new SharedMemorySnapshot(sanA, sanB, DateTime.UtcNow));
+            SnapshotReceived?.Invoke(this, new SharedMemorySnapshot(sanA, sanB, DateTime.UtcNow, sanC));
         }
     }
 
@@ -206,7 +211,7 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
         }
     }
 
-    private void RefreshMapReaders(string? mapName1, string? mapName2)
+    private void RefreshMapReaders(string? mapName1, string? mapName2, string? mapName3 = null)
     {
         var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -218,6 +223,11 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
         if (!string.IsNullOrWhiteSpace(mapName2))
         {
             keep.Add(mapName2.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(mapName3))
+        {
+            keep.Add(mapName3.Trim());
         }
 
         lock (_syncRoot)

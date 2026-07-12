@@ -42,6 +42,10 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="10" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="20" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="10" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <Grid Grid.Row="0">
@@ -253,6 +257,54 @@
                              Height="32"
                              VerticalContentAlignment="Center"
                              Text="{Binding TradeHwndB, UpdateSourceTrigger=PropertyChanged}" />
+                </Grid>
+
+                <!-- Sàn C: monitor-only (chỉ đọc giá để tính gap A-C/B-C, KHÔNG vào lệnh) -->
+                <Grid Grid.Row="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Text="Sàn C"
+                               FontWeight="SemiBold"
+                               FontSize="14"
+                               Foreground="#101828"
+                               VerticalAlignment="Center" />
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <RadioButton Content="MT4" GroupName="ExchangeCPlatform" Margin="0,0,22,0" IsChecked="{Binding IsPlatformCMt4, Mode=TwoWay}" />
+                        <RadioButton Content="MT5" GroupName="ExchangeCPlatform" IsChecked="{Binding IsPlatformCMt5, Mode=TwoWay}" />
+                    </StackPanel>
+                </Grid>
+
+                <Grid Grid.Row="18">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                        <ColumnDefinition Width="150" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Map Name" FontWeight="SemiBold" />
+                    <TextBox Grid.Column="1"
+                             Margin="0,0,10,0"
+                             Height="32"
+                             VerticalContentAlignment="Center"
+                             IsEnabled="{Binding AreMapNamesEnabled}"
+                             Text="{Binding MapName3, UpdateSourceTrigger=PropertyChanged}" />
+                    <Button Grid.Column="2"
+                            Content="Check"
+                            Width="78"
+                            Height="32"
+                            IsEnabled="{Binding AreMapNamesEnabled}"
+                            Command="{Binding CheckMap3Command}" />
+                    <TextBlock Grid.Column="3"
+                               Margin="10,0,0,0"
+                               VerticalAlignment="Center"
+                               Text="{Binding Map3CheckStatus}"
+                               Foreground="#344054" />
                 </Grid>
                 </Grid>
             </Border>

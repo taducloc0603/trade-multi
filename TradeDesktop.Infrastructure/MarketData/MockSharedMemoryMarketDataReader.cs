@@ -93,7 +93,15 @@ public sealed class MockSharedMemoryMarketDataReader : ISharedMemoryReader
                 Spread = (sanA.Ask + 0.01m) - (sanA.Bid - 0.01m)
             };
 
-            SnapshotReceived?.Invoke(this, new SharedMemorySnapshot(sanA, sanB, DateTime.UtcNow));
+            // Sàn C monitor-only: dữ liệu giả lệch nhẹ để kiểm tra hiển thị + gap A-C/B-C.
+            var sanC = sanA with
+            {
+                Bid = sanA.Bid - 0.02m,
+                Ask = sanA.Ask + 0.02m,
+                Spread = (sanA.Ask + 0.02m) - (sanA.Bid - 0.02m)
+            };
+
+            SnapshotReceived?.Invoke(this, new SharedMemorySnapshot(sanA, sanB, DateTime.UtcNow, sanC));
         }
     }
 }

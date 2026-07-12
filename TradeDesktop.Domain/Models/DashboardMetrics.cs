@@ -20,4 +20,9 @@ public sealed record DashboardMetrics(
     int? GapSell,
     bool IsConnectedA,
     bool IsConnectedB,
-    DateTime TimestampUtc);
+    DateTime TimestampUtc,
+    ExchangeDashboardMetrics? ExchangeC = null,
+    int? GapBuyAC = null,
+    int? GapSellAC = null,
+    int? GapBuyBC = null,
+    int? GapSellBC = null);
