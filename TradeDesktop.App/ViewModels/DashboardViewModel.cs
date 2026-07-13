@@ -1633,7 +1633,7 @@ public sealed class DashboardViewModel : ObservableObject
                 // Chỉ log GAP MONITOR khi thực sự có lệnh gửi đi (ít nhất 1 leg) — bỏ qua khi open fail hoàn toàn.
                 if (openResult.Success || openResult.Legs.Any(x => x.Success))
                 {
-                    LogEntryGapMonitor(displayStt, "BUY", entryMetrics?.GapBuy, entryMetrics?.GapBuyAC, entryMetrics?.GapBuyBC);
+                    LogEntryGapMonitor(displayStt, "BUY", entryMetrics);
                 }
                 _autoSlot++;
             });
@@ -1801,7 +1801,7 @@ public sealed class DashboardViewModel : ObservableObject
                 // Chỉ log GAP MONITOR khi thực sự có lệnh gửi đi (ít nhất 1 leg) — bỏ qua khi open fail hoàn toàn.
                 if (openResult.Success || openResult.Legs.Any(x => x.Success))
                 {
-                    LogEntryGapMonitor(displayStt, "SELL", entryMetrics?.GapSell, entryMetrics?.GapSellAC, entryMetrics?.GapSellBC);
+                    LogEntryGapMonitor(displayStt, "SELL", entryMetrics);
                 }
                 _autoSlot++;
             });
@@ -6708,15 +6708,19 @@ public sealed class DashboardViewModel : ObservableObject
     // dùng để trigger với gap A-C / B-C. Cả 3 gap phải là ảnh chụp CÙNG tick vào lệnh — caller
     // capture từ CurrentDashboardMetrics TRƯỚC khi await click sàn (tránh lệch do broker latency).
     // Chỉ đọc-để-log, KHÔNG tham gia quyết định giao dịch. Sàn C chưa cấu hình => giá trị "-".
-    private void LogEntryGapMonitor(int displayStt, string side, int? gapAB, int? gapAC, int? gapBC)
+    private void LogEntryGapMonitor(int displayStt, string side, DashboardMetrics? m)
     {
         SignalLogItems.Insert(0,
-            $"[STT {displayStt}] GAP MONITOR ({side}) A-B={FormatIntegerOrDash(gapAB)} " +
-            $"A-C={FormatIntegerOrDash(gapAC)} B-C={FormatIntegerOrDash(gapBC)}");
+            $"[STT {displayStt}] GAP MONITOR (open {side}) " +
+            $"| A-B buy={FormatIntegerOrDash(m?.GapBuy)} sell={FormatIntegerOrDash(m?.GapSell)} " +
+            $"| A-C buy={FormatIntegerOrDash(m?.GapBuyAC)} sell={FormatIntegerOrDash(m?.GapSellAC)} " +
+            $"| B-C buy={FormatIntegerOrDash(m?.GapBuyBC)} sell={FormatIntegerOrDash(m?.GapSellBC)}");
 
         SafeVmLog(
             $"[GAP_MONITOR][INFO] open stt={displayStt} side={side} " +
-            $"gapAB={FormatIntegerOrDash(gapAB)} gapAC={FormatIntegerOrDash(gapAC)} gapBC={FormatIntegerOrDash(gapBC)}");
+            $"gapAB_buy={FormatIntegerOrDash(m?.GapBuy)} gapAB_sell={FormatIntegerOrDash(m?.GapSell)} " +
+            $"gapAC_buy={FormatIntegerOrDash(m?.GapBuyAC)} gapAC_sell={FormatIntegerOrDash(m?.GapSellAC)} " +
+            $"gapBC_buy={FormatIntegerOrDash(m?.GapBuyBC)} gapBC_sell={FormatIntegerOrDash(m?.GapSellBC)}");
     }
 
     private string BuildAutoSignalSummary(GapSignalTriggerResult trigger)
