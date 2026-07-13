@@ -1633,7 +1633,7 @@ public sealed class DashboardViewModel : ObservableObject
                 // Chỉ log GAP MONITOR khi thực sự có lệnh gửi đi (ít nhất 1 leg) — bỏ qua khi open fail hoàn toàn.
                 if (openResult.Success || openResult.Legs.Any(x => x.Success))
                 {
-                    LogEntryGapMonitor(displayStt, "BUY", entryMetrics);
+                    LogEntryGapMonitor(displayStt, "open", "BUY", entryMetrics);
                 }
                 _autoSlot++;
             });
@@ -1801,7 +1801,7 @@ public sealed class DashboardViewModel : ObservableObject
                 // Chỉ log GAP MONITOR khi thực sự có lệnh gửi đi (ít nhất 1 leg) — bỏ qua khi open fail hoàn toàn.
                 if (openResult.Success || openResult.Legs.Any(x => x.Success))
                 {
-                    LogEntryGapMonitor(displayStt, "SELL", entryMetrics);
+                    LogEntryGapMonitor(displayStt, "open", "SELL", entryMetrics);
                 }
                 _autoSlot++;
             });
@@ -1910,6 +1910,10 @@ public sealed class DashboardViewModel : ObservableObject
                 // Legacy path không có targetSlot — vẫn kick cooldown global.
                 _portfolioCoordinator.KickGlobalCooldown(DateTime.UtcNow, "after CLOSE_DISPATCH (legacy)");
             }
+
+            // Chụp gap A-B/A-C/B-C tại tick dispatch close (TRƯỚC await click sàn) để log đúng thời
+            // điểm đóng — tránh lấy nhầm gap sau broker latency ở khối log phía dưới.
+            var entryMetrics = _runtimeConfigState.CurrentDashboardMetrics;
 
             var closeResult = await _tradeExecutionRouter.ClosePairAsync(
                 new TradeClosePairRequest(
@@ -2027,6 +2031,16 @@ public sealed class DashboardViewModel : ObservableObject
                         trigger.CloseTpProfit,
                         trigger.CloseTpTarget,
                         trigger.CloseTpProfits));
+                }
+
+                // Log giám sát gap A-B/A-C/B-C lúc đóng lệnh — chỉ khi có ít nhất 1 leg đóng thành công.
+                if ((selectA.TradeType.HasValue && closeSuccessA) || (selectB.TradeType.HasValue && closeSuccessB))
+                {
+                    LogEntryGapMonitor(
+                        ResolveDisplayStt(targetSlot?.PairId, slot),
+                        "close",
+                        isCloseBuy ? "BUY" : "SELL",
+                        entryMetrics);
                 }
 
                 AppendCloseSelectionDiagnostics(selectA, selectB);
@@ -6708,16 +6722,16 @@ public sealed class DashboardViewModel : ObservableObject
     // dùng để trigger với gap A-C / B-C. Cả 3 gap phải là ảnh chụp CÙNG tick vào lệnh — caller
     // capture từ CurrentDashboardMetrics TRƯỚC khi await click sàn (tránh lệch do broker latency).
     // Chỉ đọc-để-log, KHÔNG tham gia quyết định giao dịch. Sàn C chưa cấu hình => giá trị "-".
-    private void LogEntryGapMonitor(int displayStt, string side, DashboardMetrics? m)
+    private void LogEntryGapMonitor(int displayStt, string action, string side, DashboardMetrics? m)
     {
         SignalLogItems.Insert(0,
-            $"[STT {displayStt}] GAP MONITOR (open {side}) " +
+            $"[STT {displayStt}] GAP MONITOR ({action} {side}) " +
             $"| A-B buy={FormatIntegerOrDash(m?.GapBuy)} sell={FormatIntegerOrDash(m?.GapSell)} " +
             $"| A-C buy={FormatIntegerOrDash(m?.GapBuyAC)} sell={FormatIntegerOrDash(m?.GapSellAC)} " +
             $"| B-C buy={FormatIntegerOrDash(m?.GapBuyBC)} sell={FormatIntegerOrDash(m?.GapSellBC)}");
 
         SafeVmLog(
-            $"[GAP_MONITOR][INFO] open stt={displayStt} side={side} " +
+            $"[GAP_MONITOR][INFO] {action} stt={displayStt} side={side} " +
             $"gapAB_buy={FormatIntegerOrDash(m?.GapBuy)} gapAB_sell={FormatIntegerOrDash(m?.GapSell)} " +
             $"gapAC_buy={FormatIntegerOrDash(m?.GapBuyAC)} gapAC_sell={FormatIntegerOrDash(m?.GapSellAC)} " +
             $"gapBC_buy={FormatIntegerOrDash(m?.GapBuyBC)} gapBC_sell={FormatIntegerOrDash(m?.GapSellBC)}");
