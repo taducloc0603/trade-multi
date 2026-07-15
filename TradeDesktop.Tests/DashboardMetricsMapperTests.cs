@@ -9,10 +9,10 @@ public sealed class DashboardMetricsMapperTests
 {
     // A: bid 100.00 / ask 100.01, B: bid 100.10 / ask 100.11, C: bid 100.04 / ask 100.07 (point = 100).
     // Gap A-B (giữ nguyên): Buy = B.Bid - A.Ask = 9, Sell = B.Ask - A.Bid = 11.
-    // Gap A-C (cùng-chân, A trừ C): Buy = A.Ask - C.Ask = -6, Sell = A.Bid - C.Bid = -4.
-    // Gap B-C (cùng-chân, B trừ C): Buy = B.Ask - C.Ask = 4, Sell = B.Bid - C.Bid = 6.
+    // Gap A-C: Buy = C.Bid - A.Ask = 3, Sell = A.Bid - C.Ask = -7.
+    // Gap B-C: Buy = C.Bid - B.Ask = -7, Sell = B.Bid - C.Ask = 3.
     [Fact]
-    public void Map_WithSanC_ComputesAcAndBcGaps_SameLeg_PrimaryMinusC()
+    public void Map_WithSanC_ComputesAcAndBcGaps_CBidMinusXAsk_AndXBidMinusCAsk()
     {
         var mapper = new DashboardMetricsMapper(new GapCalculator(new StubRuntimeConfigProvider(point: 100)));
         var snapshot = new SharedMemorySnapshot(
@@ -26,12 +26,12 @@ public sealed class DashboardMetricsMapperTests
         // A-B không đổi.
         Assert.Equal(9, result.GapBuy);
         Assert.Equal(11, result.GapSell);
-        // A-C: Buy = A.Ask - C.Ask / Sell = A.Bid - C.Bid.
-        Assert.Equal(-6, result.GapBuyAC);
-        Assert.Equal(-4, result.GapSellAC);
-        // B-C: Buy = B.Ask - C.Ask / Sell = B.Bid - C.Bid.
-        Assert.Equal(4, result.GapBuyBC);
-        Assert.Equal(6, result.GapSellBC);
+        // A-C: Buy = C.Bid - A.Ask / Sell = A.Bid - C.Ask.
+        Assert.Equal(3, result.GapBuyAC);
+        Assert.Equal(-7, result.GapSellAC);
+        // B-C: Buy = C.Bid - B.Ask / Sell = B.Bid - C.Ask.
+        Assert.Equal(-7, result.GapBuyBC);
+        Assert.Equal(3, result.GapSellBC);
         Assert.NotNull(result.ExchangeC);
         Assert.Equal(100.04m, result.ExchangeC!.Bid);
     }

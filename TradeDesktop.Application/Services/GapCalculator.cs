@@ -7,9 +7,9 @@ public interface IGapCalculator
 {
     (int? GapBuy, int? GapSell) Calculate(ExchangeMetrics sanA, ExchangeMetrics sanB);
 
-    // Gap cùng-chân giữa 1 sàn (primary) và sàn tham chiếu (reference):
-    // GapBuy = primary.Ask - reference.Ask, GapSell = primary.Bid - reference.Bid.
-    // Dùng cho gap A-C/B-C (monitor-only). KHÔNG dùng cho A-B (A-B chéo chân, xem Calculate).
+    // Gap giữa 1 sàn (primary) và sàn tham chiếu (reference):
+    // GapBuy = reference.Bid - primary.Ask, GapSell = primary.Bid - reference.Ask.
+    // Dùng cho gap A-C/B-C (monitor-only). KHÔNG dùng cho A-B (xem Calculate).
     (int? GapBuy, int? GapSell) CalculateVsReference(ExchangeMetrics primary, ExchangeMetrics reference);
 }
 
@@ -50,19 +50,20 @@ public sealed class GapCalculator(IRuntimeConfigProvider runtimeConfigProvider) 
         int? gapBuy = null;
         int? gapSell = null;
 
-        // Buy dùng Ask, Sell dùng Bid — cùng chân, primary trừ reference.
-        if (primary.Ask.HasValue && reference.Ask.HasValue)
+        // GapBuy = reference.Bid - primary.Ask (vd A-C: C.Bid - A.Ask).
+        if (reference.Bid.HasValue && primary.Ask.HasValue)
         {
+            var referenceBidPts = (int)(reference.Bid.Value * pointMultiplier);
             var primaryAskPts = (int)(primary.Ask.Value * pointMultiplier);
-            var referenceAskPts = (int)(reference.Ask.Value * pointMultiplier);
-            gapBuy = primaryAskPts - referenceAskPts;
+            gapBuy = referenceBidPts - primaryAskPts;
         }
 
-        if (primary.Bid.HasValue && reference.Bid.HasValue)
+        // GapSell = primary.Bid - reference.Ask (vd A-C: A.Bid - C.Ask).
+        if (primary.Bid.HasValue && reference.Ask.HasValue)
         {
             var primaryBidPts = (int)(primary.Bid.Value * pointMultiplier);
-            var referenceBidPts = (int)(reference.Bid.Value * pointMultiplier);
-            gapSell = primaryBidPts - referenceBidPts;
+            var referenceAskPts = (int)(reference.Ask.Value * pointMultiplier);
+            gapSell = primaryBidPts - referenceAskPts;
         }
 
         return (gapBuy, gapSell);

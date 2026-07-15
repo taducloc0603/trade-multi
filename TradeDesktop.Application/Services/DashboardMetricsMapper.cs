@@ -13,8 +13,8 @@ public sealed class DashboardMetricsMapper(IGapCalculator gapCalculator) : IDash
         var exchangeB = MapExchange(snapshot.SanB, snapshot.TimestampUtc);
         var (gapBuy, gapSell) = gapCalculator.Calculate(snapshot.SanA, snapshot.SanB);
 
-        // Sàn C monitor-only: chỉ tính khi có dữ liệu C. Gap A-C/B-C cùng-chân (Buy=Ask-Ask,
-        // Sell=Bid-Bid), lấy A/B trừ C: CalculateVsReference(primary=A/B, reference=C).
+        // Sàn C monitor-only: chỉ tính khi có dữ liệu C. Gap A-C/B-C:
+        // Buy = C.Bid - X.Ask, Sell = X.Bid - C.Ask (X=A/B). CalculateVsReference(primary=A/B, reference=C).
         ExchangeDashboardMetrics? exchangeC = null;
         int? gapBuyAC = null, gapSellAC = null, gapBuyBC = null, gapSellBC = null;
         if (snapshot.SanC is not null)
