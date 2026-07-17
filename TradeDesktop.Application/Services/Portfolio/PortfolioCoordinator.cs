@@ -163,6 +163,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         }
 
         // 4. CLOSE path: iterate each Live slot's own CloseSignalEngine.
+        var maxLifeTimeSec = _state.MaxLifeTimeBySecond;
+        var minProfit = Math.Abs(config.CloseMinProfit);
         var eligibleCloses = new List<(PositionSlot slot, GapSignalTriggerResult trigger)>();
         foreach (var slot in _state.GetLiveSlots())
         {
@@ -181,6 +183,26 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 continue;
             }
 
+            // Guard min-profit (close_min_profit): chặn CẮT-LỖ theo gap-reversal khi profit A+B
+            // của slot chưa đạt ngưỡng. CHỈ áp cho CloseReason.Gap (TP không bị đụng — TP vốn là
+            // close chủ đích theo lời). Lệnh QUÁ HẠN (age > max_life_time_by_second) được MIỄN guard
+            // → vẫn cắt lỗ theo gap. CloseMinProfit <= 0 = tắt guard. Không tạo close mới → không đụng Rule E.
+            if (minProfit > 0d && closeTrigger.CloseReason == CloseSignalReason.Gap)
+            {
+                var isOvertime = maxLifeTimeSec > 0
+                    && slot.OpenConfirmedAtUtc.HasValue
+                    && (effectiveNow - slot.OpenConfirmedAtUtc.Value).TotalSeconds > maxLifeTimeSec;
+                var slotProfit = slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot : null;
+                if (!isOvertime && (!slotProfit.HasValue || slotProfit.Value < minProfit))
+                {
+                    _logger?.Log(
+                        $"[CLOSE_SELECT][MINPROFIT_SKIP] slot={slot.SlotId} pairId={slot.PairId} " +
+                        $"profit={(slotProfit.HasValue ? slotProfit.Value.ToString("0.##") : "null")} " +
+                        $"minProfit={minProfit:0.##} overtime={isOvertime} — gap-close suppressed");
+                    continue;
+                }
+            }
+
             eligibleCloses.Add((slot, closeTrigger));
         }
 
@@ -191,7 +213,6 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             // slots, pick the OLDEST (largest age from OpenConfirmedAtUtc); if two are the same
             // age, tiebreak by highest profit. If none are overtime, fall back to plain Rule D
             // (highest profit across all eligible).
-            var maxLifeTimeSec = _state.MaxLifeTimeBySecond;
             var overtime = maxLifeTimeSec > 0
                 ? eligibleCloses
                     .Where(x => x.slot.OpenConfirmedAtUtc.HasValue &&

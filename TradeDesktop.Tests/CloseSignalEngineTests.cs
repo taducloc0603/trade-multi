@@ -18,18 +18,18 @@ public sealed class CloseSignalEngineTests
             CloseHoldConfirmMs: 400);
         var start = new DateTime(2026, 3, 18, 15, 0, 0, DateTimeKind.Utc);
 
-        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: null, gapSell: -5, config, TradingOpenMode.GapBuy));
-        Assert.Null(Process(sut, start.AddMilliseconds(180), gapBuy: null, gapSell: -6, config, TradingOpenMode.GapBuy));
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: -5, gapSell: -5, config, TradingOpenMode.GapBuy));
+        Assert.Null(Process(sut, start.AddMilliseconds(180), gapBuy: -6, gapSell: -6, config, TradingOpenMode.GapBuy));
 
-        var trigger = Process(sut, start.AddMilliseconds(420), gapBuy: null, gapSell: -8, config, TradingOpenMode.GapBuy);
+        var trigger = Process(sut, start.AddMilliseconds(420), gapBuy: -8, gapSell: -8, config, TradingOpenMode.GapBuy);
 
         Assert.NotNull(trigger);
         Assert.Equal(GapSignalAction.Close, trigger!.Action);
         Assert.Equal(GapSignalTriggerType.CloseByGapSell, trigger.TriggerType);
         Assert.Equal(GapSignalSide.Buy, trigger.PrimarySide);
-        Assert.Equal(new[] { 0, 0, 0 }, trigger.BuyGaps);
+        Assert.Equal(new[] { -5, -6, -8 }, trigger.BuyGaps);
         Assert.Equal(new[] { -5, -6, -8 }, trigger.SellGaps);
-        Assert.Equal(0, trigger.LastBuyGap);
+        Assert.Equal(-8, trigger.LastBuyGap);
         Assert.Equal(-8, trigger.LastSellGap);
         Assert.Equal(2945.12m, trigger.LastABid);
         Assert.Equal(2945.34m, trigger.LastAAsk);
@@ -50,19 +50,19 @@ public sealed class CloseSignalEngineTests
             CloseHoldConfirmMs: 400);
         var start = new DateTime(2026, 3, 18, 15, 5, 0, DateTimeKind.Utc);
 
-        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, config, TradingOpenMode.GapSell));
-        Assert.Null(Process(sut, start.AddMilliseconds(220), gapBuy: 6, gapSell: null, config, TradingOpenMode.GapSell));
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: 5, config, TradingOpenMode.GapSell));
+        Assert.Null(Process(sut, start.AddMilliseconds(220), gapBuy: 6, gapSell: 6, config, TradingOpenMode.GapSell));
 
-        var trigger = Process(sut, start.AddMilliseconds(450), gapBuy: 8, gapSell: null, config, TradingOpenMode.GapSell);
+        var trigger = Process(sut, start.AddMilliseconds(450), gapBuy: 8, gapSell: 8, config, TradingOpenMode.GapSell);
 
         Assert.NotNull(trigger);
         Assert.Equal(GapSignalAction.Close, trigger!.Action);
         Assert.Equal(GapSignalTriggerType.CloseByGapBuy, trigger.TriggerType);
         Assert.Equal(GapSignalSide.Sell, trigger.PrimarySide);
         Assert.Equal(new[] { 5, 6, 8 }, trigger.BuyGaps);
-        Assert.Equal(new[] { 0, 0, 0 }, trigger.SellGaps);
+        Assert.Equal(new[] { 5, 6, 8 }, trigger.SellGaps);
         Assert.Equal(8, trigger.LastBuyGap);
-        Assert.Equal(0, trigger.LastSellGap);
+        Assert.Equal(8, trigger.LastSellGap);
         Assert.Equal(2945.12m, trigger.LastABid);
         Assert.Equal(2945.34m, trigger.LastAAsk);
         Assert.Equal(2945.56m, trigger.LastBBid);
@@ -82,19 +82,20 @@ public sealed class CloseSignalEngineTests
             CloseHoldConfirmMs: 300);
         var start = new DateTime(2026, 3, 18, 15, 10, 0, DateTimeKind.Utc);
 
-        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: null, gapSell: -5, config, TradingOpenMode.GapBuy));
-        Assert.Null(Process(sut, start.AddMilliseconds(100), gapBuy: null, gapSell: -6, config, TradingOpenMode.GapBuy));
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: -5, gapSell: -5, config, TradingOpenMode.GapBuy));
+        Assert.Null(Process(sut, start.AddMilliseconds(100), gapBuy: -6, gapSell: -6, config, TradingOpenMode.GapBuy));
 
         // Fails confirm -> reset close hold window.
-        Assert.Null(Process(sut, start.AddMilliseconds(200), gapBuy: null, gapSell: -4, config, TradingOpenMode.GapBuy));
+        Assert.Null(Process(sut, start.AddMilliseconds(200), gapBuy: -4, gapSell: -4, config, TradingOpenMode.GapBuy));
 
-        Assert.Null(Process(sut, start.AddMilliseconds(250), gapBuy: null, gapSell: -5, config, TradingOpenMode.GapBuy));
-        Assert.Null(Process(sut, start.AddMilliseconds(400), gapBuy: null, gapSell: -8, config, TradingOpenMode.GapBuy));
+        Assert.Null(Process(sut, start.AddMilliseconds(250), gapBuy: -5, gapSell: -5, config, TradingOpenMode.GapBuy));
+        Assert.Null(Process(sut, start.AddMilliseconds(400), gapBuy: -8, gapSell: -8, config, TradingOpenMode.GapBuy));
 
-        var trigger = Process(sut, start.AddMilliseconds(600), gapBuy: null, gapSell: -8, config, TradingOpenMode.GapBuy);
+        var trigger = Process(sut, start.AddMilliseconds(600), gapBuy: -8, gapSell: -8, config, TradingOpenMode.GapBuy);
 
         Assert.NotNull(trigger);
         Assert.Equal(new[] { -5, -8, -8 }, trigger!.SellGaps);
+        Assert.Equal(new[] { -5, -8, -8 }, trigger.BuyGaps);
     }
 
     [Fact]
@@ -134,11 +135,11 @@ public sealed class CloseSignalEngineTests
             CloseMaxTimesTick: 0);
         var start = new DateTime(2026, 3, 18, 15, 25, 0, DateTimeKind.Utc);
 
-        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: null, gapSell: -5, config, TradingOpenMode.GapBuy));
-        Assert.Null(Process(sut, start.AddMilliseconds(120), gapBuy: null, gapSell: -6, config, TradingOpenMode.GapBuy));
-        Assert.Null(Process(sut, start.AddMilliseconds(250), gapBuy: null, gapSell: -7, config, TradingOpenMode.GapBuy));
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: -5, gapSell: -5, config, TradingOpenMode.GapBuy));
+        Assert.Null(Process(sut, start.AddMilliseconds(120), gapBuy: -6, gapSell: -6, config, TradingOpenMode.GapBuy));
+        Assert.Null(Process(sut, start.AddMilliseconds(250), gapBuy: -7, gapSell: -7, config, TradingOpenMode.GapBuy));
 
-        var trigger = Process(sut, start.AddMilliseconds(520), gapBuy: null, gapSell: -8, config, TradingOpenMode.GapBuy);
+        var trigger = Process(sut, start.AddMilliseconds(520), gapBuy: -8, gapSell: -8, config, TradingOpenMode.GapBuy);
 
         Assert.NotNull(trigger);
     }
@@ -330,6 +331,9 @@ public sealed class CloseSignalEngineTests
         Assert.NotNull(trigger);
         Assert.Equal(CloseSignalReason.Tp, trigger!.CloseReason);
     }
+
+    // Guard min-profit (close_min_profit) đã chuyển sang PortfolioCoordinator (cần biết tuổi slot
+    // để miễn cho lệnh quá hạn) — test guard nằm ở Portfolio/MinProfitCloseGuardTests.
 
     private static GapSignalTriggerResult? Process(
         CloseSignalEngine sut,

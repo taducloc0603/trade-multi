@@ -76,7 +76,8 @@ public sealed record GapSignalConfirmationConfig(
     int CloseGapTick = 0,
     int CoolDownGapTick = 0,
     int LimitMaxGap = 0,
-    double LimitMaxTp = 0);
+    double LimitMaxTp = 0,
+    double CloseMinProfit = 0);
 
 public sealed record GapSignalTriggerResult(
     bool Triggered,

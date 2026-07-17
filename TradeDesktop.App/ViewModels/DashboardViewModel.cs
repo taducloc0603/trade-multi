@@ -3023,7 +3023,7 @@ public sealed class DashboardViewModel : ObservableObject
             : $"Sàn B ({_runtimeConfigState.MapName2})";
 
         RuntimeSummary =
-            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  StartWaitTime: {_runtimeConfigState.CurrentStartWaitTime}  |  EndWaitTime: {_runtimeConfigState.CurrentEndWaitTime}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
+            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  StartWaitTime: {_runtimeConfigState.CurrentStartWaitTime}  |  EndWaitTime: {_runtimeConfigState.CurrentEndWaitTime}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  CloseMinProfit: {_runtimeConfigState.CurrentCloseMinProfit}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
 
         HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsComplete);
         RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict()));
@@ -6083,7 +6083,8 @@ public sealed class DashboardViewModel : ObservableObject
                     maxLifeTimeBySecond: result.MaxLifeTimeBySecond,
                     closeMaxTpProfit: result.CloseMaxTpProfit,
                     limitMaxTp: result.LimitMaxTp,
-                    freezeLastN: result.FreezeLastN);
+                    freezeLastN: result.FreezeLastN,
+                    closeMinProfit: result.CloseMinProfit);
                 _runtimeConfigState.UpdateQuota(
                     result.MaxTotalOpens,
                     result.MaxBuyOpens,
@@ -6240,7 +6241,8 @@ public sealed class DashboardViewModel : ObservableObject
                     CloseGapTick: _runtimeConfigState.CurrentCloseGapTick,
                     CoolDownGapTick: _runtimeConfigState.CurrentCoolDownGapTick,
                     LimitMaxGap: _runtimeConfigState.CurrentLimitMaxGap,
-                    LimitMaxTp: _runtimeConfigState.CurrentLimitMaxTp));
+                    LimitMaxTp: _runtimeConfigState.CurrentLimitMaxTp,
+                    CloseMinProfit: _runtimeConfigState.CurrentCloseMinProfit));
 
             // Reduce 3-field result to single trigger for legacy guard code path below.
             // For close trigger, also capture the target slot (Phase 1 cap=1: at most 1 slot).

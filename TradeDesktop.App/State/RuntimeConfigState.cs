@@ -20,6 +20,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public double CurrentCloseConfirmTpProfit { get; private set; }
     public double CurrentCloseMaxTpProfit { get; private set; }
     public double CurrentLimitMaxTp { get; private set; }
+    public double CurrentCloseMinProfit { get; private set; }
     public int CurrentCloseHoldConfirmMs { get; private set; }
     public int CurrentClosePriceFreezeMs { get; private set; }
     public int CurrentStartTimeHold { get; private set; }
@@ -91,6 +92,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int MaxGap => CurrentMaxGap;
     public int LimitMaxGap => CurrentLimitMaxGap;
     public double LimitMaxTp => CurrentLimitMaxTp;
+    public double CloseMinProfit => CurrentCloseMinProfit;
     public int MaxSpread => CurrentMaxSpread;
     public int OpenMaxTimesTick => CurrentOpenMaxTimesTick;
     public int CloseMaxTimesTick => CurrentCloseMaxTimesTick;
@@ -155,7 +157,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int maxLifeTimeBySecond = -1,
         double closeMaxTpProfit = 0,
         double limitMaxTp = 0,
-        int freezeLastN = 0)
+        int freezeLastN = 0,
+        double closeMinProfit = 0)
         => Update(
             machineHostName,
             mapName1,
@@ -197,7 +200,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             maxLifeTimeBySecond,
             closeMaxTpProfit,
             limitMaxTp,
-            freezeLastN);
+            freezeLastN,
+            closeMinProfit);
 
     public void Update(
         string machineHostName,
@@ -240,7 +244,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int maxLifeTimeBySecond = -1,
         double closeMaxTpProfit = 0,
         double limitMaxTp = 0,
-        int freezeLastN = 0)
+        int freezeLastN = 0,
+        double closeMinProfit = 0)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
         var oldCloseN = CurrentCloseNumberOfQualifyingTimes;
@@ -259,6 +264,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentCloseConfirmTpProfit = Math.Abs(closeConfirmTpProfit);
         CurrentCloseMaxTpProfit = Math.Abs(closeMaxTpProfit);
         CurrentLimitMaxTp = Math.Abs(limitMaxTp);
+        CurrentCloseMinProfit = Math.Abs(closeMinProfit);
         CurrentCloseHoldConfirmMs = Math.Max(0, closeHoldConfirmMs);
         CurrentClosePriceFreezeMs = closePriceFreezeMs >= 0
             ? Math.Max(0, closePriceFreezeMs)
@@ -383,7 +389,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentCoolDownGapTick,
             closeMaxTpProfit: CurrentCloseMaxTpProfit,
             limitMaxTp: CurrentLimitMaxTp,
-            freezeLastN: CurrentFreezeLastN);
+            freezeLastN: CurrentFreezeLastN,
+            closeMinProfit: CurrentCloseMinProfit);
 
     public void Update(string machineHostName, string mapName1, string mapName2)
         => Update(
@@ -426,7 +433,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentCoolDownGapTick,
             closeMaxTpProfit: CurrentCloseMaxTpProfit,
             limitMaxTp: CurrentLimitMaxTp,
-            freezeLastN: CurrentFreezeLastN);
+            freezeLastN: CurrentFreezeLastN,
+            closeMinProfit: CurrentCloseMinProfit);
 
     // Quota từ DB (max_total_opens / max_buy_opens / max_sell_opens). Floor về 1 để không
     // bao giờ khoá toàn bộ open. Raise StateChanged để ApplyRuntimeConfig → SyncPortfolioCoordinatorConfig

@@ -87,7 +87,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxLifeTimeBySecond: row.MaxLifeTimeBySecond,
             MaxBuyOpens: row.MaxBuyOpens,
             MaxSellOpens: row.MaxSellOpens,
-            MaxTotalOpens: row.MaxTotalOpens);
+            MaxTotalOpens: row.MaxTotalOpens,
+            CloseMinProfit: row.CloseMinProfit);
     }
 
     public async Task<bool> UpdateCurrentTicksAsync(
@@ -281,6 +282,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("close_confirm_tp_profit", out var closeConfirmTpProfitElement);
         first.TryGetProperty("close_max_tp_profit", out var closeMaxTpProfitElement);
         first.TryGetProperty("limit_max_tp", out var limitMaxTpElement);
+        first.TryGetProperty("close_min_profit", out var closeMinProfitElement);
         first.TryGetProperty("close_hold_confirm_ms", out var closeHoldConfirmMsElement);
         first.TryGetProperty("close_price_freeze_ms", out var closePriceFreezeMsElement);
         first.TryGetProperty("start_time_hold", out var startTimeHoldElement);
@@ -342,6 +344,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CloseConfirmTpProfit = closeConfirmTpProfitElement.ValueKind == JsonValueKind.Number && closeConfirmTpProfitElement.TryGetDouble(out var closeConfirmTpProfit) ? closeConfirmTpProfit : 0d,
             CloseMaxTpProfit = closeMaxTpProfitElement.ValueKind == JsonValueKind.Number && closeMaxTpProfitElement.TryGetDouble(out var closeMaxTpProfit) ? closeMaxTpProfit : 0d,
             LimitMaxTp = limitMaxTpElement.ValueKind == JsonValueKind.Number && limitMaxTpElement.TryGetDouble(out var limitMaxTp) ? limitMaxTp : 0d,
+            CloseMinProfit = closeMinProfitElement.ValueKind == JsonValueKind.Number && closeMinProfitElement.TryGetDouble(out var closeMinProfit) ? closeMinProfit : 0d,
             CloseHoldConfirmMs = closeHoldConfirmMsElement.ValueKind == JsonValueKind.Number && closeHoldConfirmMsElement.TryGetInt32(out var closeHoldConfirmMs) ? closeHoldConfirmMs : 0,
             ClosePriceFreezeMs = closePriceFreezeMsElement.ValueKind == JsonValueKind.Number && closePriceFreezeMsElement.TryGetInt32(out var closePriceFreezeMs) ? closePriceFreezeMs : 0,
             StartTimeHold = startTimeHoldElement.ValueKind == JsonValueKind.Number && startTimeHoldElement.TryGetInt32(out var startTimeHold) ? startTimeHold : 0,
@@ -423,6 +426,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("close_confirm_tp_profit", out var closeConfirmTpProfitElement);
         first.TryGetProperty("close_max_tp_profit", out var closeMaxTpProfitElement);
         first.TryGetProperty("limit_max_tp", out var limitMaxTpElement);
+        first.TryGetProperty("close_min_profit", out var closeMinProfitElement);
         first.TryGetProperty("close_hold_confirm_ms", out var closeHoldConfirmMsElement);
         first.TryGetProperty("close_price_freeze_ms", out var closePriceFreezeMsElement);
         first.TryGetProperty("start_time_hold", out var startTimeHoldElement);
@@ -482,6 +486,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CloseConfirmTpProfit = closeConfirmTpProfitElement.ValueKind == JsonValueKind.Number && closeConfirmTpProfitElement.TryGetDouble(out var closeConfirmTpProfit) ? closeConfirmTpProfit : 0d,
             CloseMaxTpProfit = closeMaxTpProfitElement.ValueKind == JsonValueKind.Number && closeMaxTpProfitElement.TryGetDouble(out var closeMaxTpProfit) ? closeMaxTpProfit : 0d,
             LimitMaxTp = limitMaxTpElement.ValueKind == JsonValueKind.Number && limitMaxTpElement.TryGetDouble(out var limitMaxTp) ? limitMaxTp : 0d,
+            CloseMinProfit = closeMinProfitElement.ValueKind == JsonValueKind.Number && closeMinProfitElement.TryGetDouble(out var closeMinProfit) ? closeMinProfit : 0d,
             CloseHoldConfirmMs = closeHoldConfirmMsElement.ValueKind == JsonValueKind.Number && closeHoldConfirmMsElement.TryGetInt32(out var closeHoldConfirmMs) ? closeHoldConfirmMs : 0,
             ClosePriceFreezeMs = closePriceFreezeMsElement.ValueKind == JsonValueKind.Number && closePriceFreezeMsElement.TryGetInt32(out var closePriceFreezeMs) ? closePriceFreezeMs : 0,
             StartTimeHold = startTimeHoldElement.ValueKind == JsonValueKind.Number && startTimeHoldElement.TryGetInt32(out var startTimeHold) ? startTimeHold : 0,
@@ -611,6 +616,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("limit_max_tp")]
         public double LimitMaxTp { get; set; }
+
+        [JsonPropertyName("close_min_profit")]
+        public double CloseMinProfit { get; set; }
 
         [JsonPropertyName("close_hold_confirm_ms")]
         public int CloseHoldConfirmMs { get; set; }
