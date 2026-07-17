@@ -87,7 +87,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxLifeTimeBySecond: row.MaxLifeTimeBySecond,
             MaxBuyOpens: row.MaxBuyOpens,
             MaxSellOpens: row.MaxSellOpens,
-            MaxTotalOpens: row.MaxTotalOpens);
+            MaxTotalOpens: row.MaxTotalOpens,
+            CloseGapTargetProfit: row.CloseGapTargetProfit,
+            CloseConfirmGapPtsWithTarget: row.CloseConfirmGapPtsWithTarget,
+            ClosePtsWithTarget: row.ClosePtsWithTarget);
     }
 
     public async Task<bool> UpdateCurrentTicksAsync(
@@ -315,6 +318,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_buy_opens", out var maxBuyOpensElement);
         first.TryGetProperty("max_sell_opens", out var maxSellOpensElement);
         first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
+        first.TryGetProperty("close_gap_target_profit", out var closeGapTargetProfitElement);
+        first.TryGetProperty("close_confirm_gap_pts_with_target", out var closeConfirmGapPtsWithTargetElement);
+        first.TryGetProperty("close_pts_with_target", out var closePtsWithTargetElement);
 
         // DB column name is lowercase: hostname
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
@@ -377,7 +383,11 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0,
             MaxBuyOpens = maxBuyOpensElement.ValueKind == JsonValueKind.Number && maxBuyOpensElement.TryGetInt32(out var maxBuyOpens) ? maxBuyOpens : 3,
             MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
-            MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5
+            MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5,
+            // WithTarget CÓ THỂ ÂM — TryGetInt32 giữ nguyên dấu; thiếu cột → 0 (tắt).
+            CloseGapTargetProfit = closeGapTargetProfitElement.ValueKind == JsonValueKind.Number && closeGapTargetProfitElement.TryGetDouble(out var closeGapTargetProfit) ? closeGapTargetProfit : 0d,
+            CloseConfirmGapPtsWithTarget = closeConfirmGapPtsWithTargetElement.ValueKind == JsonValueKind.Number && closeConfirmGapPtsWithTargetElement.TryGetInt32(out var closeConfirmGapPtsWithTarget) ? closeConfirmGapPtsWithTarget : 0,
+            ClosePtsWithTarget = closePtsWithTargetElement.ValueKind == JsonValueKind.Number && closePtsWithTargetElement.TryGetInt32(out var closePtsWithTarget) ? closePtsWithTarget : 0
         };
     }
 
@@ -457,6 +467,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_buy_opens", out var maxBuyOpensElement);
         first.TryGetProperty("max_sell_opens", out var maxSellOpensElement);
         first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
+        first.TryGetProperty("close_gap_target_profit", out var closeGapTargetProfitElement);
+        first.TryGetProperty("close_confirm_gap_pts_with_target", out var closeConfirmGapPtsWithTargetElement);
+        first.TryGetProperty("close_pts_with_target", out var closePtsWithTargetElement);
 
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
         if (!hasHostName)
@@ -517,7 +530,11 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0,
             MaxBuyOpens = maxBuyOpensElement.ValueKind == JsonValueKind.Number && maxBuyOpensElement.TryGetInt32(out var maxBuyOpens) ? maxBuyOpens : 3,
             MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
-            MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5
+            MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5,
+            // WithTarget CÓ THỂ ÂM — TryGetInt32 giữ nguyên dấu; thiếu cột → 0 (tắt).
+            CloseGapTargetProfit = closeGapTargetProfitElement.ValueKind == JsonValueKind.Number && closeGapTargetProfitElement.TryGetDouble(out var closeGapTargetProfit) ? closeGapTargetProfit : 0d,
+            CloseConfirmGapPtsWithTarget = closeConfirmGapPtsWithTargetElement.ValueKind == JsonValueKind.Number && closeConfirmGapPtsWithTargetElement.TryGetInt32(out var closeConfirmGapPtsWithTarget) ? closeConfirmGapPtsWithTarget : 0,
+            ClosePtsWithTarget = closePtsWithTargetElement.ValueKind == JsonValueKind.Number && closePtsWithTargetElement.TryGetInt32(out var closePtsWithTarget) ? closePtsWithTarget : 0
         };
     }
 
@@ -608,6 +625,16 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("close_max_tp_profit")]
         public double CloseMaxTpProfit { get; set; }
+
+        // Close-gap "target profit" mode. WithTarget CÓ THỂ ÂM (signed).
+        [JsonPropertyName("close_gap_target_profit")]
+        public double CloseGapTargetProfit { get; set; }
+
+        [JsonPropertyName("close_confirm_gap_pts_with_target")]
+        public int CloseConfirmGapPtsWithTarget { get; set; }
+
+        [JsonPropertyName("close_pts_with_target")]
+        public int ClosePtsWithTarget { get; set; }
 
         [JsonPropertyName("limit_max_tp")]
         public double LimitMaxTp { get; set; }

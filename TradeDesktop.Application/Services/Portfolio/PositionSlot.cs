@@ -36,6 +36,8 @@ public sealed class PositionSlot
     public double? LastProfitB { get; private set; }
     public bool HasCompleteProfitSnapshot => LastProfitA.HasValue && LastProfitB.HasValue;
     public CloseSignalReason? LastCloseReason { get; private set; }
+    // Chế độ ngưỡng close-gap tại thời điểm trigger close (chỉ có ý nghĩa khi LastCloseReason=Gap).
+    public CloseGapMode LastCloseGapMode { get; private set; } = CloseGapMode.Normal;
     public ICloseSignalEngine CloseSignalEngine { get; private set; }
 
     public void MarkOpenTriggered(
@@ -51,6 +53,7 @@ public sealed class PositionSlot
         Status = PositionSlotStatus.PendingOpen;
         ClearProfitSnapshot();
         LastCloseReason = null;
+        LastCloseGapMode = CloseGapMode.Normal;
     }
 
     public void MarkOpenConfirmed(ulong ticketA, ulong ticketB, DateTime confirmedAtUtc)
@@ -61,10 +64,14 @@ public sealed class PositionSlot
         Status = PositionSlotStatus.Live;
     }
 
-    public void MarkCloseTriggered(DateTime triggerAtUtc, CloseSignalReason closeReason = CloseSignalReason.Gap)
+    public void MarkCloseTriggered(
+        DateTime triggerAtUtc,
+        CloseSignalReason closeReason = CloseSignalReason.Gap,
+        CloseGapMode gapMode = CloseGapMode.Normal)
     {
         ClosedAtUtc = triggerAtUtc;
         LastCloseReason = closeReason;
+        LastCloseGapMode = gapMode;
         IsCloseExecutionPending = true;
         Status = PositionSlotStatus.PendingClose;
     }
@@ -115,6 +122,7 @@ public sealed class PositionSlot
         IsCloseExecutionPending = false;
         ClearProfitSnapshot();
         LastCloseReason = null;
+        LastCloseGapMode = CloseGapMode.Normal;
     }
 
     public void UpdateProfit(ulong ticket, double profit)

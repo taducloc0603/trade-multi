@@ -18,6 +18,17 @@ public enum CloseSignalReason
     Tp = 1
 }
 
+/// <summary>
+/// Chế độ ngưỡng của close-gap signal. Normal = dùng CloseConfirmGapPts/ClosePts (Math.Abs).
+/// Target = profit slot đã đạt CloseGapTargetProfit → dùng CloseConfirmGapPtsWithTarget/ClosePtsWithTarget
+/// (giá trị signed, có thể âm) để đóng quyết liệt hơn nhằm chốt lời.
+/// </summary>
+public enum CloseGapMode
+{
+    Normal = 0,
+    Target = 1
+}
+
 public enum TradingFlowPhase
 {
     WaitingOpen = 0,
@@ -76,7 +87,13 @@ public sealed record GapSignalConfirmationConfig(
     int CloseGapTick = 0,
     int CoolDownGapTick = 0,
     int LimitMaxGap = 0,
-    double LimitMaxTp = 0);
+    double LimitMaxTp = 0,
+    // Close-gap "target profit" mode: khi profit slot >= CloseGapTargetProfit (>0 mới bật),
+    // close-gap dùng CloseConfirmGapPtsWithTarget/ClosePtsWithTarget thay cho CloseConfirmGapPts/ClosePts.
+    // WithTarget CÓ THỂ ÂM (signed) — KHÔNG Math.Abs. CloseGapTargetProfit chuẩn hoá >=0.
+    double CloseGapTargetProfit = 0,
+    int CloseConfirmGapPtsWithTarget = 0,
+    int ClosePtsWithTarget = 0);
 
 public sealed record GapSignalTriggerResult(
     bool Triggered,
@@ -100,7 +117,8 @@ public sealed record GapSignalTriggerResult(
     CloseSignalReason CloseReason = CloseSignalReason.Gap,
     double? CloseTpProfit = null,
     double? CloseTpTarget = null,
-    IReadOnlyList<double>? CloseTpProfits = null);
+    IReadOnlyList<double>? CloseTpProfits = null,
+    CloseGapMode GapMode = CloseGapMode.Normal);
 
 public enum GapSignalTriggerType
 {

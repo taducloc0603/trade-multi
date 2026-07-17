@@ -1945,7 +1945,8 @@ public sealed class DashboardViewModel : ObservableObject
                         trigger.CloseReason,
                         trigger.CloseTpProfit,
                         trigger.CloseTpTarget,
-                        trigger.CloseTpProfits));
+                        trigger.CloseTpProfits,
+                        trigger.GapMode));
                 }
 
                 if (selectB.TradeType.HasValue
@@ -1971,7 +1972,8 @@ public sealed class DashboardViewModel : ObservableObject
                         trigger.CloseReason,
                         trigger.CloseTpProfit,
                         trigger.CloseTpTarget,
-                        trigger.CloseTpProfits));
+                        trigger.CloseTpProfits,
+                        trigger.GapMode));
                 }
 
                 AppendCloseSelectionDiagnostics(selectA, selectB);
@@ -6083,7 +6085,10 @@ public sealed class DashboardViewModel : ObservableObject
                     maxLifeTimeBySecond: result.MaxLifeTimeBySecond,
                     closeMaxTpProfit: result.CloseMaxTpProfit,
                     limitMaxTp: result.LimitMaxTp,
-                    freezeLastN: result.FreezeLastN);
+                    freezeLastN: result.FreezeLastN,
+                    closeGapTargetProfit: result.CloseGapTargetProfit,
+                    closeConfirmGapPtsWithTarget: result.CloseConfirmGapPtsWithTarget,
+                    closePtsWithTarget: result.ClosePtsWithTarget);
                 _runtimeConfigState.UpdateQuota(
                     result.MaxTotalOpens,
                     result.MaxBuyOpens,
@@ -6240,7 +6245,10 @@ public sealed class DashboardViewModel : ObservableObject
                     CloseGapTick: _runtimeConfigState.CurrentCloseGapTick,
                     CoolDownGapTick: _runtimeConfigState.CurrentCoolDownGapTick,
                     LimitMaxGap: _runtimeConfigState.CurrentLimitMaxGap,
-                    LimitMaxTp: _runtimeConfigState.CurrentLimitMaxTp));
+                    LimitMaxTp: _runtimeConfigState.CurrentLimitMaxTp,
+                    CloseGapTargetProfit: _runtimeConfigState.CurrentCloseGapTargetProfit,
+                    CloseConfirmGapPtsWithTarget: _runtimeConfigState.CurrentCloseConfirmGapPtsWithTarget,
+                    ClosePtsWithTarget: _runtimeConfigState.CurrentClosePtsWithTarget));
 
             // Reduce 3-field result to single trigger for legacy guard code path below.
             // For close trigger, also capture the target slot (Phase 1 cap=1: at most 1 slot).
@@ -6675,7 +6683,8 @@ public sealed class DashboardViewModel : ObservableObject
             trigger.CloseReason,
             trigger.CloseTpProfit,
             trigger.CloseTpTarget,
-            trigger.CloseTpProfits);
+            trigger.CloseTpProfits,
+            trigger.GapMode);
     }
 
     private static string FormatNumberOrDash(decimal? value, int decimalPlaces = 5)

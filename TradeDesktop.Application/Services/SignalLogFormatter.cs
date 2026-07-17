@@ -62,7 +62,8 @@ public static class SignalLogFormatter
         CloseSignalReason closeReason = CloseSignalReason.Gap,
         double? tpProfit = null,
         double? tpTarget = null,
-        IReadOnlyList<double>? tpProfits = null)
+        IReadOnlyList<double>? tpProfits = null,
+        CloseGapMode gapMode = CloseGapMode.Normal)
     {
         var ts = localTime.ToString(TimestampFormat, CultureInfo.InvariantCulture);
         if (closeReason == CloseSignalReason.Tp)
@@ -71,7 +72,9 @@ public static class SignalLogFormatter
         }
 
         var lastGapText = lastGap.HasValue ? lastGap.Value.ToString(CultureInfo.InvariantCulture) : "0";
-        return $"{ts}> [{slot}:{exchangeLabel}]. CLOSE {tradeType.ToUpperInvariant()} {symbol} at {Fp(price)}. Reason: Close by {gapLabel} = {lastGapText} ({Fg(allGaps)})";
+        // mode=target khi đóng bằng ngưỡng WithTarget (profit đã đạt CloseGapTargetProfit), ngược lại normal.
+        var modeText = gapMode == CloseGapMode.Target ? "target" : "normal";
+        return $"{ts}> [{slot}:{exchangeLabel}]. CLOSE {tradeType.ToUpperInvariant()} {symbol} at {Fp(price)}. Reason: Close by {gapLabel} = {lastGapText} ({Fg(allGaps)}) [mode={modeText}]";
     }
 
     /// <summary>

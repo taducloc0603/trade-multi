@@ -52,6 +52,10 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     private readonly Dictionary<int, DateTime> _lastTpCheckLogAtUtc = new();
     private const int TpCheckLogMinIntervalSeconds = 60;
 
+    // Log edge-triggered: chế độ ngưỡng close-gap (Normal/Target) hiện tại của từng slot,
+    // chỉ log khi ĐỔI mode để tránh spam mỗi tick.
+    private readonly Dictionary<int, CloseGapMode> _lastGapModeBySlot = new();
+
     // Log throttle: [SLOT][SKIP] Open blocked — log khi (side|reason) đổi HOẶC quá interval (tránh spam mỗi tick).
     private string _lastOpenSkipSignature = string.Empty;
     private DateTime _lastOpenSkipLogAtUtc;
@@ -171,11 +175,14 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
             LogTpCheck(slot, config, effectiveNow);
 
+            var slotProfit = slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot : null;
+            LogGapModeIfChanged(slot, config, slotProfit);
+
             var closeTrigger = slot.CloseSignalEngine.ProcessSnapshot(
                 snapshot,
                 config,
                 slot.OpenMode,
-                slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot : null);
+                slotProfit);
             if (closeTrigger is null || !closeTrigger.Triggered || closeTrigger.Action != GapSignalAction.Close)
             {
                 continue;
@@ -218,7 +225,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
             // Mark IsCloseExecutionPending immediately so next tick doesn't double-trigger.
             // Note: status transitions to PendingClose only after MarkSlotCloseTriggered from caller.
-            winner.slot.MarkCloseTriggered(winner.trigger.TriggeredAtUtc, winner.trigger.CloseReason);
+            winner.slot.MarkCloseTriggered(winner.trigger.TriggeredAtUtc, winner.trigger.CloseReason, winner.trigger.GapMode);
 
             // Reset both engines after a close trigger (matches TradingFlowEngine behavior).
             _openSignalEngine.Reset();
@@ -362,15 +369,19 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         slot.MarkCloseConfirmed(confirmedAtUtc);
         Interlocked.Increment(ref _totalClosesAllTime);
         _lastTpCheckLogAtUtc.Remove(slot.SlotId);
+        _lastGapModeBySlot.Remove(slot.SlotId);
 
         // Phase 8: cooldown ĐÃ được set tại close dispatch (MarkSlotCloseTriggered).
         // Tại confirm chỉ log + update slot status, không reset cooldown.
         var lockSummary = _state.GlobalActionLockUntilUtc.HasValue
             ? $"lockUntil={_state.GlobalActionLockUntilUtc:HH:mm:ss}UTC"
             : "lockNone";
+        var closeReason = slot.LastCloseReason ?? CloseSignalReason.Gap;
+        // gapMode chỉ có ý nghĩa khi đóng theo Gap (Normal=ngưỡng chuẩn, Target=WithTarget khi đạt profit X).
+        var gapModeText = closeReason == CloseSignalReason.Gap ? $" gapMode={slot.LastCloseGapMode}" : string.Empty;
         _logger?.Log(
             $"[SLOT][CLOSE_CONFIRMED] slot={slot.SlotId} side={slot.Side} " +
-            $"profit={slot.LastProfitSnapshot:F2} closeReason={slot.LastCloseReason ?? CloseSignalReason.Gap} {lockSummary}");
+            $"profit={slot.LastProfitSnapshot:F2} closeReason={closeReason}{gapModeText} {lockSummary}");
     }
 
     public void CloseSlotManually(string pairId, DateTime confirmedAtUtc)
@@ -417,6 +428,41 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var slot = _state.GetSlotByTicket(ticket);
         if (slot is null) return;
         slot.UpdateProfit(ticket, profit);
+    }
+
+    // Edge-triggered: log khi close-gap đổi chế độ ngưỡng cho slot (profit vượt/tụt qua CloseGapTargetProfit).
+    // Dùng cùng CloseSignalEngine.ShouldUseTargetGap để KHÔNG lệch quyết định giữa log và engine.
+    private void LogGapModeIfChanged(PositionSlot slot, GapSignalConfirmationConfig config, double? slotProfit)
+    {
+        // Chỉ theo dõi khi feature bật (CloseGapTargetProfit > 0). Tắt → clear để lần bật lại log sạch.
+        if (Math.Abs(config.CloseGapTargetProfit) <= 0d)
+        {
+            _lastGapModeBySlot.Remove(slot.SlotId);
+            return;
+        }
+
+        var mode = CloseSignalEngine.ShouldUseTargetGap(config, slotProfit)
+            ? CloseGapMode.Target
+            : CloseGapMode.Normal;
+
+        // Baseline khi chưa có entry là Normal → lần đầu ở Normal không log (chỉ khởi tạo).
+        var prevMode = _lastGapModeBySlot.TryGetValue(slot.SlotId, out var stored)
+            ? stored
+            : CloseGapMode.Normal;
+        _lastGapModeBySlot[slot.SlotId] = mode;
+        if (prevMode == mode)
+        {
+            return;
+        }
+
+        var profitText = slotProfit.HasValue
+            ? slotProfit.Value.ToString("0.00", CultureInfo.InvariantCulture)
+            : "incomplete";
+        _logger?.Log(
+            $"[SLOT][GAP_MODE] slot={slot.SlotId} {prevMode}->{mode} profit={profitText} " +
+            $"targetProfit={Math.Abs(config.CloseGapTargetProfit).ToString("0.00", CultureInfo.InvariantCulture)} " +
+            $"confirmWithTarget={config.CloseConfirmGapPtsWithTarget} closeWithTarget={config.ClosePtsWithTarget} " +
+            $"confirmNormal={Math.Abs(config.CloseConfirmGapPts)} closeNormal={Math.Abs(config.ClosePts)}");
     }
 
     private void LogTpCheck(PositionSlot slot, GapSignalConfirmationConfig config, DateTime effectiveNow)
