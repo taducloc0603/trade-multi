@@ -109,10 +109,13 @@ public sealed class QuotaRuleTests
         coordinator.UpdateQuotaConfig(maxTotal: 1, maxBuy: 1, maxSell: 1);
         coordinator.UpdateCooldownConfig(minSec: 0, maxSec: 0);
 
+        // Timestamps đặt trong quá khứ (>300s) để post-close lock (Rule C) đã hết hạn —
+        // test này chỉ verify quota restoration, không bị post-close lock che.
+        var past = DateTime.UtcNow.AddSeconds(-400);
         coordinator.AllocatePendingOpenSlot("p1", Trigger(GapSignalSide.Buy));
-        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
-        coordinator.MarkSlotCloseTriggered("p1", DateTime.UtcNow);
-        coordinator.MarkSlotCloseConfirmed("p1", DateTime.UtcNow);
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, past);
+        coordinator.MarkSlotCloseTriggered("p1", past);
+        coordinator.MarkSlotCloseConfirmed("p1", past);
 
         // Slot is Closed; CountLiveAndPending no longer counts it.
         Assert.True(coordinator.CanOpenNewSlot(TradingPositionSide.Buy, out _));

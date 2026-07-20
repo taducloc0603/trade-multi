@@ -79,7 +79,7 @@ public sealed class DisplayPropertyTests
 
         var elapsedSec = (DateTime.UtcNow - coordinator.LastOpenConfirmedAtUtc!.Value).TotalSeconds;
         Assert.InRange(elapsedSec, 59.0, 61.0);
-        Assert.True(elapsedSec < PortfolioCoordinator.OppositeSideLockSeconds);
+        Assert.True(elapsedSec < coordinator.OppositeSideLockSeconds);
     }
 
     [Fact]

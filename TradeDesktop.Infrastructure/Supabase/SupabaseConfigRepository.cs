@@ -88,6 +88,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxBuyOpens: row.MaxBuyOpens,
             MaxSellOpens: row.MaxSellOpens,
             MaxTotalOpens: row.MaxTotalOpens,
+            OppositeSideLockSeconds: row.OppositeSideLockSeconds,
             CloseMinProfit: row.CloseMinProfit);
     }
 
@@ -317,6 +318,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_buy_opens", out var maxBuyOpensElement);
         first.TryGetProperty("max_sell_opens", out var maxSellOpensElement);
         first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
+        first.TryGetProperty("opposite_side_lock_seconds", out var oppositeSideLockSecondsElement);
 
         // DB column name is lowercase: hostname
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
@@ -380,7 +382,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0,
             MaxBuyOpens = maxBuyOpensElement.ValueKind == JsonValueKind.Number && maxBuyOpensElement.TryGetInt32(out var maxBuyOpens) ? maxBuyOpens : 3,
             MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
-            MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5
+            MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5,
+            OppositeSideLockSeconds = oppositeSideLockSecondsElement.ValueKind == JsonValueKind.Number && oppositeSideLockSecondsElement.TryGetInt32(out var oppositeSideLockSeconds) ? oppositeSideLockSeconds : 300
         };
     }
 
@@ -461,6 +464,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_buy_opens", out var maxBuyOpensElement);
         first.TryGetProperty("max_sell_opens", out var maxSellOpensElement);
         first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
+        first.TryGetProperty("opposite_side_lock_seconds", out var oppositeSideLockSecondsElement);
 
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
         if (!hasHostName)
@@ -522,7 +526,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0,
             MaxBuyOpens = maxBuyOpensElement.ValueKind == JsonValueKind.Number && maxBuyOpensElement.TryGetInt32(out var maxBuyOpens) ? maxBuyOpens : 3,
             MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
-            MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5
+            MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5,
+            OppositeSideLockSeconds = oppositeSideLockSecondsElement.ValueKind == JsonValueKind.Number && oppositeSideLockSecondsElement.TryGetInt32(out var oppositeSideLockSeconds) ? oppositeSideLockSeconds : 300
         };
     }
 
@@ -721,6 +726,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("max_total_opens")]
         public int MaxTotalOpens { get; set; } = 5;
+
+        [JsonPropertyName("opposite_side_lock_seconds")]
+        public int OppositeSideLockSeconds { get; set; } = 300;
 
         public string CurrentSlotsJson => CurrentSlots.ValueKind is JsonValueKind.Array or JsonValueKind.Object
             ? CurrentSlots.GetRawText()

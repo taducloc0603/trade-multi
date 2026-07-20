@@ -3047,11 +3047,15 @@ public sealed class DashboardViewModel : ObservableObject
             maxSell: _runtimeConfigState.CurrentMaxSellOpens);
 
         // Hardcode tạm: start_wait_time=3, end_wait_time=10 (sẽ chuyển sang DB Supabase sau).
-        // Opposite-side lock 5p vẫn hardcode trong PortfolioCoordinator.OppositeSideLockSeconds=300.
         _portfolioCoordinator.UpdateCooldownConfig(minSec: 3, maxSec: 10);
 
         _portfolioCoordinator.UpdateMaxLifeTimeConfig(
             _runtimeConfigState.CurrentMaxLifeTimeBySecond);
+
+        // Rule C — opposite-side lock + post-close all-open lock (giây) từ DB
+        // (opposite_side_lock_seconds), thay hardcode 300 cũ.
+        _portfolioCoordinator.UpdateOppositeSideLockConfig(
+            _runtimeConfigState.CurrentOppositeSideLockSeconds);
     }
 
     private void RefreshOrderInfoTabs()
@@ -6084,7 +6088,8 @@ public sealed class DashboardViewModel : ObservableObject
                     closeMaxTpProfit: result.CloseMaxTpProfit,
                     limitMaxTp: result.LimitMaxTp,
                     freezeLastN: result.FreezeLastN,
-                    closeMinProfit: result.CloseMinProfit);
+                    closeMinProfit: result.CloseMinProfit,
+                    oppositeSideLockSeconds: result.OppositeSideLockSeconds);
                 _runtimeConfigState.UpdateQuota(
                     result.MaxTotalOpens,
                     result.MaxBuyOpens,
@@ -6568,27 +6573,38 @@ public sealed class DashboardViewModel : ObservableObject
             return $"COOLDOWN {remaining}s";
         }
 
-        // Priority 2: opposite-side lock window.
+        // Priority 2: post-close all-open lock window (khoá mọi OPEN sau CLOSE confirm).
+        if (_portfolioCoordinator.LastCloseConfirmedAtUtc is { } lastCloseAt)
+        {
+            var elapsedSec = (now - lastCloseAt).TotalSeconds;
+            if (elapsedSec < _portfolioCoordinator.OppositeSideLockSeconds)
+            {
+                var remaining = _portfolioCoordinator.OppositeSideLockSeconds - (int)elapsedSec;
+                return $"POST-CLOSE LOCK (no open for {remaining}s)";
+            }
+        }
+
+        // Priority 3: opposite-side lock window.
         if (_portfolioCoordinator.LastOpenConfirmedAtUtc is { } lastOpenAt
             && _portfolioCoordinator.LastOpenConfirmedSide != TradingPositionSide.None)
         {
             var elapsedSec = (now - lastOpenAt).TotalSeconds;
-            if (elapsedSec < PortfolioCoordinator.OppositeSideLockSeconds)
+            if (elapsedSec < _portfolioCoordinator.OppositeSideLockSeconds)
             {
-                var remaining = PortfolioCoordinator.OppositeSideLockSeconds - (int)elapsedSec;
+                var remaining = _portfolioCoordinator.OppositeSideLockSeconds - (int)elapsedSec;
                 var lockedSide = _portfolioCoordinator.LastOpenConfirmedSide == TradingPositionSide.Buy
                     ? "Sell" : "Buy";
                 return $"READY (no {lockedSide} for {remaining}s)";
             }
         }
 
-        // Priority 3: quota full.
+        // Priority 4: quota full.
         if (_portfolioCoordinator.LiveAndPendingTotalCount >= _runtimeConfigState.CurrentMaxTotalOpens)
         {
             return "QUOTA FULL";
         }
 
-        // Priority 4: legacy engine state (fallback for single-slot semantics).
+        // Priority 5: legacy engine state (fallback for single-slot semantics).
         var phase = _tradingFlowEngine.CurrentPhase;
         return phase switch
         {

@@ -22,7 +22,11 @@ public sealed class PortfolioState
     public int GlobalCooldownMaxSec { get; set; } = 0;
     public DateTime? LastOpenConfirmedAtUtc { get; set; }
     public TradingPositionSide LastOpenConfirmedSide { get; set; } = TradingPositionSide.None;
+    // Rule C — anchor cho post-close all-open lock (khoá mọi OPEN sau CLOSE confirm).
+    public DateTime? LastCloseConfirmedAtUtc { get; set; }
     public int MaxLifeTimeBySecond { get; set; } = 0;
+    // Rule C — opposite-side OPEN lock + post-close all-open lock (giây). Config từ DB.
+    public int OppositeSideLockSeconds { get; set; } = 300;
 
     public int CountLiveAndPendingBuy()
         => _slots.Count(s => s.Side == TradingPositionSide.Buy && IsLiveOrPending(s.Status));
@@ -87,6 +91,7 @@ public sealed class PortfolioState
         GlobalActionLockUntilUtc = null;
         LastOpenConfirmedAtUtc = null;
         LastOpenConfirmedSide = TradingPositionSide.None;
+        LastCloseConfirmedAtUtc = null;
     }
 
     private static bool IsLiveOrPending(PositionSlotStatus status)

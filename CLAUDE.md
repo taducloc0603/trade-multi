@@ -56,11 +56,11 @@ DB integration deferred).
 - Hardcode min=3, max=10 trong `DashboardViewModel.SyncPortfolioCoordinatorConfig` (sẽ chuyển sang DB sau).
 - **Phase 8 motivation**: pre-Phase 8 cooldown set tại confirm → race window dispatch→confirm (~500ms broker latency) cho phép 2 trade events được dispatch gần như đồng thời. User intent: min 3-10s giữa BẤT KỲ 2 trade events.
 
-### Rule C — Opposite-side OPEN lock 5 phút
-- **Hardcode 300 giây** (`PortfolioCoordinator.OppositeSideLockSeconds`).
-- CHỈ block OPEN opposite-side. Same-side OPEN refresh timer.
-- KHÔNG block CLOSE.
-- State: `coordinator.LastOpenConfirmedAtUtc`, `LastOpenConfirmedSide`.
+### Rule C — Opposite-side OPEN lock + Post-close lock
+- **Config từ DB** `opposite_side_lock_seconds` (default 300s). Đường: DB → `RuntimeConfigState.CurrentOppositeSideLockSeconds` → `coordinator.UpdateOppositeSideLockConfig` (trong `SyncPortfolioCoordinatorConfig`). `<= 0` → giữ default 300 (`PortfolioCoordinator.DefaultOppositeSideLockSeconds`). Cả 2 lock dưới đây dùng CHUNG giá trị này.
+- **Lock 1 (sau OPEN)**: sau OPEN confirm → CHỈ block OPEN opposite-side. Same-side OPEN refresh timer. KHÔNG block CLOSE. State: `LastOpenConfirmedAtUtc`, `LastOpenConfirmedSide`.
+- **Lock 2 (post-close)**: sau CLOSE confirm → block **MỌI OPEN (cả 2 chiều)** trong window. KHÔNG block CLOSE. State: `LastCloseConfirmedAtUtc` (set trong `MarkSlotCloseConfirmed` → phủ auto/manual/external). Là re-entry cooldown: vừa đóng thì phải chờ hết window mới được vào lệnh mới.
+- Cả 2 check nằm trong `CanOpenNewSlot` (chỉ chặn, không tạo open/close → không vi phạm Rule E). Block reason: `OPPOSITE_SIDE_LOCK` / `POST_CLOSE_LOCK`.
 
 ### Rule D — Priority close theo profit cao nhất
 - Nhiều slot trigger close cùng tick → chỉ close 1 slot có `LastProfitSnapshot` cao nhất.
