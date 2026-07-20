@@ -4,9 +4,11 @@ using TradeDesktop.Application.Services.Portfolio;
 
 namespace TradeDesktop.Tests.Portfolio;
 
-// Rule C — Opposite-side OPEN lock: default 300s, config từ DB (opposite_side_lock_seconds).
-// Sau OPEN: blocks opposite-side OPEN; same-side OPEN refreshes timer; CLOSE unaffected.
-// Sau CLOSE confirm (post-close lock): blocks MỌI OPEN (cả 2 chiều); CLOSE unaffected.
+// Rule C — 2 lock độc lập, config từ DB:
+//  - opposite_side_lock_seconds (default 300): sau OPEN, block opposite-side OPEN;
+//    same-side OPEN refreshes timer; CLOSE unaffected.
+//  - post_close_lock_seconds (default 300): sau CLOSE confirm, block MỌI OPEN (cả 2 chiều);
+//    CLOSE unaffected.
 public sealed class OppositeSideLockTests
 {
     private static PortfolioCoordinator CreateCoordinator()
@@ -205,7 +207,7 @@ public sealed class OppositeSideLockTests
         var coordinator = CreateCoordinator();
         coordinator.UpdateQuotaConfig(maxTotal: 7, maxBuy: 4, maxSell: 4);
         coordinator.UpdateCooldownConfig(minSec: 0, maxSec: 0);
-        coordinator.UpdateOppositeSideLockConfig(60);
+        coordinator.UpdatePostCloseLockConfig(60);
 
         var t0 = DateTime.UtcNow.AddSeconds(-120);
         coordinator.AllocatePendingOpenSlot("p-buy", Trigger(GapSignalSide.Buy));
@@ -213,7 +215,49 @@ public sealed class OppositeSideLockTests
         coordinator.MarkSlotCloseTriggered("p-buy", t0);
         coordinator.MarkSlotCloseConfirmed("p-buy", t0);
 
-        // 120s > 60s window (cả opposite lẫn post-close đã hết) → mở lại được.
+        // Reopen same-side Buy: 120s > 60s post-close window → mở lại được.
         Assert.True(coordinator.CanOpenNewSlot(TradingPositionSide.Buy, out _));
+    }
+
+    [Fact]
+    public void PostCloseLockSeconds_DefaultsTo300()
+    {
+        Assert.Equal(300, PortfolioCoordinator.DefaultPostCloseLockSeconds);
+        Assert.Equal(300, CreateCoordinator().PostCloseLockSeconds);
+    }
+
+    [Fact]
+    public void PostCloseLockConfig_OverrideAndZeroKeepsDefault()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdatePostCloseLockConfig(45);
+        Assert.Equal(45, coordinator.PostCloseLockSeconds);
+        coordinator.UpdatePostCloseLockConfig(0);
+        Assert.Equal(300, coordinator.PostCloseLockSeconds);
+        coordinator.UpdatePostCloseLockConfig(-9);
+        Assert.Equal(300, coordinator.PostCloseLockSeconds);
+    }
+
+    // 2 giá trị độc lập: opposite (sau OPEN) và post-close (sau CLOSE) tách biệt.
+    [Fact]
+    public void OppositeAndPostClose_UseSeparateValues()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(maxTotal: 7, maxBuy: 4, maxSell: 4);
+        coordinator.UpdateCooldownConfig(minSec: 0, maxSec: 0);
+        coordinator.UpdateOppositeSideLockConfig(300); // sau OPEN: dài
+        coordinator.UpdatePostCloseLockConfig(30);     // sau CLOSE: ngắn
+
+        var t0 = DateTime.UtcNow.AddSeconds(-50); // 50s: > post-close(30), < opposite(300)
+        coordinator.AllocatePendingOpenSlot("p-buy", Trigger(GapSignalSide.Buy));
+        coordinator.MarkSlotOpenConfirmed("p-buy", 1, 2, t0);
+        coordinator.MarkSlotCloseTriggered("p-buy", t0);
+        coordinator.MarkSlotCloseConfirmed("p-buy", t0);
+
+        // Buy (same-side): post-close 30s đã hết → mở được.
+        Assert.True(coordinator.CanOpenNewSlot(TradingPositionSide.Buy, out _));
+        // Sell (opposite): opposite 300s CHƯA hết → vẫn bị chặn bởi OPPOSITE_SIDE_LOCK.
+        Assert.False(coordinator.CanOpenNewSlot(TradingPositionSide.Sell, out var reason));
+        Assert.Contains("OPPOSITE_SIDE_LOCK", reason);
     }
 }

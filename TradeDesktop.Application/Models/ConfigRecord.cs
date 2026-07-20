@@ -50,4 +50,5 @@ public sealed record ConfigRecord(
     int MaxTotalOpens = 5,
     int FreezeLastN = 0,
     double CloseMinProfit = 0,
-    int OppositeSideLockSeconds = 300);
+    int OppositeSideLockSeconds = 300,
+    int PostCloseLockSeconds = 300);

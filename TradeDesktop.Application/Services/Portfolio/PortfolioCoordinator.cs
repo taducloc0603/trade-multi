@@ -18,10 +18,11 @@ namespace TradeDesktop.Application.Services.Portfolio;
 /// </summary>
 public sealed class PortfolioCoordinator : IPortfolioCoordinator
 {
-    // Rule C — opposite-side OPEN blocked for this many seconds after last open confirm (Phase 2).
-    // Default fallback khi DB thiếu cột; runtime override từ DB column opposite_side_lock_seconds
-    // qua UpdateOppositeSideLockConfig. Dùng chung cho cả post-close all-open lock.
+    // Rule C — default fallback khi DB thiếu cột; runtime override từ DB column.
+    // opposite_side_lock_seconds → lock sau OPEN (chỉ chặn chiều ngược).
     public const int DefaultOppositeSideLockSeconds = 300;
+    // post_close_lock_seconds → lock sau CLOSE (chặn cả 2 chiều).
+    public const int DefaultPostCloseLockSeconds = 300;
 
     // Wall-clock fallback tolerance for stale snapshot timestamps (mirrors TradingFlowEngine).
     private static readonly TimeSpan SnapshotWallClockTolerance = TimeSpan.FromMinutes(5);
@@ -90,6 +91,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public TradingPositionSide LastOpenConfirmedSide => _state.LastOpenConfirmedSide;
     public DateTime? LastCloseConfirmedAtUtc => _state.LastCloseConfirmedAtUtc;
     public int OppositeSideLockSeconds => _state.OppositeSideLockSeconds;
+    public int PostCloseLockSeconds => _state.PostCloseLockSeconds;
     public int GlobalCooldownMinSec => _state.GlobalCooldownMinSec;
     public int GlobalCooldownMaxSec => _state.GlobalCooldownMaxSec;
     public TradingFlowSkipDiagnostic? LastSkipDiagnostic { get; private set; }
@@ -396,12 +398,12 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var lockSummary = _state.GlobalActionLockUntilUtc.HasValue
             ? $"lockUntil={_state.GlobalActionLockUntilUtc:HH:mm:ss}UTC"
             : "lockNone";
-        var postCloseLockUntilUtc = confirmedAtUtc.AddSeconds(_state.OppositeSideLockSeconds);
+        var postCloseLockUntilUtc = confirmedAtUtc.AddSeconds(_state.PostCloseLockSeconds);
         _logger?.Log(
             $"[SLOT][CLOSE_CONFIRMED] slot={slot.SlotId} side={slot.Side} " +
             $"profit={slot.LastProfitSnapshot:F2} closeReason={slot.LastCloseReason ?? CloseSignalReason.Gap} {lockSummary}");
         _logger?.Log(
-            $"[SLOT][WAITING][POST_CLOSE_LOCK] Block ALL OPEN trong {_state.OppositeSideLockSeconds}s " +
+            $"[SLOT][WAITING][POST_CLOSE_LOCK] Block ALL OPEN trong {_state.PostCloseLockSeconds}s " +
             $"(đến {postCloseLockUntilUtc:HH:mm:ss} UTC) — Rule C: sau CLOSE slot={slot.SlotId} side={slot.Side}, chặn CẢ 2 CHIỀU (re-entry lock)");
     }
 
@@ -548,14 +550,14 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         }
 
         // Rule C (post-close) — sau CLOSE confirm, khoá MỌI open (cả 2 chiều) trong
-        // OppositeSideLockSeconds giây. Re-entry cooldown: vừa đóng thì phải chờ hết window
+        // PostCloseLockSeconds giây. Re-entry cooldown: vừa đóng thì phải chờ hết window
         // mới được vào lệnh mới. KHÔNG khoá CLOSE (CanCloseNow không check anchor này).
         if (_state.LastCloseConfirmedAtUtc.HasValue)
         {
             var elapsedSec = (DateTime.UtcNow - _state.LastCloseConfirmedAtUtc.Value).TotalSeconds;
-            if (elapsedSec < _state.OppositeSideLockSeconds)
+            if (elapsedSec < _state.PostCloseLockSeconds)
             {
-                var remaining = _state.OppositeSideLockSeconds - (int)elapsedSec;
+                var remaining = _state.PostCloseLockSeconds - (int)elapsedSec;
                 blockReason = $"POST_CLOSE_LOCK (remaining {remaining}s, chặn CẢ 2 CHIỀU sau CLOSE lúc {_state.LastCloseConfirmedAtUtc.Value:HH:mm:ss}UTC)";
                 Interlocked.Increment(ref _oppositeLockSkipCount);
                 return false;
@@ -619,6 +621,12 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     {
         // <= 0 = tắt lock nguy hiểm → giữ default thay vì disable.
         _state.OppositeSideLockSeconds = seconds > 0 ? seconds : DefaultOppositeSideLockSeconds;
+    }
+
+    public void UpdatePostCloseLockConfig(int seconds)
+    {
+        // <= 0 = tắt lock nguy hiểm → giữ default thay vì disable.
+        _state.PostCloseLockSeconds = seconds > 0 ? seconds : DefaultPostCloseLockSeconds;
     }
 
     // ===== Rollback =====

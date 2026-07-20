@@ -25,8 +25,10 @@ public sealed class PortfolioState
     // Rule C — anchor cho post-close all-open lock (khoá mọi OPEN sau CLOSE confirm).
     public DateTime? LastCloseConfirmedAtUtc { get; set; }
     public int MaxLifeTimeBySecond { get; set; } = 0;
-    // Rule C — opposite-side OPEN lock + post-close all-open lock (giây). Config từ DB.
+    // Rule C — opposite-side OPEN lock (sau OPEN, chỉ chặn chiều ngược). Config từ DB.
     public int OppositeSideLockSeconds { get; set; } = 300;
+    // Rule C — post-close lock (sau CLOSE, chặn cả 2 chiều). Config từ DB (post_close_lock_seconds).
+    public int PostCloseLockSeconds { get; set; } = 300;
 
     public int CountLiveAndPendingBuy()
         => _slots.Count(s => s.Side == TradingPositionSide.Buy && IsLiveOrPending(s.Status));

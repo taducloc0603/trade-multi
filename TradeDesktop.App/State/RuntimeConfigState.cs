@@ -47,9 +47,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentCoolDownGapTick { get; private set; }
     public int CurrentMaxLifeTimeBySecond { get; private set; }
 
-    // Rule C — opposite-side OPEN lock + post-close all-open lock (giây). Default 300 khi DB
+    // Rule C — opposite-side OPEN lock (sau OPEN, chỉ chặn chiều ngược). Default 300 khi DB
     // chưa có cột, override từ DB column opposite_side_lock_seconds.
     public int CurrentOppositeSideLockSeconds { get; private set; } = 300;
+
+    // Rule C — post-close lock (sau CLOSE, chặn cả 2 chiều). Default 300 khi DB chưa có cột,
+    // override từ DB column post_close_lock_seconds.
+    public int CurrentPostCloseLockSeconds { get; private set; } = 300;
 
     // Multi-slot quota config. Default theo Rule A (5/3/3) khi DB chưa có cột — runtime
     // được override từ DB columns max_total_opens / max_buy_opens / max_sell_opens qua UpdateQuota.
@@ -163,7 +167,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         double limitMaxTp = 0,
         int freezeLastN = 0,
         double closeMinProfit = 0,
-        int oppositeSideLockSeconds = -1)
+        int oppositeSideLockSeconds = -1,
+        int postCloseLockSeconds = -1)
         => Update(
             machineHostName,
             mapName1,
@@ -207,7 +212,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             limitMaxTp,
             freezeLastN,
             closeMinProfit,
-            oppositeSideLockSeconds);
+            oppositeSideLockSeconds,
+            postCloseLockSeconds);
 
     public void Update(
         string machineHostName,
@@ -252,7 +258,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         double limitMaxTp = 0,
         int freezeLastN = 0,
         double closeMinProfit = 0,
-        int oppositeSideLockSeconds = -1)
+        int oppositeSideLockSeconds = -1,
+        int postCloseLockSeconds = -1)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
         var oldCloseN = CurrentCloseNumberOfQualifyingTimes;
@@ -339,6 +346,11 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         {
             // 0 = tắt lock nguy hiểm → giữ default 300 khi <= 0.
             CurrentOppositeSideLockSeconds = oppositeSideLockSeconds > 0 ? oppositeSideLockSeconds : 300;
+        }
+        if (postCloseLockSeconds >= 0)
+        {
+            // 0 = tắt lock nguy hiểm → giữ default 300 khi <= 0.
+            CurrentPostCloseLockSeconds = postCloseLockSeconds > 0 ? postCloseLockSeconds : 300;
         }
         CurrentMapName1 = (mapName1 ?? string.Empty).Trim();
         CurrentMapName2 = (mapName2 ?? string.Empty).Trim();

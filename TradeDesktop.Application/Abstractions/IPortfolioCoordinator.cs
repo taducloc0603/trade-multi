@@ -26,6 +26,7 @@ public interface IPortfolioCoordinator
     TradingPositionSide LastOpenConfirmedSide { get; }
     DateTime? LastCloseConfirmedAtUtc { get; }
     int OppositeSideLockSeconds { get; }
+    int PostCloseLockSeconds { get; }
     TradingFlowSkipDiagnostic? LastSkipDiagnostic { get; }
     int GlobalCooldownMinSec { get; }
     int GlobalCooldownMaxSec { get; }
@@ -78,6 +79,7 @@ public interface IPortfolioCoordinator
     void UpdateCooldownConfig(int minSec, int maxSec);
     void UpdateMaxLifeTimeConfig(int maxLifeTimeSec);
     void UpdateOppositeSideLockConfig(int seconds);
+    void UpdatePostCloseLockConfig(int seconds);
 
     // === Rollback (open/close execution failed) ===
     void AbortPendingOpen(string pairId);

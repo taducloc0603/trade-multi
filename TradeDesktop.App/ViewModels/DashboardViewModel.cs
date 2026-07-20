@@ -3052,10 +3052,13 @@ public sealed class DashboardViewModel : ObservableObject
         _portfolioCoordinator.UpdateMaxLifeTimeConfig(
             _runtimeConfigState.CurrentMaxLifeTimeBySecond);
 
-        // Rule C — opposite-side lock + post-close all-open lock (giây) từ DB
-        // (opposite_side_lock_seconds), thay hardcode 300 cũ.
+        // Rule C — 2 lock độc lập từ DB, thay hardcode 300 cũ:
+        // opposite_side_lock_seconds → lock sau OPEN (chỉ chặn chiều ngược).
+        // post_close_lock_seconds   → lock sau CLOSE (chặn cả 2 chiều).
         _portfolioCoordinator.UpdateOppositeSideLockConfig(
             _runtimeConfigState.CurrentOppositeSideLockSeconds);
+        _portfolioCoordinator.UpdatePostCloseLockConfig(
+            _runtimeConfigState.CurrentPostCloseLockSeconds);
     }
 
     private void RefreshOrderInfoTabs()
@@ -6089,7 +6092,8 @@ public sealed class DashboardViewModel : ObservableObject
                     limitMaxTp: result.LimitMaxTp,
                     freezeLastN: result.FreezeLastN,
                     closeMinProfit: result.CloseMinProfit,
-                    oppositeSideLockSeconds: result.OppositeSideLockSeconds);
+                    oppositeSideLockSeconds: result.OppositeSideLockSeconds,
+                    postCloseLockSeconds: result.PostCloseLockSeconds);
                 _runtimeConfigState.UpdateQuota(
                     result.MaxTotalOpens,
                     result.MaxBuyOpens,
@@ -6577,9 +6581,9 @@ public sealed class DashboardViewModel : ObservableObject
         if (_portfolioCoordinator.LastCloseConfirmedAtUtc is { } lastCloseAt)
         {
             var elapsedSec = (now - lastCloseAt).TotalSeconds;
-            if (elapsedSec < _portfolioCoordinator.OppositeSideLockSeconds)
+            if (elapsedSec < _portfolioCoordinator.PostCloseLockSeconds)
             {
-                var remaining = _portfolioCoordinator.OppositeSideLockSeconds - (int)elapsedSec;
+                var remaining = _portfolioCoordinator.PostCloseLockSeconds - (int)elapsedSec;
                 return $"POST-CLOSE LOCK (no open for {remaining}s)";
             }
         }
