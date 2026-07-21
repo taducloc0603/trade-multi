@@ -188,11 +188,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 continue;
             }
 
-            // Guard min-profit (close_min_profit): chặn CẮT-LỖ theo gap-reversal khi profit A+B
-            // của slot chưa đạt ngưỡng. CHỈ áp cho CloseReason.Gap (TP không bị đụng — TP vốn là
-            // close chủ đích theo lời). Lệnh QUÁ HẠN (age > max_life_time_by_second) được MIỄN guard
-            // → vẫn cắt lỗ theo gap. CloseMinProfit <= 0 = tắt guard. Không tạo close mới → không đụng Rule E.
-            if (minProfit > 0d && closeTrigger.CloseReason == CloseSignalReason.Gap)
+            // Guard min-profit (close_min_profit): SÀN lợi nhuận tối thiểu để ĐÓNG theo signal.
+            // Áp cho MỌI CloseReason (cả Gap-reversal LẪN TP) — chặn đóng khi profit A+B của slot
+            // chưa đạt ngưỡng. Lệnh QUÁ HẠN (age > max_life_time_by_second) được MIỄN guard → vẫn
+            // đóng dù chưa đủ sàn. CloseMinProfit <= 0 = tắt guard. Không tạo close mới → không đụng Rule E.
+            if (minProfit > 0d)
             {
                 var isOvertime = maxLifeTimeSec > 0
                     && slot.OpenConfirmedAtUtc.HasValue
@@ -202,8 +202,9 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 {
                     _logger?.Log(
                         $"[CLOSE_SELECT][MINPROFIT_SKIP] slot={slot.SlotId} pairId={slot.PairId} " +
+                        $"reason={closeTrigger.CloseReason} " +
                         $"profit={(slotProfit.HasValue ? slotProfit.Value.ToString("0.##") : "null")} " +
-                        $"minProfit={minProfit:0.##} overtime={isOvertime} — gap-close suppressed");
+                        $"minProfit={minProfit:0.##} overtime={isOvertime} — close suppressed");
                     continue;
                 }
             }

@@ -119,7 +119,7 @@ Rule theo mode đã mở:
   - tick cuối: `GapBuy >= ClosePts`
   - `LimitMaxGap` áp dụng tương tự
 
-> **Guard `CloseMinProfit`** (`close_min_profit`, đơn vị point, default 0 = tắt): áp ở **`PortfolioCoordinator.ProcessSnapshot`** khi build `eligibleCloses` (không phải trong signal engine — cần biết tuổi slot). Khi `CloseMinProfit > 0`, một **gap-reversal close** (`CloseReason.Gap`) bị chặn nếu profit tổng A+B của slot (`slot.LastProfitSnapshot`) chưa `>= CloseMinProfit` (hoặc chưa có snapshot đầy đủ → fail-safe chặn). **Ngoại lệ**: lệnh **QUÁ HẠN** (`age > max_life_time_by_second`) được **MIỄN** guard → vẫn cắt-lỗ theo gap. Nhánh **TP** (`CloseReason.Tp`) KHÔNG bị guard này chi phối. Không tạo close mới → không đụng Rule E.
+> **Guard `CloseMinProfit`** (`close_min_profit`, đơn vị point, default 0 = tắt): SÀN lợi nhuận tối thiểu để **đóng theo signal**. Áp ở **`PortfolioCoordinator.ProcessSnapshot`** khi build `eligibleCloses` (không phải trong signal engine — cần biết tuổi slot). Khi `CloseMinProfit > 0`, **mọi close theo signal** (cả **gap-reversal** `CloseReason.Gap` LẪN **TP** `CloseReason.Tp`) bị chặn nếu profit tổng A+B của slot (`slot.LastProfitSnapshot`) chưa `>= CloseMinProfit` (hoặc chưa có snapshot đầy đủ → fail-safe chặn). **Ngoại lệ**: lệnh **QUÁ HẠN** (`age > max_life_time_by_second`) được **MIỄN** guard → vẫn đóng dù chưa đủ sàn. Không tạo close mới → không đụng Rule E. ⚠️ Nếu `LimitMaxTp`/`close_max_tp_profit` > 0 nhưng < `CloseMinProfit`, TP sẽ không bao giờ khớp — đảm bảo các cap này `>= CloseMinProfit` hoặc `= 0`.
 
 **TP close path** (song song với gap close, thắng nếu trigger trước):
 
@@ -231,7 +231,7 @@ DB fields liên quan đến guard/limit (tất cả `= 0` là disabled):
 | `max_gap` | `CurrentMaxGap` | `int` | Chặn open/close tại trigger nếu `|gap| > max_gap` (post-trigger guard) |
 | `limit_max_gap` | `CurrentLimitMaxGap` | `int` | Reset confirm window ngay nếu `|gap| > limit_max_gap` trong mỗi tick |
 | `limit_max_tp` | `CurrentLimitMaxTp` | `double` | Reset TP window ngay nếu `profit > limit_max_tp` trong mỗi tick |
-| `close_min_profit` | `CurrentCloseMinProfit` | `double` | Chặn **gap-reversal close** nếu profit A+B `< close_min_profit` (không áp lên TP) |
+| `close_min_profit` | `CurrentCloseMinProfit` | `double` | SÀN lợi nhuận tối thiểu: chặn **mọi close theo signal** (gap-reversal + TP) nếu profit A+B `< close_min_profit` (miễn khi lệnh quá hạn) |
 
 ### 7.2 Routing thực thi lệnh
 

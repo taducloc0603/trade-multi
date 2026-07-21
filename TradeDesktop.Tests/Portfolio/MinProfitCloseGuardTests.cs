@@ -5,9 +5,9 @@ using TradeDesktop.Application.Services.Portfolio;
 
 namespace TradeDesktop.Tests.Portfolio;
 
-// close_min_profit guard (coordinator-side): chặn CẮT-LỖ theo gap-reversal khi profit A+B của slot
-// chưa đạt ngưỡng. Chỉ áp cho CloseReason.Gap (TP không bị đụng). Lệnh QUÁ HẠN
-// (age > max_life_time_by_second) được MIỄN guard → vẫn cắt lỗ theo gap. CloseMinProfit<=0 = tắt.
+// close_min_profit guard (coordinator-side): SÀN lợi nhuận tối thiểu để đóng theo signal. Áp cho
+// MỌI CloseReason (cả gap-reversal LẪN TP) → chặn đóng khi profit A+B của slot chưa đạt ngưỡng.
+// Lệnh QUÁ HẠN (age > max_life_time_by_second) được MIỄN guard → vẫn đóng. CloseMinProfit<=0 = tắt.
 public sealed class MinProfitCloseGuardTests
 {
     private sealed class ScriptedCloseSignalEngine : ICloseSignalEngine
@@ -134,12 +134,40 @@ public sealed class MinProfitCloseGuardTests
     }
 
     [Fact]
-    public void TpClose_BelowMinProfit_Closes_GuardIgnoresTp()
+    public void TpClose_BelowMinProfit_Suppressed()
     {
         var factory = new ScriptedFactory();
         var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
-        // TP close (CloseReason.Tp), profit 5 < min 20 → guard KHÔNG áp cho TP → vẫn đóng.
+        // TP close (CloseReason.Tp), age 300s < maxLife 1200 → không quá hạn; profit 5 < min 20
+        // → guard áp cho CẢ TP → bị chặn.
         var coordinator = SetupSingleSlot(factory, 1200, now, 300, 5.0, TpCloseTrigger());
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config(closeMinProfit: 20));
+
+        Assert.Null(result.CloseTargetSlot);
+    }
+
+    [Fact]
+    public void TpClose_MeetsMinProfit_Closes()
+    {
+        var factory = new ScriptedFactory();
+        var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
+        // TP close, profit 25 >= min 20 → được đóng.
+        var coordinator = SetupSingleSlot(factory, 1200, now, 300, 25.0, TpCloseTrigger());
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config(closeMinProfit: 20));
+
+        Assert.NotNull(result.CloseTargetSlot);
+        Assert.Equal("p1", result.CloseTargetSlot!.PairId);
+    }
+
+    [Fact]
+    public void Overtime_TpClose_BelowMinProfit_Closes_BypassGuard()
+    {
+        var factory = new ScriptedFactory();
+        var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
+        // age 1300s > maxLife 1200 → QUÁ HẠN; TP profit 5 < min 20 nhưng được MIỄN guard → vẫn đóng.
+        var coordinator = SetupSingleSlot(factory, 1200, now, 1300, 5.0, TpCloseTrigger());
 
         var result = coordinator.ProcessSnapshot(Snapshot(now), Config(closeMinProfit: 20));
 

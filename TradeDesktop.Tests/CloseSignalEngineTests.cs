@@ -333,7 +333,7 @@ public sealed class CloseSignalEngineTests
     }
 
     // Guard min-profit (close_min_profit) đã chuyển sang PortfolioCoordinator (cần biết tuổi slot
-    // để miễn cho lệnh quá hạn) — test guard nằm ở Portfolio/MinProfitCloseGuardTests.
+    // để miễn cho lệnh quá hạn) — áp cho CẢ Gap lẫn TP. Test guard nằm ở Portfolio/MinProfitCloseGuardTests.
 
     private static GapSignalTriggerResult? Process(
         CloseSignalEngine sut,
