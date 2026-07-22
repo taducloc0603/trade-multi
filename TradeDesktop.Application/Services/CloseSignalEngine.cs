@@ -9,6 +9,15 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
     private readonly GapSignalConfirmationEngine.SideWindowState _sellState = new();
     private readonly TpWindowState _tpState = new();
 
+    // Close-gap "target profit" mode LATCH: một khi profit slot đã TỪNG >= CloseGapTargetProfit (X>0)
+    // trong vòng đời engine này thì giữ target-mode tới khi Reset() (slot đóng/mở lệnh mới → engine mới).
+    // Engine là per-slot (AllocateNewSlot tạo engine mới mỗi open) nên latch tự reset đúng lifecycle.
+    private bool _targetGapLatched;
+
+    // Chế độ close-gap mà tick GẦN NHẤT đã resolve (đã tính latch). Coordinator đọc lại để log
+    // KHÔNG lệch với quyết định engine (thay cho static ShouldUseTargetGap cũ, vốn pure/không latch).
+    public CloseGapMode LastResolvedGapMode { get; private set; } = CloseGapMode.Normal;
+
     public GapSignalTriggerResult? ProcessSnapshot(
         GapSignalSnapshot snapshot,
         GapSignalConfirmationConfig config,
@@ -17,8 +26,15 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
     {
         // Close-gap "target profit" mode: khi slotProfit đã đạt CloseGapTargetProfit thì đổi ngưỡng
         // sang WithTarget (signed, CÓ THỂ ÂM — KHÔNG Math.Abs) để đóng quyết liệt hơn nhằm chốt lời.
-        // Per-tick, KHÔNG latch. Khi tắt (X<=0) hoặc profit<X → dùng ngưỡng chuẩn (Math.Abs) như cũ.
-        var useTargetGap = ShouldUseTargetGap(config, slotProfit);
+        // LATCH: set-once khi profit >= X (X>0); giữ target-mode tới Reset() dù profit tụt dưới X sau đó.
+        // Gate lúc đọc bằng X>0 để nếu config tắt (X→0) giữa chừng thì quay về ngưỡng chuẩn (Math.Abs).
+        var targetProfit = Math.Abs(config.CloseGapTargetProfit);
+        if (targetProfit > 0d && slotProfit.HasValue && slotProfit.Value >= targetProfit)
+        {
+            _targetGapLatched = true;
+        }
+        var useTargetGap = targetProfit > 0d && _targetGapLatched;
+        LastResolvedGapMode = useTargetGap ? CloseGapMode.Target : CloseGapMode.Normal;
         var confirmThreshold = useTargetGap
             ? config.CloseConfirmGapPtsWithTarget
             : Math.Abs(config.CloseConfirmGapPts);
@@ -85,21 +101,13 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         return tpResult ?? gapResult;
     }
 
-    /// <summary>
-    /// True khi close-gap nên dùng ngưỡng WithTarget: CloseGapTargetProfit &gt; 0 (bật) và profit slot
-    /// (đã đủ 2 leg) đạt/ vượt ngưỡng đó. Dùng chung bởi engine (chọn ngưỡng) và coordinator (log đổi mode).
-    /// </summary>
-    public static bool ShouldUseTargetGap(GapSignalConfirmationConfig config, double? slotProfit)
-    {
-        var targetProfit = Math.Abs(config.CloseGapTargetProfit);
-        return targetProfit > 0d && slotProfit.HasValue && slotProfit.Value >= targetProfit;
-    }
-
     public void Reset()
     {
         _buyState.Reset();
         _sellState.Reset();
         _tpState.Reset();
+        _targetGapLatched = false;
+        LastResolvedGapMode = CloseGapMode.Normal;
     }
 
     private GapSignalTriggerResult? ProcessTp(

@@ -20,6 +20,8 @@ public sealed class PriorityCloseRuleTests
             double? slotProfit = null)
             => NextResult;
 
+        public CloseGapMode LastResolvedGapMode => CloseGapMode.Normal;
+
         public void Reset() { /* no-op for scripted engine */ }
     }
 

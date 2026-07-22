@@ -17,6 +17,7 @@ public sealed class StabilityStressTests
             TradingOpenMode m,
             double? slotProfit = null)
             => NextResult;
+        public CloseGapMode LastResolvedGapMode => CloseGapMode.Normal;
         public void Reset() { }
     }
 

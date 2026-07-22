@@ -176,13 +176,15 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             LogTpCheck(slot, config, effectiveNow);
 
             var slotProfit = slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot : null;
-            LogGapModeIfChanged(slot, config, slotProfit);
 
+            // ProcessSnapshot TRƯỚC (resolve latch + LastResolvedGapMode), rồi log đọc lại quyết định
+            // engine → log KHÔNG lệch với threshold engine thực dùng (latch phá tính pure của check cũ).
             var closeTrigger = slot.CloseSignalEngine.ProcessSnapshot(
                 snapshot,
                 config,
                 slot.OpenMode,
                 slotProfit);
+            LogGapModeIfChanged(slot, config, slotProfit);
             if (closeTrigger is null || !closeTrigger.Triggered || closeTrigger.Action != GapSignalAction.Close)
             {
                 continue;
@@ -430,8 +432,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         slot.UpdateProfit(ticket, profit);
     }
 
-    // Edge-triggered: log khi close-gap đổi chế độ ngưỡng cho slot (profit vượt/tụt qua CloseGapTargetProfit).
-    // Dùng cùng CloseSignalEngine.ShouldUseTargetGap để KHÔNG lệch quyết định giữa log và engine.
+    // Edge-triggered: log khi close-gap đổi chế độ ngưỡng cho slot. GỌI SAU ProcessSnapshot: đọc
+    // slot.CloseSignalEngine.LastResolvedGapMode (đã tính latch) để KHÔNG lệch quyết định với engine.
     private void LogGapModeIfChanged(PositionSlot slot, GapSignalConfirmationConfig config, double? slotProfit)
     {
         // Chỉ theo dõi khi feature bật (CloseGapTargetProfit > 0). Tắt → clear để lần bật lại log sạch.
@@ -441,9 +443,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             return;
         }
 
-        var mode = CloseSignalEngine.ShouldUseTargetGap(config, slotProfit)
-            ? CloseGapMode.Target
-            : CloseGapMode.Normal;
+        var mode = slot.CloseSignalEngine.LastResolvedGapMode;
 
         // Baseline khi chưa có entry là Normal → lần đầu ở Normal không log (chỉ khởi tạo).
         var prevMode = _lastGapModeBySlot.TryGetValue(slot.SlotId, out var stored)
@@ -458,9 +458,14 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var profitText = slotProfit.HasValue
             ? slotProfit.Value.ToString("0.00", CultureInfo.InvariantCulture)
             : "incomplete";
+        // latchedBelowTarget=True nghĩa là mode=Target được GIỮ bởi latch dù profit hiện < X (đã từng chạm X).
+        var latchedBelowTarget = mode == CloseGapMode.Target
+            && slotProfit.HasValue
+            && slotProfit.Value < Math.Abs(config.CloseGapTargetProfit);
         _logger?.Log(
             $"[SLOT][GAP_MODE] slot={slot.SlotId} {prevMode}->{mode} profit={profitText} " +
             $"targetProfit={Math.Abs(config.CloseGapTargetProfit).ToString("0.00", CultureInfo.InvariantCulture)} " +
+            $"latchedBelowTarget={latchedBelowTarget} " +
             $"confirmWithTarget={config.CloseConfirmGapPtsWithTarget} closeWithTarget={config.ClosePtsWithTarget} " +
             $"confirmNormal={Math.Abs(config.CloseConfirmGapPts)} closeNormal={Math.Abs(config.ClosePts)}");
     }

@@ -21,6 +21,8 @@ public sealed class MaxLifeTimeRuleTests
             double? slotProfit = null)
             => NextResult;
 
+        public CloseGapMode LastResolvedGapMode => CloseGapMode.Normal;
+
         public void Reset() { }
     }
 

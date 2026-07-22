@@ -417,7 +417,7 @@ public sealed class CloseSignalEngineTests
     }
 
     [Fact]
-    public void ProcessSnapshot_TargetMode_RevertsToNormal_WhenProfitDropsBelowTarget_PerTick()
+    public void ProcessSnapshot_TargetMode_KeepsTarget_WhenProfitDropsBelowTarget_Latched()
     {
         var sut = new CloseSignalEngine();
         var config = new GapSignalConfirmationConfig(
@@ -432,13 +432,76 @@ public sealed class CloseSignalEngineTests
             ClosePtsWithTarget: -30);
         var start = new DateTime(2026, 3, 18, 17, 15, 0, DateTimeKind.Utc);
 
-        // 2 tick đầu profit>=15 (target-mode, gate lỏng nên tích luỹ được).
+        // Tick 1 profit=20 (>=15) → LATCH target. gapBuy=15 <= +20 → confirm bắt đầu.
         Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: 15, gapSell: 15, config, TradingOpenMode.GapBuy, slotProfit: 20));
-        Assert.Null(Process(sut, start.AddMilliseconds(180), gapBuy: 10, gapSell: 10, config, TradingOpenMode.GapBuy, slotProfit: 20));
-        // Tick cuối profit=10 (<15) → per-tick về ngưỡng chuẩn 50 → GapSell=18 <= -50? false → reset.
+        // Tick 2 profit=10 (<15) nhưng ĐÃ latch → vẫn dùng ngưỡng target lỏng, confirm không reset.
+        Assert.Null(Process(sut, start.AddMilliseconds(180), gapBuy: 10, gapSell: 10, config, TradingOpenMode.GapBuy, slotProfit: 10));
+        // Tick 3 profit=10 (<15), latch giữ target → gapBuy=18 <= +20 và <= +30, hold đủ 400ms → ĐÓNG.
+        var trigger = Process(sut, start.AddMilliseconds(420), gapBuy: 18, gapSell: 18, config, TradingOpenMode.GapBuy, slotProfit: 10);
+
+        Assert.NotNull(trigger);
+        Assert.Equal(GapSignalAction.Close, trigger!.Action);
+        Assert.Equal(CloseSignalReason.Gap, trigger.CloseReason);
+        Assert.Equal(CloseGapMode.Target, trigger.GapMode);
+        Assert.Equal(CloseGapMode.Target, sut.LastResolvedGapMode);
+    }
+
+    [Fact]
+    public void ProcessSnapshot_TargetMode_Reset_ClearsLatch_BackToNormalThresholds()
+    {
+        var sut = new CloseSignalEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            CloseConfirmGapPts: 50,
+            ClosePts: 80,
+            CloseHoldConfirmMs: 400,
+            CloseGapTargetProfit: 15,
+            CloseConfirmGapPtsWithTarget: -20,
+            ClosePtsWithTarget: -30);
+        var start = new DateTime(2026, 3, 18, 17, 30, 0, DateTimeKind.Utc);
+
+        // Latch target bằng 1 tick profit>=15.
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: 15, gapSell: 15, config, TradingOpenMode.GapBuy, slotProfit: 20));
+        Assert.Equal(CloseGapMode.Target, sut.LastResolvedGapMode);
+
+        // Reset (mô phỏng slot đóng → engine mới) xoá latch.
+        sut.Reset();
+        Assert.Equal(CloseGapMode.Normal, sut.LastResolvedGapMode);
+
+        // Sau reset, profit<15 suốt → KHÔNG re-latch → ngưỡng chuẩn 50/80. gapBuy=18 <= -50? false → không đóng.
+        Assert.Null(Process(sut, start.AddMilliseconds(600), gapBuy: 18, gapSell: 18, config, TradingOpenMode.GapBuy, slotProfit: 10));
+        Assert.Null(Process(sut, start.AddMilliseconds(780), gapBuy: 18, gapSell: 18, config, TradingOpenMode.GapBuy, slotProfit: 10));
+        var trigger = Process(sut, start.AddMilliseconds(1020), gapBuy: 18, gapSell: 18, config, TradingOpenMode.GapBuy, slotProfit: 10);
+
+        Assert.Null(trigger);
+        Assert.Equal(CloseGapMode.Normal, sut.LastResolvedGapMode);
+    }
+
+    [Fact]
+    public void ProcessSnapshot_TargetMode_FreshEngine_DoesNotLatch_WhenProfitNeverReachesTarget()
+    {
+        var sut = new CloseSignalEngine();
+        // profit=10 luôn < X=15 → không bao giờ latch → ngưỡng chuẩn 50/80, gapBuy=18 không đủ đóng.
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            CloseConfirmGapPts: 50,
+            ClosePts: 80,
+            CloseHoldConfirmMs: 400,
+            CloseGapTargetProfit: 15,
+            CloseConfirmGapPtsWithTarget: -20,
+            ClosePtsWithTarget: -30);
+        var start = new DateTime(2026, 3, 18, 17, 35, 0, DateTimeKind.Utc);
+
+        Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: 18, gapSell: 18, config, TradingOpenMode.GapBuy, slotProfit: 10));
+        Assert.Null(Process(sut, start.AddMilliseconds(180), gapBuy: 18, gapSell: 18, config, TradingOpenMode.GapBuy, slotProfit: 10));
         var trigger = Process(sut, start.AddMilliseconds(420), gapBuy: 18, gapSell: 18, config, TradingOpenMode.GapBuy, slotProfit: 10);
 
         Assert.Null(trigger);
+        Assert.Equal(CloseGapMode.Normal, sut.LastResolvedGapMode);
     }
 
     [Fact]
