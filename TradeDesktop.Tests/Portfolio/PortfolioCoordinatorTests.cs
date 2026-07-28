@@ -82,7 +82,7 @@ public sealed class PortfolioCoordinatorTests
     }
 
     [Fact]
-    public void MarkSlotCloseConfirmed_TransitionsToClosed_AndKicksCooldown()
+    public void MarkSlotCloseConfirmed_TransitionsToClosed_WithoutResettingDispatchCooldown()
     {
         // Phase 8: cooldown kicked tại CLOSE DISPATCH (MarkSlotCloseTriggered), không phải confirm.
         var coordinator = CreateCoordinator();
@@ -91,6 +91,7 @@ public sealed class PortfolioCoordinatorTests
         coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
 
         var triggerTime = DateTime.UtcNow;
+        coordinator.TryAcquireTradeAction(triggerTime, "CLOSE", "test");
         coordinator.MarkSlotCloseTriggered("p1", triggerTime);
 
         var confirmedAt = triggerTime.AddSeconds(1);
@@ -133,7 +134,7 @@ public sealed class PortfolioCoordinatorTests
     }
 
     [Fact]
-    public void MarkSlotCloseTriggered_WhenSlotAlreadyPendingClose_StillKicksCooldown()
+    public void TradeGate_WhenSlotAlreadyPendingClose_StillProtectsDispatch()
     {
         // Regression Phase 8: ProcessSnapshot (line ~179) pre-mark slot PendingClose
         // via slot.MarkCloseTriggered trước khi caller dispatch close. Khi
@@ -151,9 +152,10 @@ public sealed class PortfolioCoordinatorTests
         slot!.MarkCloseTriggered(triggerTime);
         Assert.Equal(PositionSlotStatus.PendingClose, slot.Status);
 
-        // Caller dispatch close → coordinator.MarkSlotCloseTriggered.
+        var gate = coordinator.TryAcquireTradeAction(triggerTime, "CLOSE", "test");
         coordinator.MarkSlotCloseTriggered("p1", triggerTime);
 
+        Assert.True(gate.Acquired);
         Assert.NotNull(coordinator.GlobalActionLockUntilUtc);
         // Lock phải được extend tới triggerTime + 5s (MAX so với allocate lock).
         var elapsed = (coordinator.GlobalActionLockUntilUtc!.Value - triggerTime).TotalSeconds;

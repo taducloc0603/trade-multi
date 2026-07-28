@@ -34,6 +34,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     private readonly Random _random;
     // Phase 3 §3.6 Risk 4: lock chống race khi 2 callers cùng pass CanOpenNewSlot rồi cùng allocate.
     private readonly object _allocateLock = new();
+    private readonly object _tradeActionGateLock = new();
 
     // Phase 7 metrics — monotonic counters; reset on Coordinator.Reset.
     private long _totalOpensAllTime;
@@ -287,47 +288,58 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             // Reset shared open engine to prevent residual window state.
             _openSignalEngine.Reset();
 
-            // Phase 8: kick cooldown ngay tại DISPATCH (không đợi MMF confirm).
-            // User intent: min 3-10s giữa BẤT KỲ 2 trade events (open/close).
-            // Bảo vệ race window dispatch→confirm (~500ms broker latency).
-            KickGlobalCooldown(trigger.TriggeredAtUtc, $"after OPEN_DISPATCH slot={slot.SlotId}");
-
             return slot;
         }
     }
 
-    public void KickGlobalCooldown(DateTime triggeredAtUtc, string reasonSuffix)
+    public TradeActionGateResult TryAcquireTradeAction(
+        DateTime requestedAtUtc,
+        string action,
+        string source)
     {
-        var cooldownSec = NextSecondsInRange(_state.GlobalCooldownMinSec, _state.GlobalCooldownMaxSec);
-        if (cooldownSec <= 0)
+        var requestedUtc = requestedAtUtc.Kind switch
         {
-            // Cooldown config = 0/0 → cooldown effectively off. Log để dễ điều tra
-            // nếu user expect cooldown nhưng config sai.
-            _logger?.Log(
-                $"[SLOT][COOLDOWN][SKIP] cooldown=0s (config min={_state.GlobalCooldownMinSec}/max={_state.GlobalCooldownMaxSec}) — reason={reasonSuffix}");
-            return;
-        }
+            DateTimeKind.Utc => requestedAtUtc,
+            DateTimeKind.Local => requestedAtUtc.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(requestedAtUtc, DateTimeKind.Utc)
+        };
 
-        var newLockUntilUtc = triggeredAtUtc.AddSeconds(cooldownSec);
-        // MAX semantics: chỉ extend lock, không bao giờ rút ngắn. Bảo vệ
-        // trường hợp confirm cooldown rolled ngắn hơn dispatch cooldown.
-        if (_state.GlobalActionLockUntilUtc.HasValue
-            && newLockUntilUtc <= _state.GlobalActionLockUntilUtc.Value)
+        lock (_tradeActionGateLock)
         {
-            // Log để debug case "tôi nghĩ lock sẽ extend nhưng không" — chứng minh
-            // MAX guard chủ động giữ lock cũ vì nó lớn hơn.
-            var existingRemaining = (_state.GlobalActionLockUntilUtc.Value - DateTime.UtcNow).TotalSeconds;
-            _logger?.Log(
-                $"[SLOT][COOLDOWN][KEEP] rolled={cooldownSec}s không extend lock " +
-                $"(existing đến {_state.GlobalActionLockUntilUtc:HH:mm:ss} UTC, remaining={existingRemaining:F1}s, " +
-                $"proposed đến {newLockUntilUtc:HH:mm:ss} UTC) — reason={reasonSuffix}");
-            return;
-        }
+            if (_state.GlobalActionLockUntilUtc is { } lockUntilUtc
+                && requestedUtc < lockUntilUtc)
+            {
+                var remaining = lockUntilUtc - requestedUtc;
+                _logger?.Log(
+                    $"[TRADE_GATE][BLOCKED] action={action} source={source} " +
+                    $"remainingMs={remaining.TotalMilliseconds:F0} lockUntil={lockUntilUtc:O}");
+                return new TradeActionGateResult(
+                    Acquired: false,
+                    LockUntilUtc: lockUntilUtc,
+                    Remaining: remaining,
+                    CooldownSeconds: 0,
+                    Reason: "GLOBAL_ACTION_COOLDOWN");
+            }
 
-        _state.GlobalActionLockUntilUtc = newLockUntilUtc;
-        _logger?.Log(
-            $"[SLOT][WAITING] Block ALL open/close trong {cooldownSec}s " +
-            $"(đến {_state.GlobalActionLockUntilUtc:HH:mm:ss} UTC) — reason={reasonSuffix}");
+            var cooldownSec = NextSecondsInRange(
+                _state.GlobalCooldownMinSec,
+                _state.GlobalCooldownMaxSec);
+            var newLockUntilUtc = requestedUtc.AddSeconds(cooldownSec);
+            _state.GlobalActionLockUntilUtc = cooldownSec > 0
+                ? newLockUntilUtc
+                : null;
+
+            _logger?.Log(
+                $"[TRADE_GATE][ACQUIRED] action={action} source={source} " +
+                $"cooldownSec={cooldownSec} lockUntil={(cooldownSec > 0 ? newLockUntilUtc.ToString("O") : "none")}");
+
+            return new TradeActionGateResult(
+                Acquired: true,
+                LockUntilUtc: _state.GlobalActionLockUntilUtc,
+                Remaining: cooldownSec > 0 ? TimeSpan.FromSeconds(cooldownSec) : TimeSpan.Zero,
+                CooldownSeconds: cooldownSec,
+                Reason: cooldownSec > 0 ? "ACQUIRED" : "ACQUIRED_COOLDOWN_DISABLED");
+        }
     }
 
     public void MarkSlotOpenConfirmed(string pairId, ulong ticketA, ulong ticketB, DateTime confirmedAtUtc)
@@ -364,21 +376,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var slot = _state.GetSlotByPairId(pairId);
         if (slot is null) return;
 
-        // Slot có thể đã được ProcessSnapshot chuyển sang PendingClose ở line ~179
-        // (slot.MarkCloseTriggered set Status=PendingClose immediately). Idempotent
-        // skip nếu đã PendingClose — KHÔNG bỏ qua KickGlobalCooldown bên dưới.
+        // Slot có thể đã được ProcessSnapshot chuyển sang PendingClose.
         if (slot.Status != PositionSlotStatus.PendingClose)
         {
             slot.MarkCloseTriggered(triggeredAtUtc);
         }
-
-        // Phase 8: cooldown kick PHẢI chạy mỗi lần dispatch close, ngay cả khi slot
-        // đã được ProcessSnapshot pre-mark PendingClose. MAX semantics đảm bảo lock
-        // chỉ extend, không rút ngắn — gọi nhiều lần an toàn.
-        // Đây là cooldown anchor cho close path (mirror OPEN dispatch tại
-        // AllocatePendingOpenSlot). Bỏ kick này → close không block tick kế tiếp →
-        // open có thể dispatch đồng thời với close (vi phạm Rule B).
-        KickGlobalCooldown(triggeredAtUtc, $"after CLOSE_DISPATCH slot={slot.SlotId}");
     }
 
     public void MarkSlotCloseConfirmed(string pairId, DateTime confirmedAtUtc)
@@ -609,8 +611,10 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
     public void UpdateCooldownConfig(int minSec, int maxSec)
     {
-        _state.GlobalCooldownMinSec = Math.Max(0, minSec);
-        _state.GlobalCooldownMaxSec = Math.Max(_state.GlobalCooldownMinSec, maxSec);
+        var normalizedMin = Math.Max(0, Math.Min(minSec, maxSec));
+        var normalizedMax = Math.Max(0, Math.Max(minSec, maxSec));
+        _state.GlobalCooldownMinSec = normalizedMin;
+        _state.GlobalCooldownMaxSec = normalizedMax;
     }
 
     public void UpdateMaxLifeTimeConfig(int maxLifeTimeSec)

@@ -116,6 +116,7 @@ public sealed class MultiSlotIntegrationTests
         c.UpdateCooldownConfig(minSec: 60, maxSec: 60);
 
         c.AllocatePendingOpenSlot("p1", Trigger(GapSignalSide.Buy));
+        c.TryAcquireTradeAction(DateTime.UtcNow, "OPEN", "test");
         c.MarkSlotOpenConfirmed("p1", 100, 200, DateTime.UtcNow);
 
         // Cooldown 60s active → close blocked.

@@ -56,6 +56,7 @@ public sealed class DisplayPropertyTests
     {
         var coordinator = CreateCoordinator();
         coordinator.UpdateCooldownConfig(minSec: 30, maxSec: 30);
+        coordinator.TryAcquireTradeAction(DateTime.UtcNow, "OPEN", "test");
         coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
         coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
 

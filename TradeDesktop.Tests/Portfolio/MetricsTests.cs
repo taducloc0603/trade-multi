@@ -102,6 +102,7 @@ public sealed class MetricsTests
         var coordinator = CreateCoordinator();
         coordinator.UpdateCooldownConfig(minSec: 60, maxSec: 60);
         coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.TryAcquireTradeAction(DateTime.UtcNow, "OPEN", "test");
         coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
 
         for (var i = 0; i < 3; i++)

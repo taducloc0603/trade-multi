@@ -1,4 +1,8 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
+using TradeDesktop.Application.Abstractions;
+using TradeDesktop.Application.Models;
+using TradeDesktop.Application.Services.Portfolio;
 
 namespace TradeDesktop.App.Services;
 
@@ -7,12 +11,22 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
     private readonly ITradePlatformExecutor _mt4Executor;
     private readonly ITradePlatformExecutor _mt5Executor;
     private readonly ITradeSessionFileLogger _logger;
+    private readonly IPortfolioCoordinator _portfolioCoordinator;
+    private readonly IRuntimeConfigProvider _runtimeConfig;
+    private readonly ConcurrentDictionary<Guid, byte> _consumedSignalIds = new();
+    private const int SignalDispatchMaxAgeMs = 1000;
 
-    public TradeExecutionRouter(IEnumerable<ITradePlatformExecutor> executors, ITradeSessionFileLogger logger)
+    public TradeExecutionRouter(
+        IEnumerable<ITradePlatformExecutor> executors,
+        ITradeSessionFileLogger logger,
+        IPortfolioCoordinator portfolioCoordinator,
+        IRuntimeConfigProvider runtimeConfig)
     {
         _mt4Executor = executors.First(x => x.Platform == TradeLegPlatform.Mt4);
         _mt5Executor = executors.First(x => x.Platform == TradeLegPlatform.Mt5);
         _logger = logger;
+        _portfolioCoordinator = portfolioCoordinator;
+        _runtimeConfig = runtimeConfig;
     }
 
     public async Task<ManualTradeResult> OpenPairAsync(TradeOpenPairRequest request, CancellationToken cancellationToken = default)
@@ -24,6 +38,28 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
 
         ValidatePlatformOrThrow(request.LegA.Platform, request.LegA.Exchange);
         ValidatePlatformOrThrow(request.LegB.Platform, request.LegB.Exchange);
+
+        var policy = ValidateOpenPolicy(request);
+        if (!policy.Allowed)
+        {
+            return PolicyBlockedResult("OPEN", request.Context, policy.Code);
+        }
+
+        if (!TryReserveSignal(request.Context))
+        {
+            return PolicyBlockedResult("OPEN", request.Context, "SIGNAL_ALREADY_CONSUMED");
+        }
+
+        var gate = _portfolioCoordinator.TryAcquireTradeAction(
+            DateTime.UtcNow,
+            action: "OPEN",
+            source: "TradeExecutionRouter.OpenPairAsync");
+        if (!gate.Acquired)
+        {
+            ReleaseSignalReservation(request.Context);
+            return BlockedResult("OPEN", gate);
+        }
+        LogPolicyAllowed(request.Context, "OPEN");
 
         var stopwatch = Stopwatch.StartNew();
         SafeLog(
@@ -91,6 +127,28 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             Debug.WriteLine("[TradeRouter][Close] leg=B, skipped (no close request)");
         }
 
+        var policy = ValidateClosePolicy(request);
+        if (!policy.Allowed)
+        {
+            return PolicyBlockedResult("CLOSE", request.Context, policy.Code);
+        }
+
+        if (!TryReserveSignal(request.Context))
+        {
+            return PolicyBlockedResult("CLOSE", request.Context, "SIGNAL_ALREADY_CONSUMED");
+        }
+
+        var gate = _portfolioCoordinator.TryAcquireTradeAction(
+            DateTime.UtcNow,
+            action: "CLOSE",
+            source: "TradeExecutionRouter.ClosePairAsync");
+        if (!gate.Acquired)
+        {
+            ReleaseSignalReservation(request.Context);
+            return BlockedResult("CLOSE", gate);
+        }
+        LogPolicyAllowed(request.Context, "CLOSE");
+
         try
         {
             var result = await ExecuteClosePairPerLegAsync(request, cancellationToken);
@@ -109,6 +167,335 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             stopwatch.Stop();
             SafeLog($"[ROUTER][ERROR] Close pair threw after {stopwatch.ElapsedMilliseconds}ms: {ex}");
             throw;
+        }
+    }
+
+    private static ManualTradeResult BlockedResult(string action, TradeActionGateResult gate)
+    {
+        var remainingMs = Math.Max(1, (int)Math.Ceiling(gate.Remaining.TotalMilliseconds));
+        return new ManualTradeResult(
+            Label: $"{action}_BLOCKED",
+            Success: false,
+            Legs: [],
+            ErrorMessage: $"GLOBAL_ACTION_COOLDOWN: còn {remainingMs}ms",
+            BlockedByGlobalActionGate: true,
+            GateRemainingMilliseconds: remainingMs);
+    }
+
+    private ManualTradeResult PolicyBlockedResult(
+        string action,
+        TradeExecutionContext context,
+        string code)
+    {
+        SafeLog(
+            $"[TRADE_POLICY][BLOCKED] requestId={context.RequestId} action={action} " +
+            $"reason={context.Reason} source={context.Source} pairId={context.PairId ?? "-"} " +
+            $"slotId={context.SlotId?.ToString() ?? "-"} code={code}");
+        return new ManualTradeResult(
+            Label: $"{action}_POLICY_BLOCKED",
+            Success: false,
+            Legs: [],
+            ErrorMessage: $"TRADE_POLICY_BLOCKED: {code}",
+            BlockedByExecutionPolicy: true,
+            PolicyBlockCode: code);
+    }
+
+    private void LogPolicyAllowed(TradeExecutionContext context, string action)
+    {
+        var signalAgeMs = context.Signal is null
+            ? "-"
+            : Math.Max(0, (DateTime.UtcNow - context.Signal.CreatedAtUtc).TotalMilliseconds)
+                .ToString("F0", System.Globalization.CultureInfo.InvariantCulture);
+        SafeLog(
+            $"[TRADE_POLICY][ALLOWED] requestId={context.RequestId} action={action} " +
+            $"reason={context.Reason} source={context.Source} pairId={context.PairId ?? "-"} " +
+            $"slotId={context.SlotId?.ToString() ?? "-"} signalId={context.Signal?.SignalId.ToString() ?? "-"} " +
+            $"signalAgeMs={signalAgeMs} recoveryTicket={context.Recovery?.Ticket.ToString() ?? "-"}");
+    }
+
+    private (bool Allowed, string Code) ValidateOpenPolicy(TradeOpenPairRequest request)
+    {
+        var context = request.Context;
+        if (context.Reason == TradeExecutionReason.ManualOpen)
+        {
+            return (false, "MANUAL_WITHOUT_SIGNAL_DISABLED");
+        }
+
+        if (context.Reason != TradeExecutionReason.StrategicOpen)
+        {
+            return (false, "OPEN_REASON_NOT_ALLOWED");
+        }
+
+        var signalCheck = ValidateSignal(context, GapSignalAction.Open);
+        if (!signalCheck.Allowed)
+        {
+            return signalCheck;
+        }
+
+        var signal = context.Signal!;
+        var legsMatchSignal = signal.TriggerType switch
+        {
+            GapSignalTriggerType.OpenByGapBuy
+                => request.LegA.Action == TradeLegAction.Buy
+                   && request.LegB.Action == TradeLegAction.Sell,
+            GapSignalTriggerType.OpenByGapSell
+                => request.LegA.Action == TradeLegAction.Sell
+                   && request.LegB.Action == TradeLegAction.Buy,
+            _ => false
+        };
+        if (!legsMatchSignal)
+        {
+            return (false, "OPEN_LEGS_DO_NOT_MATCH_SIGNAL");
+        }
+
+        var metrics = _runtimeConfig.CurrentDashboardMetrics;
+        if (metrics is null || !metrics.IsConnectedA || !metrics.IsConnectedB)
+        {
+            return (false, "LATEST_SNAPSHOT_UNAVAILABLE");
+        }
+        var marketSafety = ValidateLatestMarketSafety(metrics);
+        if (!marketSafety.Allowed)
+        {
+            return marketSafety;
+        }
+
+        var openThreshold = Math.Abs(_runtimeConfig.CurrentOpenPts);
+        var confirmThreshold = Math.Abs(_runtimeConfig.CurrentConfirmGapPts);
+        var threshold = Math.Max(openThreshold, confirmThreshold);
+        var conditionValid = signal.TriggerType switch
+        {
+            GapSignalTriggerType.OpenByGapBuy => metrics.GapBuy is { } gap && gap >= threshold,
+            GapSignalTriggerType.OpenByGapSell => metrics.GapSell is { } gap && gap <= -threshold,
+            _ => false
+        };
+        if (!conditionValid)
+        {
+            return (false, "LATEST_OPEN_CONDITION_INVALID");
+        }
+
+        var limitMaxGap = Math.Abs(_runtimeConfig.CurrentLimitMaxGap);
+        var currentGap = signal.TriggerType == GapSignalTriggerType.OpenByGapBuy
+            ? metrics.GapBuy
+            : metrics.GapSell;
+        if (limitMaxGap > 0 && currentGap.HasValue && Math.Abs(currentGap.Value) > limitMaxGap)
+        {
+            return (false, "LATEST_GAP_EXCEEDS_LIMIT");
+        }
+
+        return (true, "ALLOWED");
+    }
+
+    private (bool Allowed, string Code) ValidateClosePolicy(TradeClosePairRequest request)
+    {
+        var context = request.Context;
+        if ((request.LegA is not null && request.LegA.Action != TradeLegAction.Close)
+            || (request.LegB is not null && request.LegB.Action != TradeLegAction.Close))
+        {
+            return (false, "CLOSE_LEG_ACTION_INVALID");
+        }
+        if (context.Reason == TradeExecutionReason.ManualClose)
+        {
+            return (false, "MANUAL_WITHOUT_SIGNAL_DISABLED");
+        }
+
+        if (context.Reason is TradeExecutionReason.OpenPartialRollback
+            or TradeExecutionReason.ExternalPartialCloseRecovery
+            or TradeExecutionReason.PendingCloseRetry)
+        {
+            return ValidateRecovery(request);
+        }
+
+        if (context.Reason != TradeExecutionReason.StrategicClose)
+        {
+            return (false, "CLOSE_REASON_NOT_ALLOWED");
+        }
+
+        var signalCheck = ValidateSignal(context, GapSignalAction.Close);
+        if (!signalCheck.Allowed)
+        {
+            return signalCheck;
+        }
+
+        if (string.IsNullOrWhiteSpace(context.PairId))
+        {
+            return (false, "STRATEGIC_CLOSE_PAIR_REQUIRED");
+        }
+
+        var slot = _portfolioCoordinator.GetSlotByPairId(context.PairId);
+        if (slot is null || slot.Status is not (PositionSlotStatus.Live or PositionSlotStatus.PendingClose))
+        {
+            return (false, "STRATEGIC_CLOSE_SLOT_NOT_ACTIVE");
+        }
+        if (context.SlotId.HasValue && slot.SlotId != context.SlotId.Value)
+        {
+            return (false, "STRATEGIC_CLOSE_SLOT_MISMATCH");
+        }
+        if (!RequestTicketsMatchSlot(request, slot))
+        {
+            return (false, "STRATEGIC_CLOSE_TICKET_MISMATCH");
+        }
+
+        var signal = context.Signal!;
+        var latestMetrics = _runtimeConfig.CurrentDashboardMetrics;
+        if (latestMetrics is null || !latestMetrics.IsConnectedA || !latestMetrics.IsConnectedB)
+        {
+            return (false, "LATEST_SNAPSHOT_UNAVAILABLE");
+        }
+        var latestSafety = ValidateLatestMarketSafety(latestMetrics);
+        if (!latestSafety.Allowed)
+        {
+            return latestSafety;
+        }
+
+        if (signal.CloseReason == CloseSignalReason.Tp)
+        {
+            var target = Math.Abs(_runtimeConfig.CurrentCloseTpProfit);
+            if (!slot.LastProfitSnapshot.HasValue || slot.LastProfitSnapshot.Value < target)
+            {
+                return (false, "LATEST_TP_CONDITION_INVALID");
+            }
+        }
+        else
+        {
+            var threshold = Math.Max(
+                Math.Abs(_runtimeConfig.CurrentClosePts),
+                Math.Abs(_runtimeConfig.CurrentCloseConfirmGapPts));
+            var valid = signal.TriggerType switch
+            {
+                GapSignalTriggerType.CloseByGapBuy => latestMetrics.GapBuy is { } gap && gap >= threshold,
+                GapSignalTriggerType.CloseByGapSell => latestMetrics.GapSell is { } gap && gap <= -threshold,
+                _ => false
+            };
+            if (!valid)
+            {
+                return (false, "LATEST_CLOSE_CONDITION_INVALID");
+            }
+        }
+
+        return (true, "ALLOWED");
+    }
+
+    private (bool Allowed, string Code) ValidateLatestMarketSafety(
+        TradeDesktop.Domain.Models.DashboardMetrics metrics)
+    {
+        var timestampUtc = metrics.TimestampUtc.Kind switch
+        {
+            DateTimeKind.Utc => metrics.TimestampUtc,
+            DateTimeKind.Local => metrics.TimestampUtc.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(metrics.TimestampUtc, DateTimeKind.Utc)
+        };
+        if ((DateTime.UtcNow - timestampUtc).TotalSeconds > 10)
+        {
+            return (false, "LATEST_SNAPSHOT_STALE");
+        }
+
+        var maxLatency = Math.Max(0, _runtimeConfig.CurrentConfirmLatencyMs);
+        if (maxLatency > 0
+            && (metrics.ExchangeA.LatencyMs > maxLatency
+                || metrics.ExchangeB.LatencyMs > maxLatency))
+        {
+            return (false, "LATEST_LATENCY_EXCEEDS_LIMIT");
+        }
+
+        var maxSpread = Math.Max(0, _runtimeConfig.CurrentMaxSpread);
+        var point = Math.Max(1, _runtimeConfig.CurrentPoint);
+        if (maxSpread > 0)
+        {
+            var spreadAPts = metrics.ExchangeA.Spread.HasValue
+                ? (int)(metrics.ExchangeA.Spread.Value * point)
+                : 0;
+            var spreadBPts = metrics.ExchangeB.Spread.HasValue
+                ? (int)(metrics.ExchangeB.Spread.Value * point)
+                : 0;
+            if (spreadAPts > maxSpread || spreadBPts > maxSpread)
+            {
+                return (false, "LATEST_SPREAD_EXCEEDS_LIMIT");
+            }
+        }
+
+        return (true, "ALLOWED");
+    }
+
+    private (bool Allowed, string Code) ValidateSignal(
+        TradeExecutionContext context,
+        GapSignalAction requiredAction)
+    {
+        var signal = context.Signal;
+        if (signal is null)
+        {
+            return (false, "SIGNAL_AUTHORIZATION_REQUIRED");
+        }
+        if (signal.SignalId == Guid.Empty || string.IsNullOrWhiteSpace(signal.SnapshotFingerprint))
+        {
+            return (false, "SIGNAL_AUTHORIZATION_INVALID");
+        }
+        if (signal.Action != requiredAction)
+        {
+            return (false, "SIGNAL_ACTION_MISMATCH");
+        }
+        if (!string.Equals(signal.PairId, context.PairId, StringComparison.Ordinal)
+            || signal.SlotId != context.SlotId)
+        {
+            return (false, "SIGNAL_TARGET_MISMATCH");
+        }
+
+        var nowUtc = DateTime.UtcNow;
+        var ageMs = (nowUtc - signal.CreatedAtUtc).TotalMilliseconds;
+        if (ageMs < -1000 || ageMs > SignalDispatchMaxAgeMs || nowUtc > signal.ValidUntilUtc)
+        {
+            return (false, "SIGNAL_EXPIRED");
+        }
+        return (true, "ALLOWED");
+    }
+
+    private static (bool Allowed, string Code) ValidateRecovery(TradeClosePairRequest request)
+    {
+        var context = request.Context;
+        var evidence = context.Recovery;
+        if (evidence is null
+            || string.IsNullOrWhiteSpace(evidence.PairId)
+            || evidence.Ticket == 0
+            || string.IsNullOrWhiteSpace(evidence.Evidence))
+        {
+            return (false, "RECOVERY_EVIDENCE_REQUIRED");
+        }
+        if (!string.Equals(context.PairId, evidence.PairId, StringComparison.Ordinal)
+            || context.SlotId != evidence.SlotId)
+        {
+            return (false, "RECOVERY_TARGET_MISMATCH");
+        }
+        var requestTickets = new[] { request.LegA?.Ticket, request.LegB?.Ticket }
+            .Where(x => x.HasValue)
+            .Select(x => x!.Value)
+            .ToArray();
+        if (requestTickets.Length != 1 || requestTickets[0] != evidence.Ticket)
+        {
+            return (false, "RECOVERY_TICKET_MISMATCH");
+        }
+        return (true, "ALLOWED");
+    }
+
+    private static bool RequestTicketsMatchSlot(TradeClosePairRequest request, PositionSlot slot)
+    {
+        if (request.LegA is not null && slot.TicketA != request.LegA.Ticket)
+        {
+            return false;
+        }
+        if (request.LegB is not null && slot.TicketB != request.LegB.Ticket)
+        {
+            return false;
+        }
+        return request.LegA is not null || request.LegB is not null;
+    }
+
+    private bool TryReserveSignal(TradeExecutionContext context)
+        => context.Signal is null || _consumedSignalIds.TryAdd(context.Signal.SignalId, 0);
+
+    private void ReleaseSignalReservation(TradeExecutionContext context)
+    {
+        if (context.Signal is not null)
+        {
+            _consumedSignalIds.TryRemove(context.Signal.SignalId, out _);
         }
     }
 

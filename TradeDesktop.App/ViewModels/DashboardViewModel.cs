@@ -1054,9 +1054,19 @@ public sealed class DashboardViewModel : ObservableObject
                         Exchange: "B",
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB),
                         ChartHwnd: hwndColumn.ChartHwndB,
-                        Action: TradeLegAction.Sell)));
+                        Action: TradeLegAction.Sell),
+                    Context: CreateExecutionContext(
+                        TradeExecutionReason.ManualOpen,
+                        "manual-buy")));
 
             NotifyOpenCloseFailures("OPEN", result, BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: false));
+            if (result.IsDispatchBlocked)
+            {
+                RemovePendingOpenRequests(appOpenRequestRawMs);
+                SafeVmLog($"[TRADE_GATE][BLOCKED] manual OPEN remainingMs={result.GateRemainingMilliseconds}");
+                ShowManualTradeFeedback("BUY", result);
+                return;
+            }
 
             // Phase 1 Manual Open log: A buy, B sell
             var now = DateTime.Now;
@@ -1123,7 +1133,18 @@ public sealed class DashboardViewModel : ObservableObject
                         Exchange: "B",
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB),
                         ChartHwnd: hwndColumn.ChartHwndB,
-                        Action: TradeLegAction.Buy)));
+                        Action: TradeLegAction.Buy),
+                    Context: CreateExecutionContext(
+                        TradeExecutionReason.ManualOpen,
+                        "manual-sell")));
+
+            if (result.IsDispatchBlocked)
+            {
+                RemovePendingOpenRequests(appOpenRequestRawMs);
+                SafeVmLog($"[TRADE_GATE][BLOCKED] manual OPEN remainingMs={result.GateRemainingMilliseconds}");
+                ShowManualTradeFeedback("SELL", result);
+                return;
+            }
 
             // Phase 1 Manual Open log: A sell, B buy
             var now = DateTime.Now;
@@ -1202,7 +1223,18 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeHwnd: selectB.Request.TradeHwnd,
                         Ticket: selectB.Request.Ticket,
                         Action: TradeLegAction.Close,
-                        RowIndex: selectB.Request.RowIndex)));
+                        RowIndex: selectB.Request.RowIndex),
+                Context: CreateExecutionContext(
+                    TradeExecutionReason.ManualClose,
+                    "manual-close-legacy")));
+
+        if (result.IsDispatchBlocked)
+        {
+            RemovePendingCloseRequests(appCloseRequestRawMs);
+            SafeVmLog($"[TRADE_GATE][BLOCKED] manual CLOSE remainingMs={result.GateRemainingMilliseconds}");
+            ShowManualTradeFeedback("CLOSE", result);
+            return;
+        }
 
         NotifyOpenCloseFailures("CLOSE", result, ResolvePairIdForClose(selectA.Request?.Ticket ?? selectB.Request?.Ticket, slot, appCloseRequestRawMs, isAutoFlow: false));
 
@@ -1342,9 +1374,25 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeHwnd: selectB.Request.TradeHwnd,
                         Ticket: selectB.Request.Ticket,
                         Action: TradeLegAction.Close,
-                        RowIndex: selectB.Request.RowIndex)));
+                        RowIndex: selectB.Request.RowIndex),
+                    Context: CreateExecutionContext(
+                        TradeExecutionReason.ManualClose,
+                        "manual-close-slot",
+                        slot.PairId,
+                        slot.SlotId)));
 
             NotifyOpenCloseFailures("CLOSE", result, slot.PairId);
+            if (result.IsDispatchBlocked)
+            {
+                _portfolioCoordinator.AbortPendingClose(slot.PairId);
+                RemovePendingCloseRequests(appCloseRequestRawMs);
+                if (_pendingClosePairById.TryGetValue(slot.PairId, out var blockedPending))
+                {
+                    blockedPending.IsResolved = true;
+                }
+                SafeVmLog($"[TRADE_GATE][BLOCKED] manual CLOSE pairId={slot.PairId} remainingMs={result.GateRemainingMilliseconds}");
+                return;
+            }
             AppendCloseSelectionDiagnostics(selectA, selectB);
             ShowManualTradeFeedback("CLOSE", result);
             SafeVmLog($"[CYCLE][INFO] Manual close dispatched: pairId={slot.PairId} slot={slot.SlotId} success={result.Success}");
@@ -1560,7 +1608,13 @@ public sealed class DashboardViewModel : ObservableObject
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB),
                         ChartHwnd: hwndColumn.ChartHwndB,
                         Action: TradeLegAction.Sell,
-                        DelayMs: delayOpenBMs)));
+                        DelayMs: delayOpenBMs),
+                    Context: CreateStrategicContext(
+                        TradeExecutionReason.StrategicOpen,
+                        "auto-gap-buy",
+                        trigger,
+                        pairId,
+                        coordinatorSlot.SlotId)));
 
             NotifyOpenCloseFailures("OPEN", openResult, pairId);
 
@@ -1572,6 +1626,12 @@ public sealed class DashboardViewModel : ObservableObject
                     state.IsResolved = true;
                 }
                 _portfolioCoordinator.AbortPendingOpen(pairId);
+            }
+            if (openResult.IsDispatchBlocked)
+            {
+                RemovePendingOpenRequests(appOpenRequestRawMs);
+                SafeVmLog($"[TRADE_GATE][BLOCKED] OPEN pairId={pairId} remainingMs={openResult.GateRemainingMilliseconds}");
+                return;
             }
 
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
@@ -1719,7 +1779,13 @@ public sealed class DashboardViewModel : ObservableObject
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB),
                         ChartHwnd: hwndColumn.ChartHwndB,
                         Action: TradeLegAction.Buy,
-                        DelayMs: delayOpenBMs)));
+                        DelayMs: delayOpenBMs),
+                    Context: CreateStrategicContext(
+                        TradeExecutionReason.StrategicOpen,
+                        "auto-gap-sell",
+                        trigger,
+                        pairId,
+                        coordinatorSlot.SlotId)));
 
             NotifyOpenCloseFailures("OPEN", openResult, pairId);
 
@@ -1731,6 +1797,12 @@ public sealed class DashboardViewModel : ObservableObject
                     state.IsResolved = true;
                 }
                 _portfolioCoordinator.AbortPendingOpen(pairId);
+            }
+            if (openResult.IsDispatchBlocked)
+            {
+                RemovePendingOpenRequests(appOpenRequestRawMs);
+                SafeVmLog($"[TRADE_GATE][BLOCKED] OPEN pairId={pairId} remainingMs={openResult.GateRemainingMilliseconds}");
+                return;
             }
 
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
@@ -1844,16 +1916,9 @@ public sealed class DashboardViewModel : ObservableObject
             CapturePendingCloseRequestFromTrigger(selectA, trigger, isExchangeA: true, appCloseRequestTimeLocal, appCloseRequestRawMs, slot);
             CapturePendingCloseRequestFromTrigger(selectB, trigger, isExchangeA: false, appCloseRequestTimeLocal, appCloseRequestRawMs, slot);
 
-            // Phase 8: kick cooldown ngay tại close dispatch (trước router).
-            // Đảm bảo min 3-10s giữa close này và trade event tiếp theo.
             if (targetSlot is not null)
             {
                 _portfolioCoordinator.MarkSlotCloseTriggered(targetSlot.PairId, DateTime.UtcNow);
-            }
-            else
-            {
-                // Legacy path không có targetSlot — vẫn kick cooldown global.
-                _portfolioCoordinator.KickGlobalCooldown(DateTime.UtcNow, "after CLOSE_DISPATCH (legacy)");
             }
 
             var closeResult = await _tradeExecutionRouter.ClosePairAsync(
@@ -1877,7 +1942,29 @@ public sealed class DashboardViewModel : ObservableObject
                             Ticket: selectB.Request.Ticket,
                             Action: TradeLegAction.Close,
                             DelayMs: delayCloseBMs,
-                            RowIndex: selectB.Request.RowIndex)));
+                            RowIndex: selectB.Request.RowIndex),
+                    Context: CreateStrategicContext(
+                        TradeExecutionReason.StrategicClose,
+                        "auto-close",
+                        trigger,
+                        targetSlot?.PairId,
+                        targetSlot?.SlotId)));
+
+            if (closeResult.IsDispatchBlocked)
+            {
+                RemovePendingCloseRequests(appCloseRequestRawMs);
+                if (targetSlot is not null)
+                {
+                    _portfolioCoordinator.AbortPendingClose(targetSlot.PairId);
+                    if (_pendingClosePairById.TryGetValue(targetSlot.PairId, out var pending))
+                    {
+                        pending.IsResolved = true;
+                    }
+                }
+                _activeAutoCloseRecoveryCycle = null;
+                SafeVmLog($"[TRADE_GATE][BLOCKED] CLOSE remainingMs={closeResult.GateRemainingMilliseconds}");
+                return;
+            }
 
             NotifyOpenCloseFailures("CLOSE", closeResult, ResolvePairIdFromCloseSelection(selectA) ?? ResolvePairIdFromCloseSelection(selectB) ?? $"AUTO-{slot:D4}-{appCloseRequestRawMs}");
 
@@ -2298,6 +2385,32 @@ public sealed class DashboardViewModel : ObservableObject
             isAutoFlow: false,
             slotNumber: slotNumber,
             exchangeLabel: isExchangeA ? "A" : "B");
+    }
+
+    private void RemovePendingOpenRequests(long appOpenRequestRawMs)
+    {
+        foreach (var key in _pendingOpenRequestsByMap.Keys.ToList())
+        {
+            var list = _pendingOpenRequestsByMap[key];
+            list.RemoveAll(x => x.AppOpenRequestRawMs == appOpenRequestRawMs);
+            if (list.Count == 0)
+            {
+                _pendingOpenRequestsByMap.Remove(key);
+            }
+        }
+    }
+
+    private void RemovePendingCloseRequests(long appCloseRequestRawMs)
+    {
+        foreach (var key in _pendingCloseRequestsByMap.Keys.ToList())
+        {
+            var list = _pendingCloseRequestsByMap[key];
+            list.RemoveAll(x => x.AppCloseRequestRawMs == appCloseRequestRawMs);
+            if (list.Count == 0)
+            {
+                _pendingCloseRequestsByMap.Remove(key);
+            }
+        }
     }
 
     private void CapturePendingCloseRequest(
@@ -3046,8 +3159,9 @@ public sealed class DashboardViewModel : ObservableObject
             maxBuy: _runtimeConfigState.CurrentMaxBuyOpens,
             maxSell: _runtimeConfigState.CurrentMaxSellOpens);
 
-        // Hardcode tạm: start_wait_time=3, end_wait_time=10 (sẽ chuyển sang DB Supabase sau).
-        _portfolioCoordinator.UpdateCooldownConfig(minSec: 3, maxSec: 10);
+        _portfolioCoordinator.UpdateCooldownConfig(
+            minSec: _runtimeConfigState.CurrentStartWaitTime,
+            maxSec: _runtimeConfigState.CurrentEndWaitTime);
 
         _portfolioCoordinator.UpdateMaxLifeTimeConfig(
             _runtimeConfigState.CurrentMaxLifeTimeBySecond);
@@ -3779,14 +3893,16 @@ public sealed class DashboardViewModel : ObservableObject
     {
         foreach (var action in actions)
         {
-            await CloseOpenedLegByTimeoutAsync(action, cancellationToken);
-            // Phase 1: cleanup coordinator slot to release quota.
-            _portfolioCoordinator.AbortPendingOpen(action.PairId);
-            SafeVmLog($"[SLOT][WARN] Slot pending open aborted by timeout: pairId={action.PairId}");
+            if (await CloseOpenedLegByTimeoutAsync(action, cancellationToken))
+            {
+                // Cleanup only after the compensating close was actually dispatched.
+                _portfolioCoordinator.AbortPendingOpen(action.PairId);
+                SafeVmLog($"[SLOT][WARN] Slot pending open aborted by timeout: pairId={action.PairId}");
+            }
         }
     }
 
-    private async Task CloseOpenedLegByTimeoutAsync(PendingOpenTimeoutAction action, CancellationToken cancellationToken)
+    private async Task<bool> CloseOpenedLegByTimeoutAsync(PendingOpenTimeoutAction action, CancellationToken cancellationToken)
     {
         var isExchangeA = string.Equals(action.OpenedExchange, "A", StringComparison.OrdinalIgnoreCase);
         var platform = ResolveTradeLegPlatform(isExchangeA ? _runtimeConfigState.CurrentPlatformA : _runtimeConfigState.CurrentPlatformB);
@@ -3843,7 +3959,7 @@ public sealed class DashboardViewModel : ObservableObject
         // Hoãn dispatch lần đầu khi đang bị chặn (switch OFF / HWND invalid) — retry-close lo tiếp.
         if (ShouldSkipTradeOp($"recovery-timeout-close pairId={action.PairId}"))
         {
-            return;
+            return false;
         }
 
         var closeResult = await _tradeExecutionRouter.ClosePairAsync(
@@ -3865,8 +3981,31 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeHwnd: tradeHwnd,
                         Ticket: action.Ticket,
                         Action: TradeLegAction.Close,
-                        RowIndex: rowIndex)),
+                        RowIndex: rowIndex),
+                Context: CreateRecoveryContext(
+                    TradeExecutionReason.OpenPartialRollback,
+                    "open-timeout-rollback",
+                    action.PairId,
+                    action.SlotNumber,
+                    action.Ticket,
+                    $"confirmed-{action.OpenedExchange}-missing-{action.MissingExchange}")),
             cancellationToken);
+
+        if (closeResult.IsDispatchBlocked)
+        {
+            RemovePendingCloseRequests(appCloseRequestRawMs);
+            if (_pendingOpenPairById.TryGetValue(action.PairId, out var openState))
+            {
+                openState.IsResolved = false;
+                openState.TimeoutCloseTriggered = false;
+            }
+            if (_pendingClosePairById.TryGetValue(action.PairId, out var closeState))
+            {
+                closeState.IsResolved = true;
+            }
+            SafeVmLog($"[TRADE_GATE][BLOCKED] rollback CLOSE pairId={action.PairId} remainingMs={closeResult.GateRemainingMilliseconds}");
+            return false;
+        }
 
         NotifyOpenCloseFailures("CLOSE", closeResult, action.PairId);
 
@@ -3877,6 +4016,7 @@ public sealed class DashboardViewModel : ObservableObject
         });
 
         Debug.WriteLine($"[ExecOpen][TimeoutClose] pairId={action.PairId}, opened={action.OpenedExchange}, missing={action.MissingExchange}, ticket={action.Ticket}, success={closeResult.Success}");
+        return true;
     }
 
     private List<PendingCloseRetryAction> CollectPendingCloseRetryActions()
@@ -4817,12 +4957,27 @@ public sealed class DashboardViewModel : ObservableObject
                         Ticket: selection.Request.Ticket,
                         Action: TradeLegAction.Close,
                         DelayMs: 0,
-                        RowIndex: selection.Request.RowIndex));
-
-            // Phase 8: kick cooldown ngay tại close dispatch (consistency với auto path chính).
-            _portfolioCoordinator.KickGlobalCooldown(DateTime.UtcNow, "after CLOSE_DISPATCH external-leg");
+                        RowIndex: selection.Request.RowIndex),
+                Context: CreateRecoveryContext(
+                    TradeExecutionReason.ExternalPartialCloseRecovery,
+                    "external-partial-close",
+                    _activeAutoCycle?.PairIdA
+                        ?? _activeAutoCycle?.PairIdB
+                        ?? $"EXTERNAL-{selection.Request.Ticket}",
+                    _activeAutoCycle?.Slot,
+                    selection.Request.Ticket,
+                    $"partial-state-remaining-{remainingExchange}"));
 
             var closeResult = await _tradeExecutionRouter.ClosePairAsync(closeRequest);
+
+            if (closeResult.IsDispatchBlocked)
+            {
+                RemovePendingCloseRequests(appCloseRequestRawMs);
+                _activeAutoCloseRecoveryCycle = null;
+                _externalPartialCloseInFlight = false;
+                SafeVmLog($"[TRADE_GATE][BLOCKED] external CLOSE remainingMs={closeResult.GateRemainingMilliseconds}");
+                return;
+            }
 
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
@@ -4979,8 +5134,22 @@ public sealed class DashboardViewModel : ObservableObject
                         Ticket: action.Ticket,
                         Action: TradeLegAction.Close,
                         RowIndex: rowIndex)
-                    : null),
+                    : null,
+                Context: CreateRecoveryContext(
+                    TradeExecutionReason.PendingCloseRetry,
+                    "pending-close-retry",
+                    action.PairId,
+                    action.SlotNumber,
+                    action.Ticket,
+                    $"retry-check-{state.RetryChecks}")),
             cancellationToken);
+
+        if (closeResult.IsDispatchBlocked)
+        {
+            RemovePendingCloseRequests(appCloseRequestRawMs);
+            SafeVmLog($"[TRADE_GATE][BLOCKED] retry CLOSE pairId={action.PairId} remainingMs={closeResult.GateRemainingMilliseconds}");
+            return;
+        }
 
         NotifyOpenCloseFailures("CLOSE", closeResult, action.PairId);
 
@@ -7151,6 +7320,77 @@ public sealed class DashboardViewModel : ObservableObject
             // ignored by design
         }
     }
+
+    private static TradeExecutionContext CreateExecutionContext(
+        TradeExecutionReason reason,
+        string source,
+        string? pairId = null,
+        int? slotId = null)
+        => new(
+            RequestId: Guid.NewGuid(),
+            Reason: reason,
+            Source: source,
+            PairId: pairId,
+            SlotId: slotId);
+
+    private static TradeExecutionContext CreateStrategicContext(
+        TradeExecutionReason reason,
+        string source,
+        GapSignalTriggerResult trigger,
+        string? pairId,
+        int? slotId)
+    {
+        var createdAtUtc = trigger.TriggeredAtUtc.Kind switch
+        {
+            DateTimeKind.Utc => trigger.TriggeredAtUtc,
+            DateTimeKind.Local => trigger.TriggeredAtUtc.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(trigger.TriggeredAtUtc, DateTimeKind.Utc)
+        };
+        var fingerprint = string.Join(
+            "|",
+            trigger.TriggerType,
+            trigger.LastBuyGap?.ToString(CultureInfo.InvariantCulture) ?? "-",
+            trigger.LastSellGap?.ToString(CultureInfo.InvariantCulture) ?? "-",
+            trigger.PointMultiplier.ToString(CultureInfo.InvariantCulture),
+            createdAtUtc.Ticks.ToString(CultureInfo.InvariantCulture));
+        var signal = new SignalAuthorization(
+            SignalId: Guid.NewGuid(),
+            Action: trigger.Action,
+            TriggerType: trigger.TriggerType,
+            Side: trigger.PrimarySide,
+            CreatedAtUtc: createdAtUtc,
+            ValidUntilUtc: createdAtUtc.AddMilliseconds(1000),
+            SnapshotFingerprint: fingerprint,
+            PairId: pairId,
+            SlotId: slotId,
+            CloseReason: trigger.CloseReason);
+        return new TradeExecutionContext(
+            RequestId: Guid.NewGuid(),
+            Reason: reason,
+            Source: source,
+            PairId: pairId,
+            SlotId: slotId,
+            Signal: signal);
+    }
+
+    private static TradeExecutionContext CreateRecoveryContext(
+        TradeExecutionReason reason,
+        string source,
+        string pairId,
+        int? slotId,
+        ulong ticket,
+        string evidence)
+        => new(
+            RequestId: Guid.NewGuid(),
+            Reason: reason,
+            Source: source,
+            PairId: pairId,
+            SlotId: slotId,
+            Recovery: new TradeRecoveryEvidence(
+                PairId: pairId,
+                SlotId: slotId,
+                Ticket: ticket,
+                Evidence: evidence));
 
     private void NotifyOpenCloseFailures(string operation, ManualTradeResult result, string? pairId)
     {

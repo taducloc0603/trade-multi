@@ -23,4 +23,11 @@ public sealed record ManualTradeResult(
     string Label,
     bool Success,
     IReadOnlyList<ManualTradeLegResult> Legs,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null,
+    bool BlockedByGlobalActionGate = false,
+    int GateRemainingMilliseconds = 0,
+    bool BlockedByExecutionPolicy = false,
+    string? PolicyBlockCode = null)
+{
+    public bool IsDispatchBlocked => BlockedByGlobalActionGate || BlockedByExecutionPolicy;
+}

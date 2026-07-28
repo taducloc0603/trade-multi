@@ -159,6 +159,12 @@ File: `TradeDesktop.Application/Services/TradingFlowEngine.cs`
 
 => Mục tiêu nghiệp vụ: hạn chế spam lệnh, tránh vào/ra liên tục theo nhiễu ngắn hạn.
 
+> `StartWaitTime/EndWaitTime` hiện có **hai consumer chạy song song**: flow wait sau
+> CLOSE ở adapter và global action gate tại router. Sau CLOSE, thời điểm được OPEN lại còn
+> chịu `post_close_lock_seconds`; hiệu lực thực tế là lock có hạn kết thúc muộn nhất.
+> Global action gate bắt đầu tại **dispatch**, còn flow wait/post-close lock bắt đầu tại
+> **close confirmation**.
+
 ### 5.3 Race protection cho auto-open (3 lớp)
 
 Giữa thời điểm tool click open và thời điểm MMF cập nhật ticket vào cache, có thể có độ trễ vài trăm ms đến vài giây. Để đảm bảo **an toàn vốn** và tránh mở chồng, hệ thống dùng 3 lớp bảo vệ:
@@ -400,12 +406,14 @@ Fields chính:
 
 | Rule | Spec |
 |------|------|
-| **A — Quota** | Max 7 tổng, max 4 Buy, max 4 Sell. Đếm cả `PendingOpen + Live + PendingClose`. |
-| **B — Cooldown** | Random `Uniform(GlobalCooldownMinSec, MaxSec)` sau mỗi OPEN/CLOSE confirm. Khóa toàn hệ thống. |
+| **A — Quota** | Cấu hình qua `max_total_opens`, `max_buy_opens`, `max_sell_opens` (code default 5/3/3). Đếm cả `PendingOpen + Live + PendingClose`. |
+| **B — Global action gate** | Random `Uniform(start_wait_time, end_wait_time)` ngay trước mỗi OPEN/CLOSE dispatch. Check + acquire atomic; khóa mọi slot và mọi loại action trong cùng process. |
 | **C — Opposite-side + post-close lock** | 2 giá trị độc lập từ DB (mỗi cái default 300s). `opposite_side_lock_seconds`: sau OPEN block OPEN opposite-side (same-side refresh timer). `post_close_lock_seconds`: sau CLOSE confirm block MỌI OPEN (cả 2 chiều) — re-entry cooldown. KHÔNG block CLOSE. |
 | **D — Priority close (extended)** | Khi nhiều slot trigger close cùng tick: (1) nếu `max_life_time_by_second > 0`, lọc ra các slot có tuổi `(now - OpenConfirmedAtUtc) > max_life_time_by_second` (overtime tier) → chọn profit cao nhất trong tier đó; (2) nếu không có slot nào overtime, chọn profit cao nhất trong tất cả eligible (Rule D gốc). Losers giữ window. `max_life_time_by_second = 0` (default) = disable tier, hành vi giống Rule D gốc. |
 
-Rule A + C check trong `CanOpenNewSlot(side, out reason)`. Rule B check trong `CanCloseNow(out reason)`.
+Rule A + C check trong `CanOpenNewSlot(side, out reason)`. Rule B được pre-check trong
+`ProcessSnapshot`/`CanCloseNow`, nhưng lớp bảo vệ cuối và atomic nằm trong
+`TradeExecutionRouter` → `PortfolioCoordinator.TryAcquireTradeAction`.
 Rule D pick trong `ProcessSnapshot` close path: overtime tier nếu có, fallback toàn bộ eligible — cả 2 đều `OrderByDescending(LastProfitSnapshot ?? double.MinValue).First()`.
 
 ### 13.4 Cap config
@@ -451,6 +459,8 @@ ViewModel push config xuống coordinator qua `SyncPortfolioCoordinatorConfig()`
   Interlocked, plus global `_autoOpenInFlight` để defend-in-depth.
 - **Layer 4 — Multi-slot watchdog**: `EvaluateAndApplyAutoOpenInvariantWatchdog` formula
   `toolCount > coordinator.LiveCount` hoặc `coordinator counts > cap`.
+- **Layer 5 — Global action gate**: mọi `OpenPairAsync`/`ClosePairAsync` phải acquire
+  `TryAcquireTradeAction` atomically tại router. Hai chân A/B trong một pair là một action.
 
 ### 13.7 Persistence (Phase 5)
 
@@ -481,19 +491,72 @@ close + history paths (cap=1 không có vấn đề).
 - Monotonic counters: `TotalOpensAllTime`, `TotalClosesAllTime`.
 - Skip counters: `QuotaSkipCount`, `OppositeLockSkipCount`, `CooldownSkipCount`.
 
-### 13.10 Acceptance invariants
+### 13.10 Trade execution authorization
+
+Mọi request gửi đến `TradeExecutionRouter` bắt buộc có `TradeExecutionContext` với
+`RequestId`, `TradeExecutionReason`, `Source`, `PairId/SlotId` tương ứng.
+
+Các reason hiện hành:
+
+| Nhóm | Reason | Policy |
+|------|--------|--------|
+| Strategic | `StrategicOpen` | Bắt buộc signal OPEN còn hạn, chiều A/B khớp signal và latest gap vẫn đạt ngưỡng. |
+| Strategic | `StrategicClose` | Bắt buộc signal CLOSE còn hạn, đúng pair/slot/ticket; latest gap hoặc TP vẫn hợp lệ. |
+| Manual | `ManualOpen`, `ManualClose` | Bị chặn bởi policy với `MANUAL_WITHOUT_SIGNAL_DISABLED`. |
+| Recovery | `OpenPartialRollback` | Miễn signal; bắt buộc pair/slot, đúng một ticket và evidence rollback. |
+| Recovery | `ExternalPartialCloseRecovery` | Miễn signal; bắt buộc ticket chân còn lại và evidence partial state. |
+| Recovery | `PendingCloseRetry` | Miễn signal; bắt buộc ticket pending và evidence retry. |
+
+Strategic authorization:
+
+- Signal max age hiện tại: **1.000 ms** (`SignalDispatchMaxAgeMs`, code constant).
+- Signal chỉ được consume một lần; nếu global gate đang khóa thì reservation được release,
+  tick sau phải tạo/đánh giá signal lại.
+- Router tái kiểm tra snapshot mới nhất: connected, không stale quá 10 giây, latency/spread
+  không vượt config, gap/TP vẫn hợp lệ.
+- OPEN kiểm tra cặp leg: `GapBuy = A Buy + B Sell`, `GapSell = A Sell + B Buy`.
+- CLOSE kiểm tra ticket request khớp ticket của đúng `PositionSlot`.
+
+Thứ tự enforcement:
+
+```
+Validate execution reason/context
+→ validate current signal hoặc recovery evidence
+→ reserve signal (strategic)
+→ atomic acquire global action gate
+→ dispatch A/B
+```
+
+Policy/global-gate block trả `ManualTradeResult.IsDispatchBlocked = true`. ViewModel phải
+rollback slot state và xóa pending MMF/history match request; không queue request cũ để chạy
+sau khi signal đã hết hiệu lực.
+
+Log audit:
+
+- `[TRADE_POLICY][ALLOWED]`: request/reason/source/pair/slot/signal age/recovery ticket.
+- `[TRADE_POLICY][BLOCKED]`: cùng context và block code cụ thể.
+- `[TRADE_GATE][ACQUIRED|BLOCKED]`: trạng thái serialization toàn cục.
+
+### 13.11 Acceptance invariants
 
 Hệ thống luôn phải thỏa các invariants (verified qua integration tests):
 
 1. **Quota**: `LiveBuyCount ≤ MaxBuyOpens ∧ LiveSellCount ≤ MaxSellOpens ∧ LiveAndPendingTotalCount ≤ MaxTotalOpens`.
-2. **Cooldown**: giữa 2 confirm consecutive (open hoặc close), `elapsed ≥ GlobalCooldownMinSec ∧ ≤ MaxSec` (cộng MMF tolerance).
+2. **Global action gate**: giữa hai dispatch được phép liên tiếp, action sau chỉ acquire khi
+   `now ≥ GlobalActionLockUntilUtc`; lock duration random trong
+   `[min(start_wait_time,end_wait_time), max(...)]`.
 3. **Opposite-lock**: nếu OPEN side X tại `T`, không OPEN side ¬X trong `[T, T+300s]` (CLOSE bypass).
 4. **Close priority**: slot được close phải có `LastProfitSnapshot ≥` mọi slot khác trong eligibleCloses.
 5. **Slot isolation**: mỗi slot có CloseSignalEngine riêng, không share window state.
-6. **Recovery**: sau app restart load persisted slots, GlobalActionLockUntilUtc active `[3,125]s` từ restart time.
+6. **Recovery**: sau app restart load persisted slots, startup gate dùng chính range
+   `start_wait_time/end_wait_time`.
 7. **No quota leak**: abort path (timeout / failure) phải release slot khỏi coordinator.
+8. **Strategic authorization**: auto OPEN/CLOSE không được dispatch nếu signal hết hạn,
+   latest condition không còn hợp lệ hoặc pair/slot/ticket không khớp.
+9. **Recovery authorization**: close không signal chỉ hợp lệ với recovery reason + evidence
+   + đúng một ticket.
 
-### 13.11 Phase status
+### 13.12 Phase status
 
 Phase 0-7 đã thực thi (code + tests). Phase 8 (docs) is this section.
 
@@ -504,4 +567,3 @@ Code-side hoàn toàn ready cho cap=7 production. Activation phụ thuộc:
 - XAML UI updates: status bar wider, manual button hide, Active Slots panel, OrderInfoPanel group.
 
 Production behavior vẫn cap=1 (RuntimeConfigState defaults = 1) cho tới khi DB load.
-

@@ -22,31 +22,28 @@ public sealed class CooldownRuleTests
             null, null, null, null, null, null, null, null, 1);
 
     [Fact]
-    public void MarkSlotOpenConfirmed_SetsGlobalCooldownLock()
+    public void TryAcquireTradeAction_SetsGlobalCooldownLock()
     {
         var coordinator = CreateCoordinator();
         coordinator.UpdateCooldownConfig(minSec: 5, maxSec: 5);
-        coordinator.AllocatePendingOpenSlot("p1", Trigger());
+        var acquired = coordinator.TryAcquireTradeAction(DateTime.UtcNow, "OPEN", "test");
 
-        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
-
+        Assert.True(acquired.Acquired);
         Assert.False(coordinator.CanCloseNow(out var reason));
         Assert.Contains("GLOBAL_COOLDOWN", reason);
     }
 
     [Fact]
-    public void MarkSlotCloseConfirmed_SetsGlobalCooldownLock()
+    public void TryAcquireTradeAction_BlocksAnyFollowingAction()
     {
         var coordinator = CreateCoordinator();
         coordinator.UpdateCooldownConfig(minSec: 10, maxSec: 10);
-        coordinator.AllocatePendingOpenSlot("p1", Trigger());
-        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow.AddSeconds(-30));
-        coordinator.MarkSlotCloseTriggered("p1", DateTime.UtcNow);
+        var first = coordinator.TryAcquireTradeAction(DateTime.UtcNow, "OPEN", "slot-1");
+        var second = coordinator.TryAcquireTradeAction(DateTime.UtcNow, "CLOSE", "slot-2");
 
-        coordinator.MarkSlotCloseConfirmed("p1", DateTime.UtcNow);
-
-        Assert.False(coordinator.CanCloseNow(out var reason));
-        Assert.Contains("GLOBAL_COOLDOWN", reason);
+        Assert.True(first.Acquired);
+        Assert.False(second.Acquired);
+        Assert.True(second.Remaining > TimeSpan.Zero);
     }
 
     [Fact]
@@ -57,19 +54,10 @@ public sealed class CooldownRuleTests
 
         for (var i = 0; i < 20; i++)
         {
-            var pairId = $"p{i}";
-            // Phase 8: cooldown được set tại allocate (dispatch time), không phải confirm.
-            // Capture dispatchTime ngay trước allocate để đo elapsed chính xác.
-            var dispatchTime = DateTime.UtcNow;
-            coordinator.AllocatePendingOpenSlot(pairId, Trigger());
-            var confirmedAt = dispatchTime.AddMilliseconds(500);
-            coordinator.MarkSlotOpenConfirmed(pairId, (ulong)(i * 2 + 1), (ulong)(i * 2 + 2), confirmedAt);
-
-            var elapsedSec = (coordinator.GlobalActionLockUntilUtc!.Value - dispatchTime).TotalSeconds;
-            Assert.InRange(elapsedSec, 3, 126);
-
-            coordinator.MarkSlotCloseTriggered(pairId, confirmedAt.AddSeconds(125));
-            coordinator.MarkSlotCloseConfirmed(pairId, confirmedAt.AddSeconds(125));
+            var dispatchTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMinutes(i * 3);
+            var result = coordinator.TryAcquireTradeAction(dispatchTime, "OPEN", $"p{i}");
+            Assert.True(result.Acquired);
+            Assert.InRange(result.CooldownSeconds, 3, 125);
         }
     }
 
@@ -78,47 +66,48 @@ public sealed class CooldownRuleTests
     {
         var coordinator = CreateCoordinator();
         coordinator.UpdateCooldownConfig(minSec: 0, maxSec: 0);
-        coordinator.AllocatePendingOpenSlot("p1", Trigger());
+        var result = coordinator.TryAcquireTradeAction(DateTime.UtcNow, "OPEN", "test");
 
-        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
-
+        Assert.True(result.Acquired);
         Assert.True(coordinator.CanCloseNow(out _));
     }
 
     [Fact]
     public void CooldownStartsFromDispatchTime_NotConfirmTime()
     {
-        // Phase 8: cooldown bắt đầu tại dispatch (AllocatePendingOpenSlot), không phải confirm.
-        // User intent: min 3-10s giữa bất kỳ 2 trade events — race window dispatch→confirm
-        // (~500ms broker latency) phải được bảo vệ.
         var coordinator = CreateCoordinator();
         coordinator.UpdateCooldownConfig(minSec: 10, maxSec: 10);
-        var trigger = Trigger();
-
         var dispatchTime = DateTime.UtcNow;
-        coordinator.AllocatePendingOpenSlot("p1", trigger);
+        coordinator.TryAcquireTradeAction(dispatchTime, "OPEN", "test");
 
-        // Confirm với EARLIER time — không được rút ngắn lock (MAX semantics).
-        var confirmedAt = dispatchTime.AddSeconds(-5);
-        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, confirmedAt);
-
-        // Lock = dispatchTime + 10s (allocate-time), KHÔNG phải confirmedAt + 10s.
         var elapsed = (coordinator.GlobalActionLockUntilUtc!.Value - dispatchTime).TotalSeconds;
         Assert.InRange(elapsed, 9.5, 10.5);
     }
 
     [Fact]
-    public void UpdateCooldownConfig_ClampsMinToZero_AndMaxToMin()
+    public void UpdateCooldownConfig_NormalizesReversedRange()
     {
         var coordinator = CreateCoordinator();
 
-        coordinator.UpdateCooldownConfig(minSec: -10, maxSec: 5);
-        // min clamped to 0; max clamped to >= min.
-        coordinator.AllocatePendingOpenSlot("p1", Trigger());
-        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+        coordinator.UpdateCooldownConfig(minSec: 10, maxSec: 3);
 
-        // Lock should be at most 5s.
-        var elapsedMax = (coordinator.GlobalActionLockUntilUtc!.Value - DateTime.UtcNow).TotalSeconds;
-        Assert.InRange(elapsedMax, 0, 5.5);
+        Assert.Equal(3, coordinator.GlobalCooldownMinSec);
+        Assert.Equal(10, coordinator.GlobalCooldownMaxSec);
+    }
+
+    [Fact]
+    public void TryAcquireTradeAction_IsAtomicAcrossConcurrentCallers()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateCooldownConfig(minSec: 10, maxSec: 10);
+        var now = DateTime.UtcNow;
+
+        var results = Enumerable.Range(0, 32)
+            .AsParallel()
+            .Select(i => coordinator.TryAcquireTradeAction(now, "OPEN", $"caller-{i}"))
+            .ToArray();
+
+        Assert.Single(results.Where(x => x.Acquired));
+        Assert.Equal(31, results.Count(x => !x.Acquired));
     }
 }
