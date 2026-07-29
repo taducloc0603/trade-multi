@@ -11,6 +11,8 @@ public sealed class HistorySharedMemoryReader : IHistorySharedMemoryReader
     private const int HeaderSize = 16;
     private const int RecordSize = 124;
     private const int SymbolSize = 32;
+    private readonly object _cacheLock = new();
+    private readonly Dictionary<string, CachedHistoryFrame> _cacheByMap = new(StringComparer.Ordinal);
 
     public SharedMapReadResult<HistorySharedRecord> ReadHistory(string mapName)
     {
@@ -45,7 +47,20 @@ public sealed class HistorySharedMemoryReader : IHistorySharedMemoryReader
 
             if (countToRead == 0)
             {
-                return SharedMapReadResult<HistorySharedRecord>.Success(timestamp, Array.Empty<HistorySharedRecord>(), safeCount);
+                var empty = SharedMapReadResult<HistorySharedRecord>.Success(
+                    timestamp,
+                    Array.Empty<HistorySharedRecord>(),
+                    safeCount);
+                StoreCached(normalizedMapName, timestamp, safeCount, empty);
+                return empty;
+            }
+
+            // EA commits the body first and timestamp last. An unchanged timestamp/count
+            // therefore represents the exact same immutable frame; reuse it instead of
+            // allocating every history record again on each 500 ms poll.
+            if (TryGetCached(normalizedMapName, timestamp, safeCount, out var cached))
+            {
+                return cached;
             }
 
             var records = new List<HistorySharedRecord>(countToRead);
@@ -71,15 +86,60 @@ public sealed class HistorySharedMemoryReader : IHistorySharedMemoryReader
                     Symbol: ReadSymbol(symbolBytes)));
             }
 
-            return SharedMapReadResult<HistorySharedRecord>.Success(timestamp, records, safeCount);
+            var result = SharedMapReadResult<HistorySharedRecord>.Success(timestamp, records, safeCount);
+            StoreCached(normalizedMapName, timestamp, safeCount, result);
+            return result;
         }
         catch (FileNotFoundException)
         {
+            RemoveCached(normalizedMapName);
             return SharedMapReadResult<HistorySharedRecord>.MapNotFound(normalizedMapName);
         }
         catch (Exception ex)
         {
+            RemoveCached(normalizedMapName);
             return SharedMapReadResult<HistorySharedRecord>.ParseError($"Lỗi parse dữ liệu: {ex.Message}");
+        }
+    }
+
+    private bool TryGetCached(
+        string mapName,
+        ulong timestamp,
+        int count,
+        out SharedMapReadResult<HistorySharedRecord> result)
+    {
+        lock (_cacheLock)
+        {
+            if (_cacheByMap.TryGetValue(mapName, out var cached)
+                && cached.Timestamp == timestamp
+                && cached.Count == count)
+            {
+                result = cached.Result;
+                return true;
+            }
+        }
+
+        result = default!;
+        return false;
+    }
+
+    private void StoreCached(
+        string mapName,
+        ulong timestamp,
+        int count,
+        SharedMapReadResult<HistorySharedRecord> result)
+    {
+        lock (_cacheLock)
+        {
+            _cacheByMap[mapName] = new CachedHistoryFrame(timestamp, count, result);
+        }
+    }
+
+    private void RemoveCached(string mapName)
+    {
+        lock (_cacheLock)
+        {
+            _cacheByMap.Remove(mapName);
         }
     }
 
@@ -89,4 +149,9 @@ public sealed class HistorySharedMemoryReader : IHistorySharedMemoryReader
         var length = endIndex >= 0 ? endIndex : symbolBytes.Length;
         return Encoding.UTF8.GetString(symbolBytes, 0, length).Trim();
     }
+
+    private sealed record CachedHistoryFrame(
+        ulong Timestamp,
+        int Count,
+        SharedMapReadResult<HistorySharedRecord> Result);
 }

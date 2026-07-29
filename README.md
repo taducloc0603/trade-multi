@@ -318,12 +318,14 @@ Chức năng:
 |------|--------|-------------------|
 | `LOG_LEVEL` | Mức log tối thiểu ghi vào file. Giá trị: `DEBUG`, `INFO`, `WARN`, `ERROR` | `INFO` |
 | `LOG_MAX_FILE_SIZE_MB` | Kích thước tối đa mỗi file log (MB) trước khi rotation | `50` |
+| `LOG_QUEUE_CAPACITY` | Số dòng log tối đa chờ ghi; WARN/ERROR vẫn được ghi trực tiếp khi queue đầy | `50000` |
 
 Ví dụ trong `.env`:
 
 ```env
 LOG_LEVEL=INFO
 LOG_MAX_FILE_SIZE_MB=50
+LOG_QUEUE_CAPACITY=50000
 ```
 
 ### 11.2 Log rotation

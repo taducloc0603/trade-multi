@@ -5,6 +5,10 @@ namespace TradeDesktop.Application.Services;
 
 public sealed class CloseSignalEngine : ICloseSignalEngine
 {
+    // Diagnostic samples are included in the trigger log only. Trading decisions use
+    // TickCount/WindowStartUtc, so a long suspended TP window cannot grow memory forever.
+    private const int MaxTpDiagnosticSamples = 1_024;
+
     private readonly GapSignalConfirmationEngine.SideWindowState _buyState = new();
     private readonly GapSignalConfirmationEngine.SideWindowState _sellState = new();
     private readonly TpWindowState _tpState = new();
@@ -113,11 +117,11 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         if (!_tpState.WindowStartUtc.HasValue)
         {
             _tpState.WindowStartUtc = snapshot.TimestampUtc;
-            _tpState.Profits.Clear();
+            _tpState.DiagnosticProfits.Clear();
         }
 
         _tpState.LastTickUtc = snapshot.TimestampUtc;
-        _tpState.Profits.Add(currentProfit);
+        _tpState.Add(currentProfit, MaxTpDiagnosticSamples);
 
         var elapsedMs = (snapshot.TimestampUtc - _tpState.WindowStartUtc.Value).TotalMilliseconds;
         if (elapsedMs < Math.Max(0, config.CloseHoldConfirmMs))
@@ -125,13 +129,13 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             return null;
         }
 
-        if (_tpState.Profits.Count == 0 || _tpState.Profits.Any(v => v < confirmProfit))
+        if (_tpState.TickCount == 0)
         {
             _tpState.Reset();
             return null;
         }
 
-        var lastProfit = _tpState.Profits[^1];
+        var lastProfit = currentProfit;
         if (lastProfit < targetProfit)
         {
             _tpState.Reset();
@@ -145,7 +149,7 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         }
 
         var normalizedMaxTimesTick = Math.Max(0, config.CloseMaxTimesTick);
-        if (normalizedMaxTimesTick > 0 && _tpState.Profits.Count > normalizedMaxTimesTick)
+        if (normalizedMaxTimesTick > 0 && _tpState.TickCount > normalizedMaxTimesTick)
         {
             _tpState.Reset();
             return null;
@@ -176,7 +180,7 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             CloseReason: CloseSignalReason.Tp,
             CloseTpProfit: lastProfit,
             CloseTpTarget: targetProfit,
-            CloseTpProfits: _tpState.Profits.ToArray());
+            CloseTpProfits: _tpState.DiagnosticProfits.ToArray());
 
         _tpState.Reset();
         return result;
@@ -186,13 +190,26 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
     {
         public DateTime? WindowStartUtc { get; set; }
         public DateTime? LastTickUtc { get; set; }
-        public List<double> Profits { get; } = [];
+        public long TickCount { get; private set; }
+        public Queue<double> DiagnosticProfits { get; } = [];
+
+        public void Add(double profit, int maxDiagnosticSamples)
+        {
+            TickCount++;
+            if (DiagnosticProfits.Count == maxDiagnosticSamples)
+            {
+                DiagnosticProfits.Dequeue();
+            }
+
+            DiagnosticProfits.Enqueue(profit);
+        }
 
         public void Reset()
         {
             WindowStartUtc = null;
             LastTickUtc = null;
-            Profits.Clear();
+            TickCount = 0;
+            DiagnosticProfits.Clear();
         }
     }
 }

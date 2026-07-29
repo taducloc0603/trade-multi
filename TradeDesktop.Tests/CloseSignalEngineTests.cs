@@ -332,6 +332,88 @@ public sealed class CloseSignalEngineTests
         Assert.Equal(CloseSignalReason.Tp, trigger!.CloseReason);
     }
 
+    [Fact]
+    public void ProcessSnapshot_CloseMaxTpProfit_LongSuspend_KeepsDecisionStateBounded()
+    {
+        var sut = new CloseSignalEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            CloseConfirmGapPts: 50,
+            ClosePts: 80,
+            CloseConfirmTpProfit: 10,
+            CloseTpProfit: 15,
+            CloseMaxTpProfit: 20,
+            CloseHoldConfirmMs: 100,
+            CloseMaxTimesTick: 0);
+        var start = new DateTime(2026, 3, 18, 16, 4, 0, DateTimeKind.Utc);
+
+        // Giữ profit trên CloseMaxTpProfit trong thời gian dài: logic vẫn suspend,
+        // nhưng diagnostic history không được tăng vô hạn.
+        for (var i = 0; i < 100_000; i++)
+        {
+            Assert.Null(Process(
+                sut,
+                start.AddMilliseconds(i * 50L),
+                gapBuy: 0,
+                gapSell: 0,
+                config,
+                TradingOpenMode.GapBuy,
+                slotProfit: 25));
+        }
+
+        // Khi profit quay lại vùng trigger hợp lệ, hành vi cũ vẫn là close ngay
+        // vì confirm window đã được duy trì liên tục.
+        var trigger = Process(
+            sut,
+            start.AddMilliseconds(5_000_050),
+            gapBuy: 0,
+            gapSell: 0,
+            config,
+            TradingOpenMode.GapBuy,
+            slotProfit: 18);
+
+        Assert.NotNull(trigger);
+        Assert.Equal(CloseSignalReason.Tp, trigger!.CloseReason);
+        Assert.Equal(18, trigger.CloseTpProfit);
+        Assert.NotNull(trigger.CloseTpProfits);
+        Assert.Equal(1_024, trigger.CloseTpProfits!.Count);
+        Assert.Equal(18, trigger.CloseTpProfits[^1]);
+    }
+
+    [Fact]
+    public void ProcessSnapshot_CloseMaxTpProfit_PreservesMaxTickOrdering()
+    {
+        var sut = new CloseSignalEngine();
+        var config = new GapSignalConfirmationConfig(
+            ConfirmGapPts: 5,
+            OpenPts: 8,
+            HoldConfirmMs: 500,
+            CloseConfirmGapPts: 50,
+            ClosePts: 80,
+            CloseConfirmTpProfit: 10,
+            CloseTpProfit: 15,
+            CloseMaxTpProfit: 20,
+            CloseHoldConfirmMs: 100,
+            CloseMaxTimesTick: 3);
+        var start = new DateTime(2026, 3, 18, 16, 5, 0, DateTimeKind.Utc);
+
+        Assert.Null(Process(sut, start, 0, 0, config, TradingOpenMode.GapBuy, 25));
+        Assert.Null(Process(sut, start.AddMilliseconds(100), 0, 0, config, TradingOpenMode.GapBuy, 25));
+        Assert.Null(Process(sut, start.AddMilliseconds(200), 0, 0, config, TradingOpenMode.GapBuy, 25));
+        Assert.Null(Process(sut, start.AddMilliseconds(300), 0, 0, config, TradingOpenMode.GapBuy, 25));
+
+        // CloseMaxTpProfit được kiểm tra trước max tick trong logic hiện tại.
+        // Khi quay về vùng hợp lệ, max tick mới reset window và không trigger.
+        Assert.Null(Process(sut, start.AddMilliseconds(400), 0, 0, config, TradingOpenMode.GapBuy, 18));
+        Assert.Null(Process(sut, start.AddMilliseconds(450), 0, 0, config, TradingOpenMode.GapBuy, 18));
+        Assert.Null(Process(sut, start.AddMilliseconds(500), 0, 0, config, TradingOpenMode.GapBuy, 18));
+
+        var trigger = Process(sut, start.AddMilliseconds(560), 0, 0, config, TradingOpenMode.GapBuy, 18);
+        Assert.NotNull(trigger);
+    }
+
     // Guard min-profit (close_min_profit) đã chuyển sang PortfolioCoordinator (cần biết tuổi slot
     // để miễn cho lệnh quá hạn) — áp cho CẢ Gap lẫn TP. Test guard nằm ở Portfolio/MinProfitCloseGuardTests.
 

@@ -8,6 +8,7 @@ namespace TradeDesktop.App.Services;
 public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
 {
     private static readonly TimeSpan DrainShutdownTimeout = TimeSpan.FromSeconds(5);
+    private const int DefaultQueueCapacity = 50_000;
 
     private readonly object _sync = new();
     private StreamWriter? _writer;
@@ -20,6 +21,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     private TradeLogLevel _minLevel = TradeLogLevel.Info;
     private BlockingCollection<string>? _writeQueue;
     private Task? _drainTask;
+    private long _droppedLogCount;
 
     public bool IsSessionActive
     {
@@ -64,6 +66,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 _maxFileSizeBytes = ResolveMaxFileSizeFromEnvironment();
                 _rotationIndex = 0;
                 _currentFileBytes = 0;
+                Interlocked.Exchange(ref _droppedLogCount, 0);
                 _sessionHostName = hostName;
 
                 var fileName = $"{startedAtLocal:yyyyMMdd_HHmmss}-trade-log.log";
@@ -83,7 +86,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 WriteLineCore($"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] Host: {hostName}");
                 WriteLineCore($"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] File: {filePath}");
 
-                _writeQueue = new BlockingCollection<string>();
+                _writeQueue = new BlockingCollection<string>(ResolveQueueCapacityFromEnvironment());
                 queueToStart = _writeQueue;
             }
             catch (Exception ex)
@@ -119,7 +122,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         {
             var timestamp = DateTimeOffset.Now;
             var line = $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {message}";
-            queue.Add(line);
+            TryEnqueue(queue, line, level);
         }
         catch (ObjectDisposedException)
         {
@@ -143,7 +146,8 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
             return;
         }
 
-        if (InferLevelFromMessage(message) < _minLevel)
+        var level = InferLevelFromMessage(message);
+        if (level < _minLevel)
         {
             return;
         }
@@ -152,7 +156,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         {
             var timestamp = DateTimeOffset.Now;
             var line = $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {message}";
-            queue.Add(line);
+            TryEnqueue(queue, line, level);
         }
         catch (ObjectDisposedException)
         {
@@ -196,6 +200,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 {
                     lock (_sync)
                     {
+                        WriteDroppedLogSummaryIfNeeded();
                         WriteLineCore(line);
                     }
                 }
@@ -209,6 +214,42 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         {
             SafeDebug($"DrainQueue failed: {ex}");
         }
+    }
+
+    private void TryEnqueue(BlockingCollection<string> queue, string line, TradeLogLevel level)
+    {
+        if (queue.TryAdd(line))
+        {
+            return;
+        }
+
+        // Preserve operationally important records even during a log storm. This may
+        // briefly block only WARN/ERROR producers; INFO/DEBUG are dropped and summarized.
+        if (level >= TradeLogLevel.Warn)
+        {
+            lock (_sync)
+            {
+                WriteDroppedLogSummaryIfNeeded();
+                WriteLineCore(line);
+            }
+            return;
+        }
+
+        Interlocked.Increment(ref _droppedLogCount);
+    }
+
+    private void WriteDroppedLogSummaryIfNeeded()
+    {
+        var dropped = Interlocked.Exchange(ref _droppedLogCount, 0);
+        if (dropped <= 0)
+        {
+            return;
+        }
+
+        var timestamp = DateTimeOffset.Now;
+        WriteLineCore(
+            $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] [LOGGER][WARN] " +
+            $"Dropped {dropped} log lines because the bounded queue was full.");
     }
 
     private void DrainAndCloseQueue()
@@ -275,6 +316,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
 
             if (writeFooter)
             {
+                WriteDroppedLogSummaryIfNeeded();
                 if (_sessionStartedAt.HasValue)
                 {
                     var duration = stoppedAtLocal - _sessionStartedAt.Value;
@@ -377,6 +419,14 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         }
 
         return 50L * 1024 * 1024;
+    }
+
+    private static int ResolveQueueCapacityFromEnvironment()
+    {
+        var raw = Environment.GetEnvironmentVariable("LOG_QUEUE_CAPACITY");
+        return int.TryParse(raw, out var capacity) && capacity > 0
+            ? capacity
+            : DefaultQueueCapacity;
     }
 
     private static TradeLogLevel InferLevelFromMessage(string message)
