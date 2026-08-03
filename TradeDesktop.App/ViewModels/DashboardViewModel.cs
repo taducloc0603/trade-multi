@@ -1862,6 +1862,54 @@ public sealed class DashboardViewModel : ObservableObject
 
         try
         {
+            if (targetSlot is not null)
+            {
+                var signalProfit = targetSlot.LastProfitSnapshot;
+                var latestMetrics = _runtimeConfigState.CurrentDashboardMetrics;
+                if (latestMetrics is not null)
+                {
+                    RefreshSlotProfitsEveryTick(latestMetrics, _runtimeConfigState.CurrentPoint);
+                }
+
+                var dispatchGuard = _portfolioCoordinator.CheckCloseDispatch(
+                    targetSlot.PairId,
+                    DateTime.UtcNow,
+                    _runtimeConfigState.CurrentCloseMinProfit);
+
+                if (!dispatchGuard.Allowed)
+                {
+                    _portfolioCoordinator.AbortPendingClose(targetSlot.PairId);
+                    _activeAutoCloseRecoveryCycle = null;
+                    SafeVmLog(
+                        $"[CLOSE_DISPATCH][MINPROFIT_ABORT] slot={targetSlot.SlotId} pairId={targetSlot.PairId} " +
+                        $"reason={trigger.CloseReason} signalProfit={signalProfit?.ToString("0.##") ?? "null"} " +
+                        $"latestProfit={dispatchGuard.LatestProfit?.ToString("0.##") ?? "null"} " +
+                        $"minProfit={dispatchGuard.MinProfit:0.##} overtime={dispatchGuard.IsOvertime} " +
+                        $"guardReason={dispatchGuard.Reason}");
+                    System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        LogFlowTransitionIfChanged("close-aborted-by-dispatch-min-profit");
+                        RaiseCurrentPositionTextChanged();
+                        OnPropertyChanged(nameof(CurrentPhaseText));
+                        SignalLogItems.Insert(0,
+                            $"    - [{DateTime.Now:HH:mm:ss.fff}] Close canceled before dispatch: " +
+                            $"latest profit {dispatchGuard.LatestProfit?.ToString("0.##") ?? "incomplete"} " +
+                            $"< minimum {dispatchGuard.MinProfit:0.##} ({trigger.CloseReason}).");
+                    });
+                    return;
+                }
+
+                if (dispatchGuard.IsOvertime && dispatchGuard.MinProfit > 0d
+                    && (!dispatchGuard.LatestProfit.HasValue
+                        || dispatchGuard.LatestProfit.Value < dispatchGuard.MinProfit))
+                {
+                    SafeVmLog(
+                        $"[CLOSE_DISPATCH][MINPROFIT_BYPASS] slot={targetSlot.SlotId} pairId={targetSlot.PairId} " +
+                        $"reason={trigger.CloseReason} latestProfit={dispatchGuard.LatestProfit?.ToString("0.##") ?? "null"} " +
+                        $"minProfit={dispatchGuard.MinProfit:0.##} overtime=true");
+                }
+            }
+
             var slot = Math.Max(0, _autoSlot - 1);
             _closeConfirmBySlot.Remove(slot);
 
@@ -3159,9 +3207,10 @@ public sealed class DashboardViewModel : ObservableObject
             maxBuy: _runtimeConfigState.CurrentMaxBuyOpens,
             maxSell: _runtimeConfigState.CurrentMaxSellOpens);
 
-        _portfolioCoordinator.UpdateCooldownConfig(
-            minSec: _runtimeConfigState.CurrentStartWaitTime,
-            maxSec: _runtimeConfigState.CurrentEndWaitTime);
+        // start_wait_time/end_wait_time are retained in the DB/runtime model for compatibility,
+        // but no longer participate in trade gating. After a confirmed close, the only OPEN
+        // re-entry delay is post_close_lock_seconds (checked by CanOpenNewSlot).
+        _portfolioCoordinator.UpdateCooldownConfig(minSec: 0, maxSec: 0);
 
         _portfolioCoordinator.UpdateMaxLifeTimeConfig(
             _runtimeConfigState.CurrentMaxLifeTimeBySecond);
@@ -3173,6 +3222,10 @@ public sealed class DashboardViewModel : ObservableObject
             _runtimeConfigState.CurrentOppositeSideLockSeconds);
         _portfolioCoordinator.UpdatePostCloseLockConfig(
             _runtimeConfigState.CurrentPostCloseLockSeconds);
+        _portfolioCoordinator.UpdatePostOpenLockConfig(
+            _runtimeConfigState.CurrentPostOpenLockSeconds);
+        _portfolioCoordinator.UpdateScheduleSleepingConfig(
+            _runtimeConfigState.CurrentScheduleSleepingJson);
     }
 
     private void RefreshOrderInfoTabs()
@@ -6262,7 +6315,9 @@ public sealed class DashboardViewModel : ObservableObject
                     freezeLastN: result.FreezeLastN,
                     closeMinProfit: result.CloseMinProfit,
                     oppositeSideLockSeconds: result.OppositeSideLockSeconds,
-                    postCloseLockSeconds: result.PostCloseLockSeconds);
+                    postCloseLockSeconds: result.PostCloseLockSeconds,
+                    postOpenLockSeconds: result.PostOpenLockSeconds);
+                _runtimeConfigState.UpdateScheduleSleeping(result.ScheduleSleepingJson);
                 _runtimeConfigState.UpdateQuota(
                     result.MaxTotalOpens,
                     result.MaxBuyOpens,

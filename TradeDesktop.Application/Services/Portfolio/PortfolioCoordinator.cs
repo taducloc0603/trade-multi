@@ -1,6 +1,7 @@
 using System.Globalization;
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
+using TradeDesktop.Application.Services;
 
 namespace TradeDesktop.Application.Services.Portfolio;
 
@@ -35,6 +36,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     // Phase 3 §3.6 Risk 4: lock chống race khi 2 callers cùng pass CanOpenNewSlot rồi cùng allocate.
     private readonly object _allocateLock = new();
     private readonly object _tradeActionGateLock = new();
+    private string _scheduleSleepingJson = string.Empty;
 
     // Phase 7 metrics — monotonic counters; reset on Coordinator.Reset.
     private long _totalOpensAllTime;
@@ -93,6 +95,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public DateTime? LastCloseConfirmedAtUtc => _state.LastCloseConfirmedAtUtc;
     public int OppositeSideLockSeconds => _state.OppositeSideLockSeconds;
     public int PostCloseLockSeconds => _state.PostCloseLockSeconds;
+    public int PostOpenLockSeconds => _state.PostOpenLockSeconds;
     public int GlobalCooldownMinSec => _state.GlobalCooldownMinSec;
     public int GlobalCooldownMaxSec => _state.GlobalCooldownMaxSec;
     public TradingFlowSkipDiagnostic? LastSkipDiagnostic { get; private set; }
@@ -321,9 +324,17 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                     Reason: "GLOBAL_ACTION_COOLDOWN");
             }
 
-            var cooldownSec = NextSecondsInRange(
-                _state.GlobalCooldownMinSec,
-                _state.GlobalCooldownMaxSec);
+            // Global portfolio lock by action type. Once configured, these fixed DB values
+            // replace the legacy start_wait_time/end_wait_time random cooldown:
+            // OPEN  -> blocks every following OPEN/CLOSE for post_open_lock_seconds.
+            // CLOSE -> blocks every following OPEN/CLOSE for post_close_lock_seconds.
+            var normalizedAction = (action ?? string.Empty).Trim().ToUpperInvariant();
+            var cooldownSec = normalizedAction switch
+            {
+                "OPEN" when _state.IsPostOpenLockConfigured => _state.PostOpenLockSeconds,
+                "CLOSE" when _state.IsPostCloseLockConfigured => _state.PostCloseLockSeconds,
+                _ => NextSecondsInRange(_state.GlobalCooldownMinSec, _state.GlobalCooldownMaxSec)
+            };
             var newLockUntilUtc = requestedUtc.AddSeconds(cooldownSec);
             _state.GlobalActionLockUntilUtc = cooldownSec > 0
                 ? newLockUntilUtc
@@ -355,6 +366,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         // tính từ confirm time, theo CLAUDE.md §2 Rule C).
         _state.LastOpenConfirmedAtUtc = confirmedAtUtc;
         _state.LastOpenConfirmedSide = slot.Side;
+
+        if (_state.IsPostOpenLockConfigured && _state.PostOpenLockSeconds > 0)
+        {
+            ExtendGlobalActionLock(
+                confirmedAtUtc.AddSeconds(_state.PostOpenLockSeconds),
+                $"open-confirm slot={slot.SlotId}");
+        }
 
         // Log include lock state để dễ correlate confirm time với cooldown window.
         var lockSummary = _state.GlobalActionLockUntilUtc.HasValue
@@ -395,6 +413,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         // Rule C (post-close) — anchor khoá MỌI open (cả 2 chiều) trong OppositeSideLockSeconds
         // giây tính từ close confirm. Phủ auto/manual/external (mọi path đều qua đây).
         _state.LastCloseConfirmedAtUtc = confirmedAtUtc;
+
+        if (_state.IsPostCloseLockConfigured && _state.PostCloseLockSeconds > 0)
+        {
+            ExtendGlobalActionLock(
+                confirmedAtUtc.AddSeconds(_state.PostCloseLockSeconds),
+                $"close-confirm slot={slot.SlotId}");
+        }
 
         // Phase 8: cooldown ĐÃ được set tại close dispatch (MarkSlotCloseTriggered).
         // Tại confirm chỉ log + update slot status, không reset cooldown.
@@ -456,6 +481,44 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         slot.UpdateProfit(ticket, profit);
     }
 
+    public CloseDispatchGuardResult CheckCloseDispatch(
+        string pairId,
+        DateTime nowUtc,
+        double closeMinProfit)
+    {
+        var minProfit = Math.Abs(closeMinProfit);
+        var slot = _state.GetSlotByPairId(pairId);
+        if (slot is null)
+        {
+            return new CloseDispatchGuardResult(false, null, minProfit, false, "SLOT_NOT_FOUND");
+        }
+
+        var effectiveNow = ResolveEffectiveNowUtc(nowUtc);
+        var isOvertime = _state.MaxLifeTimeBySecond > 0
+            && slot.OpenConfirmedAtUtc.HasValue
+            && (effectiveNow - slot.OpenConfirmedAtUtc.Value).TotalSeconds > _state.MaxLifeTimeBySecond;
+        var latestProfit = slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot : null;
+
+        if (minProfit <= 0d)
+        {
+            return new CloseDispatchGuardResult(true, latestProfit, minProfit, isOvertime, "MIN_PROFIT_DISABLED");
+        }
+
+        if (isOvertime)
+        {
+            return new CloseDispatchGuardResult(true, latestProfit, minProfit, true, "OVERTIME_BYPASS");
+        }
+
+        if (!latestProfit.HasValue)
+        {
+            return new CloseDispatchGuardResult(false, null, minProfit, false, "INCOMPLETE_PROFIT");
+        }
+
+        return latestProfit.Value >= minProfit
+            ? new CloseDispatchGuardResult(true, latestProfit, minProfit, false, "MIN_PROFIT_MET")
+            : new CloseDispatchGuardResult(false, latestProfit, minProfit, false, "BELOW_MIN_PROFIT");
+    }
+
     private void LogTpCheck(PositionSlot slot, GapSignalConfirmationConfig config, DateTime effectiveNow)
     {
         if (config.CloseTpProfit <= 0d)
@@ -508,6 +571,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     // ===== Rule checks (Phase 2) =====
     public bool CanOpenNewSlot(TradingPositionSide side, out string blockReason)
     {
+        if (ScheduleSleepingEvaluator.IsOpenBlocked(_scheduleSleepingJson, DateTime.Now))
+        {
+            blockReason = "SCHEDULE_SLEEPING (OPEN blocked by device local time)";
+            Interlocked.Increment(ref _cooldownSkipCount);
+            return false;
+        }
+
         var totalNow = _state.CountLiveAndPendingTotal();
         if (totalNow >= _state.MaxTotalOpens)
         {
@@ -632,6 +702,18 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     {
         // <= 0 = tắt lock nguy hiểm → giữ default thay vì disable.
         _state.PostCloseLockSeconds = seconds > 0 ? seconds : DefaultPostCloseLockSeconds;
+        _state.IsPostCloseLockConfigured = true;
+    }
+
+    public void UpdatePostOpenLockConfig(int seconds)
+    {
+        _state.PostOpenLockSeconds = Math.Max(0, seconds);
+        _state.IsPostOpenLockConfigured = true;
+    }
+
+    public void UpdateScheduleSleepingConfig(string? scheduleSleepingJson)
+    {
+        _scheduleSleepingJson = scheduleSleepingJson ?? string.Empty;
     }
 
     // ===== Rollback =====
@@ -747,13 +829,28 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var baseline = slot.OpenConfirmedAtUtc ?? slot.OpenedAtUtc;
         if (baseline is null) return true;
 
-        var effectiveHolding = slot.HoldingSeconds > 0
+        var configuredHolding = slot.HoldingSeconds > 0
             ? slot.HoldingSeconds
             : _lastSeenStartTimeHold;
+        var effectiveHolding = Math.Max(configuredHolding, _state.PostOpenLockSeconds);
 
         if (effectiveHolding <= 0) return true;
 
         return (nowUtc - baseline.Value) >= TimeSpan.FromSeconds(effectiveHolding);
+    }
+
+    private void ExtendGlobalActionLock(DateTime proposedUntilUtc, string reason)
+    {
+        lock (_tradeActionGateLock)
+        {
+            if (!_state.GlobalActionLockUntilUtc.HasValue
+                || proposedUntilUtc > _state.GlobalActionLockUntilUtc.Value)
+            {
+                _state.GlobalActionLockUntilUtc = proposedUntilUtc;
+                _logger?.Log(
+                    $"[TRADE_GATE][EXTEND] reason={reason} lockUntil={proposedUntilUtc:O}");
+            }
+        }
     }
 
     private static DateTime ResolveEffectiveNowUtc(DateTime snapshotTimestampUtc)

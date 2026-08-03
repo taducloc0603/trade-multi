@@ -110,4 +110,84 @@ public sealed class CooldownRuleTests
         Assert.Single(results.Where(x => x.Acquired));
         Assert.Equal(31, results.Count(x => !x.Acquired));
     }
+
+    [Theory]
+    [InlineData("OPEN", "OPEN")]
+    [InlineData("OPEN", "CLOSE")]
+    [InlineData("CLOSE", "OPEN")]
+    [InlineData("CLOSE", "CLOSE")]
+    public void PostActionLocks_BlockEveryFollowingActionAcrossSlots(
+        string firstAction,
+        string secondAction)
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateCooldownConfig(0, 0);
+        coordinator.UpdatePostOpenLockConfig(11);
+        coordinator.UpdatePostCloseLockConfig(17);
+        var now = DateTime.UtcNow;
+
+        var first = coordinator.TryAcquireTradeAction(now, firstAction, "slot-1");
+        var second = coordinator.TryAcquireTradeAction(now.AddSeconds(1), secondAction, "slot-2");
+
+        Assert.True(first.Acquired);
+        Assert.Equal(firstAction == "OPEN" ? 11 : 17, first.CooldownSeconds);
+        Assert.False(second.Acquired);
+        Assert.True(second.Remaining > TimeSpan.Zero);
+    }
+
+    [Theory]
+    [InlineData("OPEN", 11)]
+    [InlineData("CLOSE", 17)]
+    public void PostActionLock_AfterWindowExpires_AllowsNextAction(string firstAction, int waitSeconds)
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateCooldownConfig(0, 0);
+        coordinator.UpdatePostOpenLockConfig(11);
+        coordinator.UpdatePostCloseLockConfig(17);
+        var now = DateTime.UtcNow;
+
+        Assert.True(coordinator.TryAcquireTradeAction(now, firstAction, "slot-1").Acquired);
+        var next = coordinator.TryAcquireTradeAction(
+            now.AddSeconds(waitSeconds).AddMilliseconds(1),
+            "OPEN",
+            "slot-2");
+
+        Assert.True(next.Acquired);
+    }
+
+    [Fact]
+    public void OpenConfirm_ExtendsGlobalLockFromCompletionTime()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdatePostOpenLockConfig(10);
+        var dispatchAt = DateTime.UtcNow;
+        coordinator.TryAcquireTradeAction(dispatchAt, "OPEN", "slot-1");
+        coordinator.AllocatePendingOpenSlot("p1", Trigger());
+
+        var confirmedAt = dispatchAt.AddSeconds(3);
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, confirmedAt);
+
+        Assert.Equal(confirmedAt.AddSeconds(10), coordinator.GlobalActionLockUntilUtc);
+        Assert.False(coordinator.TryAcquireTradeAction(
+            confirmedAt.AddSeconds(9), "CLOSE", "slot-2").Acquired);
+    }
+
+    [Fact]
+    public void CloseConfirm_ExtendsGlobalLockFromCompletionTime()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdatePostCloseLockConfig(10);
+        var dispatchAt = DateTime.UtcNow;
+        coordinator.AllocatePendingOpenSlot("p1", Trigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, dispatchAt.AddSeconds(-30));
+        coordinator.TryAcquireTradeAction(dispatchAt, "CLOSE", "slot-1");
+        coordinator.MarkSlotCloseTriggered("p1", dispatchAt);
+
+        var confirmedAt = dispatchAt.AddSeconds(3);
+        coordinator.MarkSlotCloseConfirmed("p1", confirmedAt);
+
+        Assert.Equal(confirmedAt.AddSeconds(10), coordinator.GlobalActionLockUntilUtc);
+        Assert.False(coordinator.TryAcquireTradeAction(
+            confirmedAt.AddSeconds(9), "CLOSE", "slot-2").Acquired);
+    }
 }

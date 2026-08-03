@@ -55,6 +55,12 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     // override từ DB column post_close_lock_seconds.
     public int CurrentPostCloseLockSeconds { get; private set; } = 300;
 
+    // Sau OPEN confirmed, chặn auto CLOSE GAP/TP theo từng slot trong số giây cấu hình.
+    public int CurrentPostOpenLockSeconds { get; private set; }
+
+    // Raw JSONB config; empty/null/malformed values are treated as disabled.
+    public string CurrentScheduleSleepingJson { get; private set; } = string.Empty;
+
     // Multi-slot quota config. Default theo Rule A (5/3/3) khi DB chưa có cột — runtime
     // được override từ DB columns max_total_opens / max_buy_opens / max_sell_opens qua UpdateQuota.
     public int CurrentMaxTotalOpens { get; private set; } = 5;
@@ -168,7 +174,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int freezeLastN = 0,
         double closeMinProfit = 0,
         int oppositeSideLockSeconds = -1,
-        int postCloseLockSeconds = -1)
+        int postCloseLockSeconds = -1,
+        int postOpenLockSeconds = -1)
         => Update(
             machineHostName,
             mapName1,
@@ -213,7 +220,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             freezeLastN,
             closeMinProfit,
             oppositeSideLockSeconds,
-            postCloseLockSeconds);
+            postCloseLockSeconds,
+            postOpenLockSeconds);
 
     public void Update(
         string machineHostName,
@@ -259,7 +267,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int freezeLastN = 0,
         double closeMinProfit = 0,
         int oppositeSideLockSeconds = -1,
-        int postCloseLockSeconds = -1)
+        int postCloseLockSeconds = -1,
+        int postOpenLockSeconds = -1)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
         var oldCloseN = CurrentCloseNumberOfQualifyingTimes;
@@ -351,6 +360,10 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         {
             // 0 = tắt lock nguy hiểm → giữ default 300 khi <= 0.
             CurrentPostCloseLockSeconds = postCloseLockSeconds > 0 ? postCloseLockSeconds : 300;
+        }
+        if (postOpenLockSeconds >= 0)
+        {
+            CurrentPostOpenLockSeconds = Math.Max(0, postOpenLockSeconds);
         }
         CurrentMapName1 = (mapName1 ?? string.Empty).Trim();
         CurrentMapName2 = (mapName2 ?? string.Empty).Trim();
@@ -468,6 +481,12 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentMaxTotalOpens = Math.Max(1, maxTotalOpens);
         CurrentMaxBuyOpens = Math.Max(1, maxBuyOpens);
         CurrentMaxSellOpens = Math.Max(1, maxSellOpens);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void UpdateScheduleSleeping(string? scheduleSleepingJson)
+    {
+        CurrentScheduleSleepingJson = scheduleSleepingJson ?? string.Empty;
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 

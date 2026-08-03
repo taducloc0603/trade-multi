@@ -90,6 +90,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxTotalOpens: row.MaxTotalOpens,
             OppositeSideLockSeconds: row.OppositeSideLockSeconds,
             PostCloseLockSeconds: row.PostCloseLockSeconds,
+            PostOpenLockSeconds: row.PostOpenLockSeconds,
+            ScheduleSleepingJson: row.ScheduleSleepingJson,
             CloseMinProfit: row.CloseMinProfit);
     }
 
@@ -321,6 +323,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
         first.TryGetProperty("opposite_side_lock_seconds", out var oppositeSideLockSecondsElement);
         first.TryGetProperty("post_close_lock_seconds", out var postCloseLockSecondsElement);
+        first.TryGetProperty("post_open_lock_seconds", out var postOpenLockSecondsElement);
+        first.TryGetProperty("schedule_sleeping", out var scheduleSleepingElement);
 
         // DB column name is lowercase: hostname
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
@@ -386,7 +390,11 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
             MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5,
             OppositeSideLockSeconds = oppositeSideLockSecondsElement.ValueKind == JsonValueKind.Number && oppositeSideLockSecondsElement.TryGetInt32(out var oppositeSideLockSeconds) ? oppositeSideLockSeconds : 300,
-            PostCloseLockSeconds = postCloseLockSecondsElement.ValueKind == JsonValueKind.Number && postCloseLockSecondsElement.TryGetInt32(out var postCloseLockSeconds) ? postCloseLockSeconds : 300
+            PostCloseLockSeconds = postCloseLockSecondsElement.ValueKind == JsonValueKind.Number && postCloseLockSecondsElement.TryGetInt32(out var postCloseLockSeconds) ? postCloseLockSeconds : 300,
+            PostOpenLockSeconds = postOpenLockSecondsElement.ValueKind == JsonValueKind.Number && postOpenLockSecondsElement.TryGetInt32(out var postOpenLockSeconds) ? postOpenLockSeconds : 0,
+            ScheduleSleeping = scheduleSleepingElement.ValueKind == JsonValueKind.Object
+                ? scheduleSleepingElement.Clone()
+                : default
         };
     }
 
@@ -469,6 +477,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
         first.TryGetProperty("opposite_side_lock_seconds", out var oppositeSideLockSecondsElement);
         first.TryGetProperty("post_close_lock_seconds", out var postCloseLockSecondsElement);
+        first.TryGetProperty("post_open_lock_seconds", out var postOpenLockSecondsElement);
+        first.TryGetProperty("schedule_sleeping", out var scheduleSleepingElement);
 
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
         if (!hasHostName)
@@ -532,7 +542,11 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
             MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5,
             OppositeSideLockSeconds = oppositeSideLockSecondsElement.ValueKind == JsonValueKind.Number && oppositeSideLockSecondsElement.TryGetInt32(out var oppositeSideLockSeconds) ? oppositeSideLockSeconds : 300,
-            PostCloseLockSeconds = postCloseLockSecondsElement.ValueKind == JsonValueKind.Number && postCloseLockSecondsElement.TryGetInt32(out var postCloseLockSeconds) ? postCloseLockSeconds : 300
+            PostCloseLockSeconds = postCloseLockSecondsElement.ValueKind == JsonValueKind.Number && postCloseLockSecondsElement.TryGetInt32(out var postCloseLockSeconds) ? postCloseLockSeconds : 300,
+            PostOpenLockSeconds = postOpenLockSecondsElement.ValueKind == JsonValueKind.Number && postOpenLockSecondsElement.TryGetInt32(out var postOpenLockSeconds) ? postOpenLockSeconds : 0,
+            ScheduleSleeping = scheduleSleepingElement.ValueKind == JsonValueKind.Object
+                ? scheduleSleepingElement.Clone()
+                : default
         };
     }
 
@@ -738,8 +752,18 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         [JsonPropertyName("post_close_lock_seconds")]
         public int PostCloseLockSeconds { get; set; } = 300;
 
+        [JsonPropertyName("post_open_lock_seconds")]
+        public int PostOpenLockSeconds { get; set; }
+
+        [JsonPropertyName("schedule_sleeping")]
+        public JsonElement ScheduleSleeping { get; set; }
+
         public string CurrentSlotsJson => CurrentSlots.ValueKind is JsonValueKind.Array or JsonValueKind.Object
             ? CurrentSlots.GetRawText()
+            : string.Empty;
+
+        public string ScheduleSleepingJson => ScheduleSleeping.ValueKind == JsonValueKind.Object
+            ? ScheduleSleeping.GetRawText()
             : string.Empty;
     }
 }

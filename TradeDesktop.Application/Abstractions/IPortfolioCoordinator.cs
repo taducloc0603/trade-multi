@@ -27,6 +27,7 @@ public interface IPortfolioCoordinator
     DateTime? LastCloseConfirmedAtUtc { get; }
     int OppositeSideLockSeconds { get; }
     int PostCloseLockSeconds { get; }
+    int PostOpenLockSeconds { get; }
     TradingFlowSkipDiagnostic? LastSkipDiagnostic { get; }
     int GlobalCooldownMinSec { get; }
     int GlobalCooldownMaxSec { get; }
@@ -69,6 +70,10 @@ public interface IPortfolioCoordinator
 
     // === Profit tracking (Phase 1 MMF poll; Phase 2 Rule D priority close) ===
     void UpdateProfit(ulong ticket, double profit);
+    CloseDispatchGuardResult CheckCloseDispatch(
+        string pairId,
+        DateTime nowUtc,
+        double closeMinProfit);
 
     // === Rule checks (Phase 2) ===
     bool CanOpenNewSlot(TradingPositionSide side, out string blockReason);
@@ -80,6 +85,8 @@ public interface IPortfolioCoordinator
     void UpdateMaxLifeTimeConfig(int maxLifeTimeSec);
     void UpdateOppositeSideLockConfig(int seconds);
     void UpdatePostCloseLockConfig(int seconds);
+    void UpdatePostOpenLockConfig(int seconds);
+    void UpdateScheduleSleepingConfig(string? scheduleSleepingJson);
 
     // === Rollback (open/close execution failed) ===
     void AbortPendingOpen(string pairId);
@@ -96,6 +103,13 @@ public sealed record TradeActionGateResult(
     DateTime? LockUntilUtc,
     TimeSpan Remaining,
     int CooldownSeconds,
+    string Reason);
+
+public sealed record CloseDispatchGuardResult(
+    bool Allowed,
+    double? LatestProfit,
+    double MinProfit,
+    bool IsOvertime,
     string Reason);
 
 public sealed record PortfolioSnapshotResult(

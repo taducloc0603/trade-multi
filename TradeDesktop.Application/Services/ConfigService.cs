@@ -97,7 +97,9 @@ public sealed class ConfigService(
             freezeLastN: record.FreezeLastN,
             closeMinProfit: record.CloseMinProfit,
             oppositeSideLockSeconds: record.OppositeSideLockSeconds,
-            postCloseLockSeconds: record.PostCloseLockSeconds);
+            postCloseLockSeconds: record.PostCloseLockSeconds,
+            postOpenLockSeconds: record.PostOpenLockSeconds,
+            scheduleSleepingJson: record.ScheduleSleepingJson);
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -226,7 +228,9 @@ public sealed record ConfigLoadResult(
     int FreezeLastN = 0,
     double CloseMinProfit = 0,
     int OppositeSideLockSeconds = 300,
-    int PostCloseLockSeconds = 300)
+    int PostCloseLockSeconds = 300,
+    int PostOpenLockSeconds = 0,
+    string ScheduleSleepingJson = "")
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -282,7 +286,9 @@ public sealed record ConfigLoadResult(
         int freezeLastN = 0,
         double closeMinProfit = 0,
         int oppositeSideLockSeconds = 300,
-        int postCloseLockSeconds = 300) =>
+        int postCloseLockSeconds = 300,
+        int postOpenLockSeconds = 0,
+        string scheduleSleepingJson = "") =>
         new(
             true,
             true,
@@ -340,7 +346,9 @@ public sealed record ConfigLoadResult(
             Math.Max(0, freezeLastN),
             Math.Abs(closeMinProfit),
             Math.Max(0, oppositeSideLockSeconds),
-            Math.Max(0, postCloseLockSeconds));
+            Math.Max(0, postCloseLockSeconds),
+            Math.Max(0, postOpenLockSeconds),
+            scheduleSleepingJson ?? string.Empty);
 
     public static ConfigLoadResult NotFound(string machineHostName) =>
         new(false, false, machineHostName, [ManualHwndColumnConfig.Empty], "mt5", "mt5", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0d, 0, 0, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, "[]", null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "", "", "");

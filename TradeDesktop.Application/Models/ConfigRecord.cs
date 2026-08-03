@@ -51,4 +51,6 @@ public sealed record ConfigRecord(
     int FreezeLastN = 0,
     double CloseMinProfit = 0,
     int OppositeSideLockSeconds = 300,
-    int PostCloseLockSeconds = 300);
+    int PostCloseLockSeconds = 300,
+    int PostOpenLockSeconds = 0,
+    string ScheduleSleepingJson = "");

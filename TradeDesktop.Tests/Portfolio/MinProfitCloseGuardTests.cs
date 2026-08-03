@@ -188,4 +188,125 @@ public sealed class MinProfitCloseGuardTests
         Assert.NotNull(result.CloseTargetSlot);
         Assert.Equal("p1", result.CloseTargetSlot!.PairId);
     }
+
+    [Theory]
+    [InlineData(CloseSignalReason.Gap)]
+    [InlineData(CloseSignalReason.Tp)]
+    public void DispatchRecheck_ProfitDroppedBelowMin_BlocksAndCanReturnSlotToLive(
+        CloseSignalReason closeReason)
+    {
+        var factory = new ScriptedFactory();
+        var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
+        var trigger = closeReason == CloseSignalReason.Tp ? TpCloseTrigger() : GapCloseTrigger();
+        var coordinator = SetupSingleSlot(factory, 1200, now, 300, 25.0, trigger);
+
+        var signalResult = coordinator.ProcessSnapshot(Snapshot(now), Config(closeMinProfit: 20));
+        Assert.NotNull(signalResult.CloseTargetSlot);
+        Assert.Equal(PositionSlotStatus.PendingClose, signalResult.CloseTargetSlot!.Status);
+
+        // Profit changed after the signal passed the first guard but before dispatch.
+        coordinator.UpdateProfit(100, 7.5);
+        coordinator.UpdateProfit(200, 7.5);
+
+        var guard = coordinator.CheckCloseDispatch("p1", now.AddMilliseconds(10), 20);
+
+        Assert.False(guard.Allowed);
+        Assert.Equal(15.0, guard.LatestProfit);
+        Assert.Equal("BELOW_MIN_PROFIT", guard.Reason);
+
+        coordinator.AbortPendingClose("p1");
+        Assert.Equal(PositionSlotStatus.Live, signalResult.CloseTargetSlot.Status);
+        Assert.False(signalResult.CloseTargetSlot.IsCloseExecutionPending);
+    }
+
+    [Fact]
+    public void DispatchRecheck_ProfitEqualsMin_Allows()
+    {
+        var factory = new ScriptedFactory();
+        var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
+        var coordinator = SetupSingleSlot(factory, 1200, now, 300, 20.0, GapCloseTrigger());
+
+        var guard = coordinator.CheckCloseDispatch("p1", now, 20);
+
+        Assert.True(guard.Allowed);
+        Assert.Equal("MIN_PROFIT_MET", guard.Reason);
+    }
+
+    [Fact]
+    public void DispatchRecheck_IncompleteProfit_Blocks()
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory, maxLifeTimeSec: 1200);
+        var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-300));
+        coordinator.UpdateProfit(100, 25.0);
+
+        var guard = coordinator.CheckCloseDispatch("p1", now, 20);
+
+        Assert.False(guard.Allowed);
+        Assert.Null(guard.LatestProfit);
+        Assert.Equal("INCOMPLETE_PROFIT", guard.Reason);
+    }
+
+    [Fact]
+    public void DispatchRecheck_OvertimeBypassesMinProfit()
+    {
+        var factory = new ScriptedFactory();
+        var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
+        var coordinator = SetupSingleSlot(factory, 1200, now, 1300, -10.0, GapCloseTrigger());
+
+        var guard = coordinator.CheckCloseDispatch("p1", now, 20);
+
+        Assert.True(guard.Allowed);
+        Assert.True(guard.IsOvertime);
+        Assert.Equal("OVERTIME_BYPASS", guard.Reason);
+    }
+
+    [Fact]
+    public void DispatchRecheck_MinProfitDisabled_Allows()
+    {
+        var factory = new ScriptedFactory();
+        var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
+        var coordinator = SetupSingleSlot(factory, 1200, now, 300, -10.0, TpCloseTrigger());
+
+        var guard = coordinator.CheckCloseDispatch("p1", now, 0);
+
+        Assert.True(guard.Allowed);
+        Assert.Equal("MIN_PROFIT_DISABLED", guard.Reason);
+    }
+
+    [Theory]
+    [InlineData(CloseSignalReason.Gap)]
+    [InlineData(CloseSignalReason.Tp)]
+    public void PostOpenLock_BeforeMinimumElapsed_BlocksStrategicClose(CloseSignalReason reason)
+    {
+        var factory = new ScriptedFactory();
+        var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
+        var trigger = reason == CloseSignalReason.Tp ? TpCloseTrigger() : GapCloseTrigger();
+        var coordinator = SetupSingleSlot(factory, 1200, now, 30, 25.0, trigger);
+        coordinator.UpdatePostOpenLockConfig(60);
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config(closeMinProfit: 20));
+
+        Assert.Null(result.CloseTargetSlot);
+        Assert.Equal(PositionSlotStatus.Live, coordinator.GetSlotByPairId("p1")!.Status);
+    }
+
+    [Theory]
+    [InlineData(CloseSignalReason.Gap)]
+    [InlineData(CloseSignalReason.Tp)]
+    public void PostOpenLock_AfterMinimumElapsed_AllowsStrategicClose(CloseSignalReason reason)
+    {
+        var factory = new ScriptedFactory();
+        var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
+        var trigger = reason == CloseSignalReason.Tp ? TpCloseTrigger() : GapCloseTrigger();
+        var coordinator = SetupSingleSlot(factory, 1200, now, 61, 25.0, trigger);
+        coordinator.UpdatePostOpenLockConfig(60);
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config(closeMinProfit: 20));
+
+        Assert.NotNull(result.CloseTargetSlot);
+        Assert.Equal(PositionSlotStatus.PendingClose, result.CloseTargetSlot!.Status);
+    }
 }

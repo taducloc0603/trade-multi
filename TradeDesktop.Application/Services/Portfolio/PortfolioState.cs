@@ -29,6 +29,10 @@ public sealed class PortfolioState
     public int OppositeSideLockSeconds { get; set; } = 300;
     // Rule C — post-close lock (sau CLOSE, chặn cả 2 chiều). Config từ DB (post_close_lock_seconds).
     public int PostCloseLockSeconds { get; set; } = 300;
+    public bool IsPostCloseLockConfigured { get; set; }
+    // Per-slot minimum hold after OPEN confirmed before strategic GAP/TP close is evaluated.
+    public int PostOpenLockSeconds { get; set; }
+    public bool IsPostOpenLockConfigured { get; set; }
 
     public int CountLiveAndPendingBuy()
         => _slots.Count(s => s.Side == TradingPositionSide.Buy && IsLiveOrPending(s.Status));
