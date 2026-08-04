@@ -7,6 +7,8 @@ namespace TradeDesktop.App.State;
 public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigStateUpdater
 {
     private readonly Random _random = new();
+    private readonly object _manualHwndRandomLock = new();
+    private int _lastRandomManualHwndColumnIndex = -1;
 
     public string CurrentMachineHostName { get; private set; } = string.Empty;
     public int CurrentPoint { get; private set; }
@@ -519,13 +521,17 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             normalizedColumns.Add(ManualHwndColumnConfig.Empty);
         }
 
-        CurrentManualHwndColumns = normalizedColumns;
+        lock (_manualHwndRandomLock)
+        {
+            CurrentManualHwndColumns = normalizedColumns;
+            _lastRandomManualHwndColumnIndex = -1;
 
-        var first = normalizedColumns[0];
-        CurrentChartHwndA = first.ChartHwndA;
-        CurrentTradeHwndA = first.TradeHwndA;
-        CurrentChartHwndB = first.ChartHwndB;
-        CurrentTradeHwndB = first.TradeHwndB;
+            var first = normalizedColumns[0];
+            CurrentChartHwndA = first.ChartHwndA;
+            CurrentTradeHwndA = first.TradeHwndA;
+            CurrentChartHwndB = first.ChartHwndB;
+            CurrentTradeHwndB = first.TradeHwndB;
+        }
 
         StateChanged?.Invoke(this, EventArgs.Empty);
         ManualHwndChanged?.Invoke(this, EventArgs.Empty);
@@ -533,18 +539,39 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
 
     public (int Index, ManualHwndColumnConfig Column) GetRandomManualHwndColumn()
     {
-        var columns = CurrentManualHwndColumns;
-        if (columns.Count == 0)
+        lock (_manualHwndRandomLock)
         {
-            return (0, ManualHwndColumnConfig.Empty);
-        }
+            var columns = CurrentManualHwndColumns;
+            if (columns.Count == 0)
+            {
+                return (0, ManualHwndColumnConfig.Empty);
+            }
 
-        if (columns.Count == 1)
-        {
-            return (0, columns[0]);
-        }
+            if (columns.Count == 1)
+            {
+                return (0, columns[0]);
+            }
 
-        var index = _random.Next(0, columns.Count);
-        return (index, columns[index]);
+            // Với 1-2 cột, giữ nguyên hành vi random độc lập hiện tại.
+            if (columns.Count == 2)
+            {
+                var twoColumnIndex = _random.Next(0, columns.Count);
+                return (twoColumnIndex, columns[twoColumnIndex]);
+            }
+
+            // Từ 3 cột trở lên, random trong toàn bộ các cột ngoại trừ cột vừa chọn.
+            // Chọn trong [0..Count-2], rồi dịch qua last index để không cần tạo list phụ.
+            var index = _lastRandomManualHwndColumnIndex < 0
+                ? _random.Next(0, columns.Count)
+                : _random.Next(0, columns.Count - 1);
+            if (_lastRandomManualHwndColumnIndex >= 0 &&
+                index >= _lastRandomManualHwndColumnIndex)
+            {
+                index++;
+            }
+
+            _lastRandomManualHwndColumnIndex = index;
+            return (index, columns[index]);
+        }
     }
 }
