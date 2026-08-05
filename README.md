@@ -237,8 +237,8 @@ những limit còn lại dùng `0` để disable):
 | `limit_max_gap` | `CurrentLimitMaxGap` | `int` | Reset confirm window ngay nếu `|gap| > limit_max_gap` trong mỗi tick |
 | `limit_max_tp` | `CurrentLimitMaxTp` | `double` | Reset TP window ngay nếu `profit > limit_max_tp` trong mỗi tick |
 | `close_min_profit` | `CurrentCloseMinProfit` | `double` | SÀN lợi nhuận tối thiểu: chặn **mọi close theo signal** (gap-reversal + TP) nếu profit A+B `< close_min_profit` (miễn khi lệnh quá hạn) |
-| `post_open_lock_seconds` | `CurrentPostOpenLockSeconds` | `int` | Sau OPEN, chặn mọi OPEN/CLOSE trên toàn bộ slot trong số giây cấu hình |
-| `post_close_lock_seconds` | `CurrentPostCloseLockSeconds` | `int` | Sau CLOSE, chặn mọi OPEN/CLOSE trên toàn bộ slot trong số giây cấu hình |
+| `post_open_lock_seconds` | `CurrentPostOpenLockSeconds` | `int` | Sau auto OPEN, chặn auto OPEN/CLOSE trên toàn bộ slot trong số giây cấu hình |
+| `post_close_lock_seconds` | `CurrentPostCloseLockSeconds` | `int` | Sau auto CLOSE, chặn auto OPEN/CLOSE trên toàn bộ slot trong số giây cấu hình |
 
 ### 7.2 Routing thực thi lệnh
 
@@ -410,7 +410,7 @@ Fields chính:
 | Rule | Spec |
 |------|------|
 | **A — Quota** | Cấu hình qua `max_total_opens`, `max_buy_opens`, `max_sell_opens` (code default 5/3/3). Đếm cả `PendingOpen + Live + PendingClose`. |
-| **B — Global action gate** | Gate atomic trên toàn portfolio. OPEN acquire lock theo `post_open_lock_seconds`; CLOSE acquire lock theo `post_close_lock_seconds`. Trong lock, mọi OPEN/CLOSE trên mọi slot đều bị chặn. Lock bắt đầu tại dispatch và được gia hạn từ thời điểm MMF confirm hoàn tất. |
+| **B — Auto action gate** | Gate atomic cho auto flow. Auto OPEN acquire lock theo `post_open_lock_seconds`; auto CLOSE theo `post_close_lock_seconds`. Manual/recovery không đọc hoặc ghi timer này; thay vào đó tạo non-auto barrier đến khi MMF confirm hoàn tất. |
 | **C — Opposite-side lock** | `opposite_side_lock_seconds` (default 300s): sau OPEN block OPEN opposite-side; same-side OPEN refresh timer. Đây là lớp bổ sung ngoài global action gate. |
 | **D — Priority close (extended)** | Khi nhiều slot trigger close cùng tick: (1) nếu `max_life_time_by_second > 0`, lọc ra các slot có tuổi `(now - OpenConfirmedAtUtc) > max_life_time_by_second` (overtime tier) → chọn profit cao nhất trong tier đó; (2) nếu không có slot nào overtime, chọn profit cao nhất trong tất cả eligible (Rule D gốc). Losers giữ window. `max_life_time_by_second = 0` (default) = disable tier, hành vi giống Rule D gốc. |
 
@@ -548,9 +548,14 @@ slot về `Live`; nếu dispatch đã bắt đầu hoặc còn một leg chưa �
 khi MMF xác nhận ticket đã biến mất. Chỉ lúc đó mới confirm và remove slot.
 
 Các flow tách biệt ở tầng quyết định nhưng dùng chung execution safety: mutex close vật lý,
-global action gate, ticket/row validation và pending retry. Vì vậy manual/recovery có thể trì hoãn
-auto bằng cooldown, nhưng không được làm sai ownership/state. Sau cooldown, auto chỉ đóng nếu
-latest signal/market condition vẫn hợp lệ.
+ticket/row validation và pending retry. Manual/recovery bypass và không mutate auto cooldown;
+chúng tạo non-auto barrier để tạm dừng auto và disable các nút Close khác cho đến khi MMF confirm,
+sau đó auto resume ngay với latest signal/market condition.
+
+Router dùng một physical dispatch mutex chung cho cả OPEN và CLOSE. Sau khi lấy mutex,
+router bắt buộc kiểm tra lại policy/signal và tìm lại `RowIndex` từ MMF theo đúng `Ticket`
+ngay trước native click. Nếu map lỗi hoặc ticket đã biến mất thì hủy close; tuyệt đối không
+fallback về row 0 hay dùng row index cũ đã chọn trước lúc chờ mutex.
 
 Contract này được khóa bằng `ManualPairClosePolicyTests` và các ownership/race tests trong
 `TradeDesktop.Tests/Portfolio/PortfolioCoordinatorTests.cs`. Mọi thay đổi execution policy hoặc
@@ -591,14 +596,15 @@ Log audit:
 Hệ thống luôn phải thỏa các invariants (verified qua integration tests):
 
 1. **Quota**: `LiveBuyCount ≤ MaxBuyOpens ∧ LiveSellCount ≤ MaxSellOpens ∧ LiveAndPendingTotalCount ≤ MaxTotalOpens`.
-2. **Global action gate**: giữa hai thao tác được phép liên tiếp, action sau chỉ acquire khi
+2. **Auto action gate**: giữa hai auto action liên tiếp, action sau chỉ acquire khi
    `now ≥ GlobalActionLockUntilUtc`; OPEN dùng `post_open_lock_seconds`, CLOSE dùng
    `post_close_lock_seconds`. Quy tắc áp dụng cho cả OPEN→OPEN, OPEN→CLOSE,
-   CLOSE→OPEN và CLOSE→CLOSE trên mọi slot.
+   CLOSE→OPEN và CLOSE→CLOSE của auto flow. Manual/recovery bypass và không mutate timer.
 3. **Opposite-lock**: nếu OPEN side X tại `T`, không OPEN side ¬X trong `[T, T+300s]` (CLOSE bypass).
 4. **Close priority**: slot được close phải có `LastProfitSnapshot ≥` mọi slot khác trong eligibleCloses.
 5. **Slot isolation**: mỗi slot có CloseSignalEngine riêng, không share window state.
-6. **Recovery**: thao tác recovery/manual vẫn đi qua cùng global action gate tại router.
+6. **Recovery/manual**: bypass auto cooldown nhưng tạo non-auto barrier; auto bị chặn và các nút
+   Close bị disable đến khi MMF xác nhận pair cân bằng/flat, sau đó resume ngay.
 7. **No quota leak**: abort path (timeout / failure) phải release slot khỏi coordinator.
 8. **Strategic authorization**: auto OPEN/CLOSE không được dispatch nếu signal hết hạn,
    latest condition không còn hợp lệ hoặc pair/slot/ticket không khớp.

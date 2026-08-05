@@ -47,14 +47,15 @@ DB integration deferred).
 - Config: `max_total_opens` / `max_buy_opens` / `max_sell_opens` (Phase 5 từ DB).
 - Implementation: `coordinator.CanOpenNewSlot(side, out reason)`.
 
-### Rule B — Global cooldown
-- Sau mỗi OPEN/CLOSE dispatch (Phase 8 trở đi — KHÔNG còn theo confirm time), random `Uniform(GlobalCooldownMin, Max)` seconds.
+### Rule B — Auto cooldown + non-auto close barrier
+- Auto OPEN/CLOSE dispatch tạo auto cooldown. Manual/recovery KHÔNG đọc và KHÔNG ghi timer auto cooldown.
 - Cooldown bắt đầu từ **DISPATCH time** (lúc tool gửi request đến router/broker), KHÔNG phải confirm time.
 - MAX semantics: cooldown lock chỉ extend, không rút ngắn. Confirm sau dispatch không reset lock.
-- Khoá toàn hệ thống — không slot nào được open/close trong window này.
+- Auto cooldown chỉ chặn auto OPEN/CLOSE. Manual/recovery bypass timer nhưng dùng non-auto close barrier.
 - Implementation: `coordinator.AllocatePendingOpenSlot` và `MarkSlotCloseTriggered` đều gọi `KickGlobalCooldown` để set `GlobalActionLockUntilUtc`. ViewModel `KickGlobalCooldown` cho path không qua slot lifecycle (external close).
 - Hardcode min=3, max=10 trong `DashboardViewModel.SyncPortfolioCoordinatorConfig` (sẽ chuyển sang DB sau).
-- **Phase 8 motivation**: pre-Phase 8 cooldown set tại confirm → race window dispatch→confirm (~500ms broker latency) cho phép 2 trade events được dispatch gần như đồng thời. User intent: min 3-10s giữa BẤT KỲ 2 trade events.
+- Khi manual/recovery đang xử lý, `HasNonAutoCloseInFlight=true`: chặn auto dispatch và disable toàn bộ
+  nút Close đến khi MMF xác nhận pair cân bằng/flat. Barrier không có thời gian chờ thêm sau confirm.
 
 ### Rule C — Opposite-side OPEN lock + Post-close lock (2 giá trị ĐỘC LẬP)
 - **2 cột DB riêng, mỗi cái default 300s** (`<= 0` → giữ default):
@@ -62,7 +63,8 @@ DB integration deferred).
   - `post_close_lock_seconds` → `RuntimeConfigState.CurrentPostCloseLockSeconds` → `coordinator.UpdatePostCloseLockConfig` (`DefaultPostCloseLockSeconds`).
   - Cả 2 push trong `SyncPortfolioCoordinatorConfig`.
 - **Lock 1 (sau OPEN)** — dùng `OppositeSideLockSeconds`: sau OPEN confirm → CHỈ block OPEN opposite-side. Same-side OPEN refresh timer. KHÔNG block CLOSE. State: `LastOpenConfirmedAtUtc`, `LastOpenConfirmedSide`.
-- **Lock 2 (post-close)** — dùng `PostCloseLockSeconds`: sau CLOSE confirm → block **MỌI OPEN (cả 2 chiều)**. KHÔNG block CLOSE. State: `LastCloseConfirmedAtUtc` (set trong `MarkSlotCloseConfirmed` → phủ auto/manual/external). Re-entry cooldown: vừa đóng phải chờ hết window mới vào lệnh mới.
+- **Lock 2 (post-close auto)** — dùng `PostCloseLockSeconds`: sau AUTO CLOSE confirm → block auto action/re-entry.
+  Manual/recovery close không set `LastCloseConfirmedAtUtc` và không tạo/gia hạn auto cooldown.
 - Cả 2 check nằm trong `CanOpenNewSlot` (chỉ chặn, không tạo open/close → không vi phạm Rule E). Block reason: `OPPOSITE_SIDE_LOCK` / `POST_CLOSE_LOCK`.
 
 ### Rule D — Priority close theo profit cao nhất
@@ -122,9 +124,11 @@ DB integration deferred).
   `ManualOpen`/`ManualClose` legacy vẫn bị `MANUAL_WITHOUT_SIGNAL_DISABLED`.
 - Ba flow tách biệt ở tầng quyết định/orchestration nhưng dùng chung lớp an toàn vật lý:
   `_closeDispatchInFlight`, `TryAcquireTradeAction`, ticket/row validation và pending-leg retry.
-- Global action gate có quyền trì hoãn close của pair khác. Snapshot trong cooldown bị bỏ qua theo Rule B;
-  sau cooldown auto chỉ dispatch khi signal mới/latest condition vẫn hợp lệ. Không được bypass gate để làm manual/recovery
-  “không ảnh hưởng” auto.
+- Auto action gate không áp dụng timer cho manual/recovery. Thay vào đó, non-auto barrier chặn auto và disable
+  các nút Close khác cho tới khi MMF confirm hoàn tất; sau đó nhả ngay, không tạo cooldown.
+- Mọi OPEN/CLOSE phải đi qua physical dispatch mutex chung trong router. CLOSE phải truyền `TradeMapName` và
+  router phải resolve lại `RowIndex` theo `Ticket` sau khi lấy mutex; map/ticket không hợp lệ thì fail closed,
+  không fallback row 0. Policy/signal cũng phải được kiểm tra lại sau thời gian chờ mutex.
 - Khi sửa logic này, bắt buộc giữ/pass `ManualPairClosePolicyTests`, các test `TryClaimSlotClose*`,
   `ManualClaim_DoesNotPreventAutoFromClaimingAnotherPair` và
   `PartialOpenRecoverySlot_CannotBeClaimedByAutoClose`.
@@ -236,7 +240,8 @@ TradeDesktop.Tests/            # xUnit tests
 ### Cooldown
 - Cooldown kick tại **DISPATCH time** (lúc tool gửi request — qua `AllocatePendingOpenSlot` / `MarkSlotCloseTriggered`), KHÔNG phải confirm time (Phase 8). MAX semantics: lock chỉ extend, confirm không reset.
 - App restart luôn kích cooldown mới (`coordinator.RecoverSlotsFromPersisted` kicks startup cooldown).
-- Manual buttons hidden (Phase 6 `IsManualTradeButtonsVisible=false`) — không có path bypass cooldown.
+- Manual buttons legacy hidden (Phase 6 `IsManualTradeButtonsVisible=false`). Manual per-pair là path riêng,
+  bypass auto cooldown nhưng bắt buộc qua non-auto barrier và physical close mutex.
 
 ### Config & recovery
 - Config load theo `MachineHostName` (lowercase, normalize).

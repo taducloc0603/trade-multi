@@ -36,6 +36,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     // Phase 3 §3.6 Risk 4: lock chống race khi 2 callers cùng pass CanOpenNewSlot rồi cùng allocate.
     private readonly object _allocateLock = new();
     private readonly object _tradeActionGateLock = new();
+    private readonly HashSet<string> _nonAutoCloseOperations = new(StringComparer.Ordinal);
     private string _scheduleSleepingJson = string.Empty;
 
     // Phase 7 metrics — monotonic counters; reset on Coordinator.Reset.
@@ -90,6 +91,16 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _state.Slots.Where(s => s.Status == PositionSlotStatus.PendingClose).ToList();
 
     public DateTime? GlobalActionLockUntilUtc => _state.GlobalActionLockUntilUtc;
+    public bool HasNonAutoCloseInFlight
+    {
+        get
+        {
+            lock (_tradeActionGateLock)
+            {
+                return _nonAutoCloseOperations.Count > 0;
+            }
+        }
+    }
     public DateTime? LastOpenConfirmedAtUtc => _state.LastOpenConfirmedAtUtc;
     public TradingPositionSide LastOpenConfirmedSide => _state.LastOpenConfirmedSide;
     public DateTime? LastCloseConfirmedAtUtc => _state.LastCloseConfirmedAtUtc;
@@ -121,6 +132,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var effectiveNow = ResolveEffectiveNowUtc(snapshot.TimestampUtc);
 
         // 2. Check global cooldown (Rule B). Phase 0: cooldown 0s default → never blocks.
+        if (HasNonAutoCloseInFlight)
+        {
+            return PortfolioSnapshotResult.Empty;
+        }
+
         if (_state.GlobalActionLockUntilUtc.HasValue && effectiveNow < _state.GlobalActionLockUntilUtc.Value)
         {
             // Phase 8: throttled log — chỉ log lần ĐẦU tiên bị block (tránh spam mỗi tick).
@@ -310,7 +326,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public TradeActionGateResult TryAcquireTradeAction(
         DateTime requestedAtUtc,
         string action,
-        string source)
+        string source,
+        TradeActionOrigin origin = TradeActionOrigin.Auto)
     {
         var requestedUtc = requestedAtUtc.Kind switch
         {
@@ -321,6 +338,32 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
         lock (_tradeActionGateLock)
         {
+            if (origin != TradeActionOrigin.Auto)
+            {
+                _logger?.Log(
+                    $"[TRADE_GATE][ACQUIRED] action={action} source={source} origin={origin} " +
+                    "autoCooldown=bypassed autoCooldownMutation=none");
+                return new TradeActionGateResult(
+                    Acquired: true,
+                    LockUntilUtc: _state.GlobalActionLockUntilUtc,
+                    Remaining: TimeSpan.Zero,
+                    CooldownSeconds: 0,
+                    Reason: "NON_AUTO_ACQUIRED");
+            }
+
+            if (_nonAutoCloseOperations.Count > 0)
+            {
+                _logger?.Log(
+                    $"[TRADE_GATE][BLOCKED] action={action} source={source} origin={origin} " +
+                    $"reason=NON_AUTO_CLOSE_IN_FLIGHT count={_nonAutoCloseOperations.Count}");
+                return new TradeActionGateResult(
+                    Acquired: false,
+                    LockUntilUtc: _state.GlobalActionLockUntilUtc,
+                    Remaining: TimeSpan.Zero,
+                    CooldownSeconds: 0,
+                    Reason: "NON_AUTO_CLOSE_IN_FLIGHT");
+            }
+
             if (_state.GlobalActionLockUntilUtc is { } lockUntilUtc
                 && requestedUtc < lockUntilUtc)
             {
@@ -336,10 +379,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                     Reason: "GLOBAL_ACTION_COOLDOWN");
             }
 
-            // Global portfolio lock by action type. Once configured, these fixed DB values
-            // replace the legacy start_wait_time/end_wait_time random cooldown:
-            // OPEN  -> blocks every following OPEN/CLOSE for post_open_lock_seconds.
-            // CLOSE -> blocks every following OPEN/CLOSE for post_close_lock_seconds.
+            // Auto-only lock by action type. Manual/recovery returned above without reading
+            // or mutating this timer and are serialized by the non-auto barrier + physical mutex.
             var normalizedAction = (action ?? string.Empty).Trim().ToUpperInvariant();
             var cooldownSec = normalizedAction switch
             {
@@ -362,6 +403,32 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 Remaining: cooldownSec > 0 ? TimeSpan.FromSeconds(cooldownSec) : TimeSpan.Zero,
                 CooldownSeconds: cooldownSec,
                 Reason: cooldownSec > 0 ? "ACQUIRED" : "ACQUIRED_COOLDOWN_DISABLED");
+        }
+    }
+
+    public void BeginNonAutoCloseOperation(string operationId)
+    {
+        if (string.IsNullOrWhiteSpace(operationId)) return;
+        lock (_tradeActionGateLock)
+        {
+            if (_nonAutoCloseOperations.Add(operationId))
+            {
+                _logger?.Log(
+                    $"[TRADE_GATE][NON_AUTO_BARRIER][BEGIN] operationId={operationId} count={_nonAutoCloseOperations.Count}");
+            }
+        }
+    }
+
+    public void EndNonAutoCloseOperation(string operationId)
+    {
+        if (string.IsNullOrWhiteSpace(operationId)) return;
+        lock (_tradeActionGateLock)
+        {
+            if (_nonAutoCloseOperations.Remove(operationId))
+            {
+                _logger?.Log(
+                    $"[TRADE_GATE][NON_AUTO_BARRIER][END] operationId={operationId} count={_nonAutoCloseOperations.Count}");
+            }
         }
     }
 
@@ -423,7 +490,12 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 return false;
             }
 
-            return slot.TryMarkCloseTriggered(triggeredAtUtc, owner);
+            var claimed = slot.TryMarkCloseTriggered(triggeredAtUtc, owner);
+            if (claimed && owner is CloseExecutionOwner.Manual or CloseExecutionOwner.Recovery)
+            {
+                BeginNonAutoCloseOperation(pairId);
+            }
+            return claimed;
         }
     }
 
@@ -432,15 +504,21 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var slot = _state.GetSlotByPairId(pairId);
         if (slot is null) return;
 
+        var closeOwner = slot.CloseOwner;
         slot.MarkCloseConfirmed(confirmedAtUtc);
         Interlocked.Increment(ref _totalClosesAllTime);
         _lastTpCheckLogAtUtc.Remove(slot.SlotId);
 
-        // Rule C (post-close) — anchor khoá MỌI open (cả 2 chiều) trong OppositeSideLockSeconds
-        // giây tính từ close confirm. Phủ auto/manual/external (mọi path đều qua đây).
-        _state.LastCloseConfirmedAtUtc = confirmedAtUtc;
+        // Rule C: only strategic auto close anchors the auto re-entry/action lock.
+        // Manual/recovery must not read or mutate the auto cooldown timer.
+        if (closeOwner == CloseExecutionOwner.Auto)
+        {
+            _state.LastCloseConfirmedAtUtc = confirmedAtUtc;
+        }
 
-        if (_state.IsPostCloseLockConfigured && _state.PostCloseLockSeconds > 0)
+        if (closeOwner == CloseExecutionOwner.Auto
+            && _state.IsPostCloseLockConfigured
+            && _state.PostCloseLockSeconds > 0)
         {
             ExtendGlobalActionLock(
                 confirmedAtUtc.AddSeconds(_state.PostCloseLockSeconds),
@@ -452,19 +530,27 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var lockSummary = _state.GlobalActionLockUntilUtc.HasValue
             ? $"lockUntil={_state.GlobalActionLockUntilUtc:HH:mm:ss}UTC"
             : "lockNone";
-        var postCloseLockUntilUtc = confirmedAtUtc.AddSeconds(_state.PostCloseLockSeconds);
         _logger?.Log(
             $"[SLOT][CLOSE_CONFIRMED] slot={slot.SlotId} side={slot.Side} " +
-            $"profit={slot.LastProfitSnapshot:F2} closeReason={slot.LastCloseReason ?? CloseSignalReason.Gap} {lockSummary}");
-        _logger?.Log(
-            $"[SLOT][WAITING][POST_CLOSE_LOCK] Block ALL OPEN trong {_state.PostCloseLockSeconds}s " +
-            $"(đến {postCloseLockUntilUtc:HH:mm:ss} UTC) — Rule C: sau CLOSE slot={slot.SlotId} side={slot.Side}, chặn CẢ 2 CHIỀU (re-entry lock)");
+            $"profit={slot.LastProfitSnapshot:F2} closeReason={slot.LastCloseReason ?? CloseSignalReason.Gap} " +
+            $"owner={closeOwner} {lockSummary}");
+        if (closeOwner == CloseExecutionOwner.Auto)
+        {
+            var postCloseLockUntilUtc = confirmedAtUtc.AddSeconds(_state.PostCloseLockSeconds);
+            _logger?.Log(
+                $"[SLOT][WAITING][POST_CLOSE_LOCK] Block AUTO action trong {_state.PostCloseLockSeconds}s " +
+                $"(đến {postCloseLockUntilUtc:HH:mm:ss} UTC) — slot={slot.SlotId} side={slot.Side}");
+        }
     }
 
     public void CloseSlotManually(string pairId, DateTime confirmedAtUtc)
     {
         var slot = _state.GetSlotByPairId(pairId);
-        if (slot is null) return;
+        if (slot is null)
+        {
+            EndNonAutoCloseOperation(pairId);
+            return;
+        }
 
         if (slot.Status != PositionSlotStatus.Closed)
         {
@@ -477,6 +563,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             _state.RemoveSlot(closed);
             _logger?.Log($"[SLOT][MANUAL_CLOSE] pairId={pairId} confirmed+removed");
         }
+        EndNonAutoCloseOperation(pairId);
     }
 
     public PositionSlot RegisterSyncedSlot(
@@ -758,9 +845,18 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public void AbortPendingClose(string pairId)
     {
         var slot = _state.GetSlotByPairId(pairId);
-        if (slot is null) return;
+        if (slot is null)
+        {
+            EndNonAutoCloseOperation(pairId);
+            return;
+        }
 
+        var closeOwner = slot.CloseOwner;
         slot.ClearCloseExecutionPending();
+        if (closeOwner is CloseExecutionOwner.Manual or CloseExecutionOwner.Recovery)
+        {
+            EndNonAutoCloseOperation(pairId);
+        }
         if (slot.Status == PositionSlotStatus.PendingClose)
         {
             slot.Status = PositionSlotStatus.Live;
@@ -773,11 +869,19 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _state.Clear();
         _openSignalEngine.Reset();
         _wasBlockedByCooldownLastTick = false;
+        lock (_tradeActionGateLock)
+        {
+            _nonAutoCloseOperations.Clear();
+        }
     }
 
     public void ClearAllSlots()
     {
         _state.Clear();
+        lock (_tradeActionGateLock)
+        {
+            _nonAutoCloseOperations.Clear();
+        }
     }
 
     /// <summary>
@@ -843,7 +947,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         if (startupCooldownSec > 0)
         {
             _logger?.Log(
-                $"[SLOT][WAITING] Block ALL open/close trong {startupCooldownSec}s " +
+                $"[SLOT][WAITING] Block AUTO open/close trong {startupCooldownSec}s " +
                 $"(đến {_state.GlobalActionLockUntilUtc:HH:mm:ss} UTC) — reason=app restart cooldown");
         }
     }

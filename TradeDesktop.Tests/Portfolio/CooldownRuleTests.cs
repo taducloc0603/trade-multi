@@ -1,3 +1,4 @@
+using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
 using TradeDesktop.Application.Services.Portfolio;
@@ -109,6 +110,55 @@ public sealed class CooldownRuleTests
 
         Assert.Single(results.Where(x => x.Acquired));
         Assert.Equal(31, results.Count(x => !x.Acquired));
+    }
+
+    [Theory]
+    [InlineData(TradeActionOrigin.Manual)]
+    [InlineData(TradeActionOrigin.Recovery)]
+    public void NonAutoAction_BypassesAndDoesNotMutateAutoCooldown(TradeActionOrigin origin)
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateCooldownConfig(30, 30);
+        var now = DateTime.UtcNow;
+        Assert.True(coordinator.TryAcquireTradeAction(now, "OPEN", "auto", TradeActionOrigin.Auto).Acquired);
+        var autoLockUntil = coordinator.GlobalActionLockUntilUtc;
+
+        var result = coordinator.TryAcquireTradeAction(
+            now.AddSeconds(1),
+            "CLOSE",
+            "non-auto",
+            origin);
+
+        Assert.True(result.Acquired);
+        Assert.Equal(0, result.CooldownSeconds);
+        Assert.Equal(autoLockUntil, coordinator.GlobalActionLockUntilUtc);
+    }
+
+    [Fact]
+    public void NonAutoCloseBarrier_BlocksAutoButNotManualOrRecovery()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateCooldownConfig(0, 0);
+        coordinator.BeginNonAutoCloseOperation("p1");
+
+        Assert.False(coordinator.TryAcquireTradeAction(
+            DateTime.UtcNow, "CLOSE", "auto", TradeActionOrigin.Auto).Acquired);
+        Assert.True(coordinator.TryAcquireTradeAction(
+            DateTime.UtcNow, "CLOSE", "manual", TradeActionOrigin.Manual).Acquired);
+        Assert.True(coordinator.TryAcquireTradeAction(
+            DateTime.UtcNow, "CLOSE", "recovery", TradeActionOrigin.Recovery).Acquired);
+    }
+
+    [Fact]
+    public void EndingNonAutoCloseBarrier_ImmediatelyResumesAuto()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateCooldownConfig(0, 0);
+        coordinator.BeginNonAutoCloseOperation("p1");
+        coordinator.EndNonAutoCloseOperation("p1");
+
+        Assert.True(coordinator.TryAcquireTradeAction(
+            DateTime.UtcNow, "CLOSE", "auto", TradeActionOrigin.Auto).Acquired);
     }
 
     [Theory]

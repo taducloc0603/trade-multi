@@ -22,6 +22,7 @@ public interface IPortfolioCoordinator
 
     // === Diagnostic info (Phase 6 UI status bar) ===
     DateTime? GlobalActionLockUntilUtc { get; }
+    bool HasNonAutoCloseInFlight { get; }
     DateTime? LastOpenConfirmedAtUtc { get; }
     TradingPositionSide LastOpenConfirmedSide { get; }
     DateTime? LastCloseConfirmedAtUtc { get; }
@@ -34,7 +35,10 @@ public interface IPortfolioCoordinator
     TradeActionGateResult TryAcquireTradeAction(
         DateTime requestedAtUtc,
         string action,
-        string source);
+        string source,
+        TradeActionOrigin origin = TradeActionOrigin.Auto);
+    void BeginNonAutoCloseOperation(string operationId);
+    void EndNonAutoCloseOperation(string operationId);
 
     // === Phase 7 metrics (monitoring) ===
     PortfolioMetrics GetMetrics();
@@ -105,6 +109,13 @@ public sealed record TradeActionGateResult(
     TimeSpan Remaining,
     int CooldownSeconds,
     string Reason);
+
+public enum TradeActionOrigin
+{
+    Auto = 0,
+    Manual = 1,
+    Recovery = 2
+}
 
 public sealed record CloseDispatchGuardResult(
     bool Allowed,

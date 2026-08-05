@@ -13,6 +13,8 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
     private readonly ITradeSessionFileLogger _logger;
     private readonly IPortfolioCoordinator _portfolioCoordinator;
     private readonly IRuntimeConfigProvider _runtimeConfig;
+    private readonly ITradesSharedMemoryReader _tradesSharedMemoryReader;
+    private readonly SemaphoreSlim _physicalDispatchGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, byte> _consumedSignalIds = new();
     private const int SignalDispatchMaxAgeMs = 1000;
 
@@ -20,13 +22,15 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         IEnumerable<ITradePlatformExecutor> executors,
         ITradeSessionFileLogger logger,
         IPortfolioCoordinator portfolioCoordinator,
-        IRuntimeConfigProvider runtimeConfig)
+        IRuntimeConfigProvider runtimeConfig,
+        ITradesSharedMemoryReader tradesSharedMemoryReader)
     {
         _mt4Executor = executors.First(x => x.Platform == TradeLegPlatform.Mt4);
         _mt5Executor = executors.First(x => x.Platform == TradeLegPlatform.Mt5);
         _logger = logger;
         _portfolioCoordinator = portfolioCoordinator;
         _runtimeConfig = runtimeConfig;
+        _tradesSharedMemoryReader = tradesSharedMemoryReader;
     }
 
     public async Task<ManualTradeResult> OpenPairAsync(TradeOpenPairRequest request, CancellationToken cancellationToken = default)
@@ -50,18 +54,37 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             return PolicyBlockedResult("OPEN", request.Context, "SIGNAL_ALREADY_CONSUMED");
         }
 
-        var gate = _portfolioCoordinator.TryAcquireTradeAction(
-            DateTime.UtcNow,
-            action: "OPEN",
-            source: "TradeExecutionRouter.OpenPairAsync");
-        if (!gate.Acquired)
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            await _physicalDispatchGate.WaitAsync(cancellationToken);
+        }
+        catch
         {
             ReleaseSignalReservation(request.Context);
-            return BlockedResult("OPEN", gate);
+            throw;
         }
-        LogPolicyAllowed(request.Context, "OPEN");
+        try
+        {
+            policy = ValidateOpenPolicy(request);
+            if (!policy.Allowed)
+            {
+                ReleaseSignalReservation(request.Context);
+                return PolicyBlockedResult("OPEN", request.Context, policy.Code);
+            }
 
-        var stopwatch = Stopwatch.StartNew();
+            var gate = _portfolioCoordinator.TryAcquireTradeAction(
+                DateTime.UtcNow,
+                action: "OPEN",
+                source: "TradeExecutionRouter.OpenPairAsync",
+                origin: ResolveActionOrigin(request.Context.Reason));
+            if (!gate.Acquired)
+            {
+                ReleaseSignalReservation(request.Context);
+                return BlockedResult("OPEN", gate);
+            }
+            LogPolicyAllowed(request.Context, "OPEN");
+
         SafeLog(
             "[ROUTER][INFO] Open pair request: " +
             $"legA={{platform={request.LegA.Platform},action={request.LegA.Action},hwnd={request.LegA.ChartHwnd},delay={request.LegA.DelayMs}ms}} " +
@@ -70,8 +93,6 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         Debug.WriteLine($"[TradeRouter][Open] leg={request.LegA.Exchange}, platform={request.LegA.Platform}, action={request.LegA.Action}, chartHwnd={request.LegA.ChartHwnd}");
         Debug.WriteLine($"[TradeRouter][Open] leg={request.LegB.Exchange}, platform={request.LegB.Platform}, action={request.LegB.Action}, chartHwnd={request.LegB.ChartHwnd}");
 
-        try
-        {
             var result = await ExecuteOpenPairPerLegAsync(request, cancellationToken);
             stopwatch.Stop();
             var legA = result.Legs.FirstOrDefault(x => string.Equals(x.Exchange, "A", StringComparison.OrdinalIgnoreCase));
@@ -88,6 +109,10 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             stopwatch.Stop();
             SafeLog($"[ROUTER][ERROR] Open pair threw after {stopwatch.ElapsedMilliseconds}ms: {ex}");
             throw;
+        }
+        finally
+        {
+            _physicalDispatchGate.Release();
         }
     }
 
@@ -138,19 +163,47 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             return PolicyBlockedResult("CLOSE", request.Context, "SIGNAL_ALREADY_CONSUMED");
         }
 
-        var gate = _portfolioCoordinator.TryAcquireTradeAction(
-            DateTime.UtcNow,
-            action: "CLOSE",
-            source: "TradeExecutionRouter.ClosePairAsync");
-        if (!gate.Acquired)
-        {
-            ReleaseSignalReservation(request.Context);
-            return BlockedResult("CLOSE", gate);
-        }
-        LogPolicyAllowed(request.Context, "CLOSE");
-
         try
         {
+            await _physicalDispatchGate.WaitAsync(cancellationToken);
+        }
+        catch
+        {
+            ReleaseSignalReservation(request.Context);
+            throw;
+        }
+        try
+        {
+            policy = ValidateClosePolicy(request);
+            if (!policy.Allowed)
+            {
+                ReleaseSignalReservation(request.Context);
+                return PolicyBlockedResult("CLOSE", request.Context, policy.Code);
+            }
+
+            if (!TryRefreshCloseRows(request, out request, out var refreshError))
+            {
+                ReleaseSignalReservation(request.Context);
+                SafeLog($"[ROUTER][WARN] Close pair cancelled before dispatch: {refreshError}");
+                return new ManualTradeResult(
+                    Label: "CLOSE_STALE_TARGET",
+                    Success: false,
+                    Legs: [],
+                    ErrorMessage: refreshError);
+            }
+
+            var gate = _portfolioCoordinator.TryAcquireTradeAction(
+                DateTime.UtcNow,
+                action: "CLOSE",
+                source: "TradeExecutionRouter.ClosePairAsync",
+                origin: ResolveActionOrigin(request.Context.Reason));
+            if (!gate.Acquired)
+            {
+                ReleaseSignalReservation(request.Context);
+                return BlockedResult("CLOSE", gate);
+            }
+            LogPolicyAllowed(request.Context, "CLOSE");
+
             var result = await ExecuteClosePairPerLegAsync(request, cancellationToken);
             stopwatch.Stop();
             var legA = result.Legs.FirstOrDefault(x => string.Equals(x.Exchange, "A", StringComparison.OrdinalIgnoreCase));
@@ -168,6 +221,73 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             SafeLog($"[ROUTER][ERROR] Close pair threw after {stopwatch.ElapsedMilliseconds}ms: {ex}");
             throw;
         }
+        finally
+        {
+            _physicalDispatchGate.Release();
+        }
+    }
+
+    private bool TryRefreshCloseRows(
+        TradeClosePairRequest source,
+        out TradeClosePairRequest refreshed,
+        out string error)
+    {
+        refreshed = source;
+        error = string.Empty;
+
+        if (!TryRefreshCloseLeg(source.LegA, out var legA, out error) ||
+            !TryRefreshCloseLeg(source.LegB, out var legB, out error))
+        {
+            return false;
+        }
+
+        refreshed = source with { LegA = legA, LegB = legB };
+        return true;
+    }
+
+    private bool TryRefreshCloseLeg(
+        TradeCloseLegRequest? source,
+        out TradeCloseLegRequest? refreshed,
+        out string error)
+    {
+        refreshed = source;
+        error = string.Empty;
+        if (source is null)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(source.TradeMapName))
+        {
+            error = $"Close {source.Exchange} cancelled: missing trade map for ticket={source.Ticket}";
+            return false;
+        }
+
+        var read = _tradesSharedMemoryReader.ReadTrades(source.TradeMapName);
+        if (!read.IsMapAvailable || !read.IsParseSuccess)
+        {
+            error = $"Close {source.Exchange} cancelled: MMF unavailable/invalid map={source.TradeMapName} ticket={source.Ticket}";
+            return false;
+        }
+
+        var rowIndex = -1;
+        for (var index = 0; index < read.Records.Count; index++)
+        {
+            if (read.Records[index].Ticket == source.Ticket)
+            {
+                rowIndex = index;
+                break;
+            }
+        }
+
+        if (rowIndex < 0)
+        {
+            error = $"Close {source.Exchange} cancelled: ticket={source.Ticket} no longer exists in map={source.TradeMapName}";
+            return false;
+        }
+
+        refreshed = source with { RowIndex = rowIndex };
+        return true;
     }
 
     private static ManualTradeResult BlockedResult(string action, TradeActionGateResult gate)
@@ -177,10 +297,22 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             Label: $"{action}_BLOCKED",
             Success: false,
             Legs: [],
-            ErrorMessage: $"GLOBAL_ACTION_COOLDOWN: còn {remainingMs}ms",
+            ErrorMessage: $"{gate.Reason}: còn {remainingMs}ms",
             BlockedByGlobalActionGate: true,
             GateRemainingMilliseconds: remainingMs);
     }
+
+    private static TradeActionOrigin ResolveActionOrigin(TradeExecutionReason reason)
+        => reason switch
+        {
+            TradeExecutionReason.ManualOpen or TradeExecutionReason.ManualClose or TradeExecutionReason.ManualPairClose
+                => TradeActionOrigin.Manual,
+            TradeExecutionReason.OpenPartialRollback
+                or TradeExecutionReason.ExternalPartialCloseRecovery
+                or TradeExecutionReason.PendingCloseRetry
+                => TradeActionOrigin.Recovery,
+            _ => TradeActionOrigin.Auto
+        };
 
     private ManualTradeResult PolicyBlockedResult(
         string action,

@@ -233,7 +233,8 @@ public sealed class DashboardViewModel : ObservableObject
     {
         LegacyManual = 0,
         Auto = 1,
-        ManualPair = 2
+        ManualPair = 2,
+        Recovery = 3
     }
 
     private sealed class PendingOpenPairState
@@ -405,7 +406,8 @@ public sealed class DashboardViewModel : ObservableObject
         SellCommand = new AsyncRelayCommand(SellAsync, CanManualOpen);
         CloseOrderCommand = new AsyncRelayCommand(CloseOrderAsync, CanManualClose);
         ClosePairManuallyCommand = new AsyncRelayCommand<TradePairRealtimeProfitRowViewModel?>(
-            row => ManualClosePairBySlotAsync(row?.PairId ?? string.Empty));
+            row => ManualClosePairBySlotAsync(row?.PairId ?? string.Empty),
+            CanManualPairClose);
 
         TradeTab = new OrderInfoTabViewModel(
             OrderTabType.Trade,
@@ -684,6 +686,21 @@ public sealed class DashboardViewModel : ObservableObject
     private bool CanManualClose()
         => IsTradingLogicEnabled
            && HasManualTradeHwndConfig;
+
+    private bool CanManualPairClose(TradePairRealtimeProfitRowViewModel? row)
+        => row is not null
+           && !string.IsNullOrWhiteSpace(row.PairId)
+           && !_portfolioCoordinator.HasNonAutoCloseInFlight;
+
+    private void RaiseClosePairCanExecuteChanged()
+        => ClosePairManuallyCommand.RaiseCanExecuteChanged();
+
+    private void RaiseNonAutoCloseUiStateChanged()
+    {
+        RaiseClosePairCanExecuteChanged();
+        RaiseCurrentPositionTextChanged();
+        OnPropertyChanged(nameof(CurrentPhaseText));
+    }
 
     private void RaiseManualOpenCanExecuteChanged()
     {
@@ -1220,7 +1237,8 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeHwnd: selectA.Request.TradeHwnd,
                         Ticket: selectA.Request.Ticket,
                         Action: TradeLegAction.Close,
-                        RowIndex: selectA.Request.RowIndex),
+                        RowIndex: selectA.Request.RowIndex,
+                        TradeMapName: selectA.TradeMapName),
                 LegB: selectB.Request is null
                     ? null
                     : new TradeCloseLegRequest(
@@ -1229,7 +1247,8 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeHwnd: selectB.Request.TradeHwnd,
                         Ticket: selectB.Request.Ticket,
                         Action: TradeLegAction.Close,
-                        RowIndex: selectB.Request.RowIndex),
+                        RowIndex: selectB.Request.RowIndex,
+                        TradeMapName: selectB.TradeMapName),
                 Context: CreateExecutionContext(
                     TradeExecutionReason.ManualClose,
                     "manual-close-legacy")));
@@ -1367,6 +1386,7 @@ public sealed class DashboardViewModel : ObservableObject
                         $"    - [{DateTime.Now:HH:mm:ss.fff}] Đóng tay bị chặn: cặp {pairId} đã được luồng khác nhận xử lý"));
                 return;
             }
+            RaiseNonAutoCloseUiStateChanged();
 
             // Capture pending BEFORE dispatch (chống race với polling). isAutoFlow=false.
             CapturePendingCloseRequest(
@@ -1401,14 +1421,16 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeHwnd: selectA.Request.TradeHwnd,
                         Ticket: selectA.Request.Ticket,
                         Action: TradeLegAction.Close,
-                        RowIndex: selectA.Request.RowIndex),
+                        RowIndex: selectA.Request.RowIndex,
+                        TradeMapName: selectA.TradeMapName),
                     LegB: new TradeCloseLegRequest(
                         Exchange: selectB.Request.Exchange,
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB),
                         TradeHwnd: selectB.Request.TradeHwnd,
                         Ticket: selectB.Request.Ticket,
                         Action: TradeLegAction.Close,
-                        RowIndex: selectB.Request.RowIndex),
+                        RowIndex: selectB.Request.RowIndex,
+                        TradeMapName: selectB.TradeMapName),
                     Context: CreateExecutionContext(
                         TradeExecutionReason.ManualPairClose,
                         "manual-close-slot",
@@ -1419,6 +1441,7 @@ public sealed class DashboardViewModel : ObservableObject
             if (result.IsDispatchBlocked)
             {
                 _portfolioCoordinator.AbortPendingClose(slot.PairId);
+                RaiseNonAutoCloseUiStateChanged();
                 closeClaimed = false;
                 RemovePendingCloseRequests(appCloseRequestRawMs);
                 if (_pendingClosePairById.TryGetValue(slot.PairId, out var blockedPending))
@@ -1437,6 +1460,7 @@ public sealed class DashboardViewModel : ObservableObject
             if (closeClaimed && !dispatchStarted)
             {
                 _portfolioCoordinator.AbortPendingClose(pairId);
+                RaiseNonAutoCloseUiStateChanged();
                 if (appCloseRequestRawMs != 0)
                 {
                     RemovePendingCloseRequests(appCloseRequestRawMs);
@@ -2023,7 +2047,8 @@ public sealed class DashboardViewModel : ObservableObject
                             Ticket: selectA.Request.Ticket,
                             Action: TradeLegAction.Close,
                             DelayMs: delayCloseAMs,
-                            RowIndex: selectA.Request.RowIndex),
+                            RowIndex: selectA.Request.RowIndex,
+                            TradeMapName: selectA.TradeMapName),
                     LegB: selectB.Request is null
                         ? null
                         : new TradeCloseLegRequest(
@@ -2033,7 +2058,8 @@ public sealed class DashboardViewModel : ObservableObject
                             Ticket: selectB.Request.Ticket,
                             Action: TradeLegAction.Close,
                             DelayMs: delayCloseBMs,
-                            RowIndex: selectB.Request.RowIndex),
+                            RowIndex: selectB.Request.RowIndex,
+                            TradeMapName: selectB.TradeMapName),
                     Context: CreateStrategicContext(
                         TradeExecutionReason.StrategicClose,
                         "auto-close",
@@ -4006,6 +4032,9 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task<bool> CloseOpenedLegByTimeoutAsync(PendingOpenTimeoutAction action, CancellationToken cancellationToken)
     {
+        _portfolioCoordinator.BeginNonAutoCloseOperation(action.PairId);
+        System.Windows.Application.Current.Dispatcher.Invoke(RaiseNonAutoCloseUiStateChanged);
+
         var isExchangeA = string.Equals(action.OpenedExchange, "A", StringComparison.OrdinalIgnoreCase);
         var platform = ResolveTradeLegPlatform(isExchangeA ? _runtimeConfigState.CurrentPlatformA : _runtimeConfigState.CurrentPlatformB);
         var tradeHwnd = isExchangeA ? _runtimeConfigState.CurrentTradeHwndA : _runtimeConfigState.CurrentTradeHwndB;
@@ -4031,7 +4060,12 @@ public sealed class DashboardViewModel : ObservableObject
                 volume: action.Volume,
                 isAutoFlow: action.IsAutoFlow,
                 slotNumber: action.SlotNumber,
-                exchangeLabel: action.OpenedExchange);
+                exchangeLabel: action.OpenedExchange,
+                pairIdOverride: action.PairId);
+            if (_pendingClosePairById.TryGetValue(action.PairId, out var recoveryState))
+            {
+                recoveryState.Origin = PendingCloseOrigin.Recovery;
+            }
         }
         else
         {
@@ -4073,7 +4107,8 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeHwnd: tradeHwnd,
                         Ticket: action.Ticket,
                         Action: TradeLegAction.Close,
-                        RowIndex: rowIndex)
+                        RowIndex: rowIndex,
+                        TradeMapName: action.TradeMapName)
                     : null,
                 LegB: isExchangeA
                     ? null
@@ -4083,7 +4118,8 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeHwnd: tradeHwnd,
                         Ticket: action.Ticket,
                         Action: TradeLegAction.Close,
-                        RowIndex: rowIndex),
+                        RowIndex: rowIndex,
+                        TradeMapName: action.TradeMapName),
                 Context: CreateRecoveryContext(
                     TradeExecutionReason.OpenPartialRollback,
                     "open-timeout-rollback",
@@ -4095,6 +4131,8 @@ public sealed class DashboardViewModel : ObservableObject
 
         if (closeResult.IsDispatchBlocked)
         {
+            _portfolioCoordinator.EndNonAutoCloseOperation(action.PairId);
+            System.Windows.Application.Current.Dispatcher.Invoke(RaiseNonAutoCloseUiStateChanged);
             RemovePendingCloseRequests(appCloseRequestRawMs);
             if (_pendingOpenPairById.TryGetValue(action.PairId, out var openState))
             {
@@ -4282,12 +4320,19 @@ public sealed class DashboardViewModel : ObservableObject
 
     private void TryBeginWaitAfterCloseFromPending(PendingClosePairState state)
     {
+        if (state.Origin == PendingCloseOrigin.Recovery)
+        {
+            _portfolioCoordinator.EndNonAutoCloseOperation(state.PairId);
+            RaiseNonAutoCloseUiStateChanged();
+        }
+
         if (!state.IsAutoFlow)
         {
             // Đóng tay theo pairId: remove slot khỏi coordinator (coordinator-only, không đụng auto state).
             if (state.Origin == PendingCloseOrigin.ManualPair)
             {
                 _portfolioCoordinator.CloseSlotManually(state.PairId, DateTime.UtcNow);
+                RaiseNonAutoCloseUiStateChanged();
                 SafeVmLog($"[CYCLE][INFO] Manual close resolved: pairId={state.PairId}");
                 RaiseCurrentPositionTextChanged();
             }
@@ -4991,9 +5036,17 @@ public sealed class DashboardViewModel : ObservableObject
             var appCloseRequestTimeLocal = DateTimeOffset.Now;
             var appCloseRequestRawMs = Environment.TickCount64;
             var slot = Math.Max(0, _autoSlot - 1);
+            var recoveryPairId = _activeAutoCycle?.PairIdA
+                ?? _activeAutoCycle?.PairIdB
+                ?? (_pairIdByTicket.TryGetValue(selection.Request.Ticket, out var mappedPairId)
+                    ? mappedPairId
+                    : $"EXTERNAL-{selection.Request.Ticket}");
+
+            _portfolioCoordinator.BeginNonAutoCloseOperation(recoveryPairId);
 
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
+                RaiseNonAutoCloseUiStateChanged();
                 // Set _activeAutoCloseRecoveryCycle để FinalizeCloseFlowIfPairFlat
                 // hoạt động đúng sau khi close xong (không bị block bởi "no active close recovery cycle")
                 var activeCycle = _activeAutoCycle;
@@ -5036,7 +5089,13 @@ public sealed class DashboardViewModel : ObservableObject
                     volume: selection.Volume,
                     isAutoFlow: activeCycle is not null,
                     slotNumber: slot,
-                    exchangeLabel: remainingExchange);
+                    exchangeLabel: remainingExchange,
+                    pairIdOverride: recoveryPairId);
+
+                if (_pendingClosePairById.TryGetValue(recoveryPairId, out var recoveryState))
+                {
+                    recoveryState.Origin = PendingCloseOrigin.Recovery;
+                }
             });
 
             var closeRequest = new TradeClosePairRequest(
@@ -5048,7 +5107,8 @@ public sealed class DashboardViewModel : ObservableObject
                         Ticket: selection.Request.Ticket,
                         Action: TradeLegAction.Close,
                         DelayMs: 0,
-                        RowIndex: selection.Request.RowIndex)
+                        RowIndex: selection.Request.RowIndex,
+                        TradeMapName: selection.TradeMapName)
                     : null,
                 LegB: isExchangeA
                     ? null
@@ -5059,13 +5119,12 @@ public sealed class DashboardViewModel : ObservableObject
                         Ticket: selection.Request.Ticket,
                         Action: TradeLegAction.Close,
                         DelayMs: 0,
-                        RowIndex: selection.Request.RowIndex),
+                        RowIndex: selection.Request.RowIndex,
+                        TradeMapName: selection.TradeMapName),
                 Context: CreateRecoveryContext(
                     TradeExecutionReason.ExternalPartialCloseRecovery,
                     "external-partial-close",
-                    _activeAutoCycle?.PairIdA
-                        ?? _activeAutoCycle?.PairIdB
-                        ?? $"EXTERNAL-{selection.Request.Ticket}",
+                    recoveryPairId,
                     _activeAutoCycle?.Slot,
                     selection.Request.Ticket,
                     $"partial-state-remaining-{remainingExchange}"));
@@ -5074,9 +5133,11 @@ public sealed class DashboardViewModel : ObservableObject
 
             if (closeResult.IsDispatchBlocked)
             {
+                _portfolioCoordinator.EndNonAutoCloseOperation(recoveryPairId);
                 RemovePendingCloseRequests(appCloseRequestRawMs);
                 _activeAutoCloseRecoveryCycle = null;
                 _externalPartialCloseInFlight = false;
+                System.Windows.Application.Current.Dispatcher.Invoke(RaiseNonAutoCloseUiStateChanged);
                 SafeVmLog($"[TRADE_GATE][BLOCKED] external CLOSE remainingMs={closeResult.GateRemainingMilliseconds}");
                 return;
             }
@@ -5226,7 +5287,8 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeHwnd: action.TradeHwnd,
                         Ticket: action.Ticket,
                         Action: TradeLegAction.Close,
-                        RowIndex: rowIndex)
+                        RowIndex: rowIndex,
+                        TradeMapName: action.TradeMapName)
                     : null,
                 LegB: string.Equals(action.Exchange, "B", StringComparison.OrdinalIgnoreCase)
                     ? new TradeCloseLegRequest(
@@ -5235,7 +5297,8 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeHwnd: action.TradeHwnd,
                         Ticket: action.Ticket,
                         Action: TradeLegAction.Close,
-                        RowIndex: rowIndex)
+                        RowIndex: rowIndex,
+                        TradeMapName: action.TradeMapName)
                     : null,
                 Context: CreateRecoveryContext(
                     TradeExecutionReason.PendingCloseRetry,
@@ -6874,7 +6937,13 @@ public sealed class DashboardViewModel : ObservableObject
         // Phase 6: countdown for cooldown + opposite-lock status.
         var now = DateTime.UtcNow;
 
-        // Priority 1: global cooldown active.
+        // Priority 1: manual/recovery close barrier active.
+        if (_portfolioCoordinator.HasNonAutoCloseInFlight)
+        {
+            return "MANUAL/RECOVERY CLOSE IN PROGRESS";
+        }
+
+        // Priority 2: auto cooldown active.
         if (_portfolioCoordinator.GlobalActionLockUntilUtc is { } lockUntil
             && lockUntil > now)
         {
@@ -6882,7 +6951,7 @@ public sealed class DashboardViewModel : ObservableObject
             return $"COOLDOWN {remaining}s";
         }
 
-        // Priority 2: post-close all-open lock window (khoá mọi OPEN sau CLOSE confirm).
+        // Priority 3: post-close auto lock window.
         if (_portfolioCoordinator.LastCloseConfirmedAtUtc is { } lastCloseAt)
         {
             var elapsedSec = (now - lastCloseAt).TotalSeconds;
@@ -6893,7 +6962,7 @@ public sealed class DashboardViewModel : ObservableObject
             }
         }
 
-        // Priority 3: opposite-side lock window.
+        // Priority 4: opposite-side lock window.
         if (_portfolioCoordinator.LastOpenConfirmedAtUtc is { } lastOpenAt
             && _portfolioCoordinator.LastOpenConfirmedSide != TradingPositionSide.None)
         {
@@ -6907,7 +6976,7 @@ public sealed class DashboardViewModel : ObservableObject
             }
         }
 
-        // Priority 4: quota full.
+        // Priority 5: quota full.
         if (_portfolioCoordinator.LiveAndPendingTotalCount >= _runtimeConfigState.CurrentMaxTotalOpens)
         {
             return "QUOTA FULL";

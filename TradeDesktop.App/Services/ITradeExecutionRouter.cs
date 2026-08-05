@@ -75,7 +75,8 @@ public sealed record TradeCloseLegRequest(
     ulong Ticket,
     TradeLegAction Action = TradeLegAction.Close,
     int DelayMs = 0,
-    int? RowIndex = null);
+    int? RowIndex = null,
+    string? TradeMapName = null);
 
 public sealed record TradeOpenPairRequest(
     TradeOpenLegRequest LegA,

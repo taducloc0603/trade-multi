@@ -193,6 +193,56 @@ public sealed class PortfolioCoordinatorTests
     }
 
     [Fact]
+    public void ManualClaim_ActivatesBarrier_AndAbortReleasesIt()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+
+        Assert.True(coordinator.TryClaimSlotClose("p1", CloseExecutionOwner.Manual, DateTime.UtcNow));
+        Assert.True(coordinator.HasNonAutoCloseInFlight);
+
+        coordinator.AbortPendingClose("p1");
+
+        Assert.False(coordinator.HasNonAutoCloseInFlight);
+        Assert.Equal(PositionSlotStatus.Live, coordinator.GetSlotByPairId("p1")!.Status);
+    }
+
+    [Fact]
+    public void CompletedManualClose_ReleasesBarrier_WithoutCreatingAutoCooldown()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateCooldownConfig(0, 0);
+        coordinator.UpdatePostCloseLockConfig(300);
+        coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+        Assert.True(coordinator.TryClaimSlotClose("p1", CloseExecutionOwner.Manual, DateTime.UtcNow));
+
+        coordinator.CloseSlotManually("p1", DateTime.UtcNow);
+
+        Assert.False(coordinator.HasNonAutoCloseInFlight);
+        Assert.Null(coordinator.LastCloseConfirmedAtUtc);
+        Assert.Null(coordinator.GetSlotByPairId("p1"));
+    }
+
+    [Fact]
+    public void SequentialManualCloses_AreAllowedWithoutCooldownBetweenSlots()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(2, 2, 2);
+        coordinator.UpdatePostCloseLockConfig(300);
+        coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+        coordinator.AllocatePendingOpenSlot("p2", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p2", 3, 4, DateTime.UtcNow);
+
+        Assert.True(coordinator.TryClaimSlotClose("p1", CloseExecutionOwner.Manual, DateTime.UtcNow));
+        coordinator.CloseSlotManually("p1", DateTime.UtcNow);
+
+        Assert.True(coordinator.TryClaimSlotClose("p2", CloseExecutionOwner.Manual, DateTime.UtcNow));
+    }
+
+    [Fact]
     public void PartialOpenRecoverySlot_CannotBeClaimedByAutoClose()
     {
         var coordinator = CreateCoordinator();
