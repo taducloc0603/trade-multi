@@ -219,6 +219,9 @@ TradeDesktop.Tests/            # xUnit tests
 - KHÔNG dùng `_pendingOpenPairById.Values.Any(...)` để block — đã chuyển sang quota check Rule A.
 - Per-side debounce: `_lastAutoOpenBuyAtLocal` / `Sell`. KHÔNG dùng chung `_lastAutoOpenClickAtLocal`.
 - Per-side in-flight lock: `_autoOpenInFlightBuy` / `Sell` (Phase 3).
+- Grid Close per-pair dùng chung `TradeRealtimeProfitRows` với profit realtime. KHÔNG `Clear()` rồi tạo lại
+  toàn bộ collection mỗi UI refresh: Button có thể bị thay giữa mouse-down/mouse-up làm WPF nuốt click
+  (người dùng phải bấm 2-3 lần). Phải giữ instance theo `Stt`, chỉ update property/move/insert/remove khi cần.
 
 ### Profit feed cho quyết định TP (logic-critical, KHÔNG throttle theo UI)
 - `slot.LastProfitSnapshot` nuôi quyết định TP + priority-close PHẢI được refresh **mỗi tick**,

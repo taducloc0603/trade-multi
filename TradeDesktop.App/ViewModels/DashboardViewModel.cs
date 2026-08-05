@@ -5395,10 +5395,42 @@ public sealed class DashboardViewModel : ObservableObject
                 pairId: pairIdByStt.TryGetValue(x.Key, out var pid) ? pid : string.Empty))
             .ToList();
 
-        TradeRealtimeProfitRows.Clear();
-        foreach (var row in rebuilt)
+        // Preserve existing row/button instances. Clearing this collection every UI refresh
+        // can replace a Button between mouse-down and mouse-up, causing WPF to lose the click.
+        var desiredStt = rebuilt.Select(row => row.Stt).ToHashSet(StringComparer.Ordinal);
+        for (var i = TradeRealtimeProfitRows.Count - 1; i >= 0; i--)
         {
-            TradeRealtimeProfitRows.Add(row);
+            if (!desiredStt.Contains(TradeRealtimeProfitRows[i].Stt))
+            {
+                TradeRealtimeProfitRows.RemoveAt(i);
+            }
+        }
+
+        for (var targetIndex = 0; targetIndex < rebuilt.Count; targetIndex++)
+        {
+            var desired = rebuilt[targetIndex];
+            var existingIndex = -1;
+            for (var i = 0; i < TradeRealtimeProfitRows.Count; i++)
+            {
+                if (string.Equals(TradeRealtimeProfitRows[i].Stt, desired.Stt, StringComparison.Ordinal))
+                {
+                    existingIndex = i;
+                    break;
+                }
+            }
+
+            if (existingIndex < 0)
+            {
+                TradeRealtimeProfitRows.Insert(targetIndex, desired);
+                continue;
+            }
+
+            var existing = TradeRealtimeProfitRows[existingIndex];
+            existing.Update(desired.ProfitRealtime, desired.PairId);
+            if (existingIndex != targetIndex)
+            {
+                TradeRealtimeProfitRows.Move(existingIndex, targetIndex);
+            }
         }
     }
 
