@@ -31,6 +31,7 @@ public sealed class PositionSlot
     public DateTime? CloseConfirmedAtUtc { get; private set; }
     public int HoldingSeconds { get; private set; }
     public bool IsCloseExecutionPending { get; private set; }
+    public CloseExecutionOwner CloseOwner { get; private set; }
     public double? LastProfitSnapshot { get; internal set; }
     public double? LastProfitA { get; private set; }
     public double? LastProfitB { get; private set; }
@@ -61,24 +62,42 @@ public sealed class PositionSlot
         Status = PositionSlotStatus.Live;
     }
 
-    public void MarkCloseTriggered(DateTime triggerAtUtc, CloseSignalReason closeReason = CloseSignalReason.Gap)
+    public bool TryMarkCloseTriggered(
+        DateTime triggerAtUtc,
+        CloseExecutionOwner owner,
+        CloseSignalReason closeReason = CloseSignalReason.Gap)
     {
+        if (owner == CloseExecutionOwner.None
+            || (IsCloseExecutionPending && CloseOwner != owner))
+        {
+            return false;
+        }
+
         ClosedAtUtc = triggerAtUtc;
         LastCloseReason = closeReason;
         IsCloseExecutionPending = true;
+        CloseOwner = owner;
         Status = PositionSlotStatus.PendingClose;
+        return true;
+    }
+
+    public void MarkCloseTriggered(DateTime triggerAtUtc, CloseSignalReason closeReason = CloseSignalReason.Gap)
+    {
+        TryMarkCloseTriggered(triggerAtUtc, CloseExecutionOwner.Auto, closeReason);
     }
 
     public void MarkCloseConfirmed(DateTime closedAtUtc)
     {
         CloseConfirmedAtUtc = closedAtUtc;
         IsCloseExecutionPending = false;
+        CloseOwner = CloseExecutionOwner.None;
         Status = PositionSlotStatus.Closed;
     }
 
     public void ClearCloseExecutionPending()
     {
         IsCloseExecutionPending = false;
+        CloseOwner = CloseExecutionOwner.None;
         ClosedAtUtc = null;
     }
 
@@ -113,6 +132,7 @@ public sealed class PositionSlot
         HoldingSeconds = holdingSeconds;
         Status = PositionSlotStatus.Live;
         IsCloseExecutionPending = false;
+        CloseOwner = CloseExecutionOwner.None;
         ClearProfitSnapshot();
         LastCloseReason = null;
     }
@@ -151,4 +171,12 @@ public sealed class PositionSlot
         LastProfitB = null;
         LastProfitSnapshot = null;
     }
+}
+
+public enum CloseExecutionOwner
+{
+    None = 0,
+    Auto = 1,
+    Manual = 2,
+    Recovery = 3
 }

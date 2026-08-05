@@ -298,6 +298,11 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             return (false, "MANUAL_WITHOUT_SIGNAL_DISABLED");
         }
 
+        if (context.Reason == TradeExecutionReason.ManualPairClose)
+        {
+            return ValidateManualPairClose(request);
+        }
+
         if (context.Reason is TradeExecutionReason.OpenPartialRollback
             or TradeExecutionReason.ExternalPartialCloseRecovery
             or TradeExecutionReason.PendingCloseRetry)
@@ -473,6 +478,31 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             return (false, "RECOVERY_TICKET_MISMATCH");
         }
         return (true, "ALLOWED");
+    }
+
+    private (bool Allowed, string Code) ValidateManualPairClose(TradeClosePairRequest request)
+    {
+        var context = request.Context;
+        var slot = string.IsNullOrWhiteSpace(context.PairId)
+            ? null
+            : _portfolioCoordinator.GetSlotByPairId(context.PairId);
+        var result = ManualPairClosePolicy.Validate(new ManualPairClosePolicyInput(
+            Source: context.Source,
+            ContextPairId: context.PairId,
+            ContextSlotId: context.SlotId,
+            HasLegA: request.LegA is not null,
+            HasLegB: request.LegB is not null,
+            TicketA: request.LegA?.Ticket ?? 0,
+            TicketB: request.LegB?.Ticket ?? 0,
+            SlotExists: slot is not null,
+            SlotPairId: slot?.PairId,
+            SlotId: slot?.SlotId,
+            SlotTicketA: slot?.TicketA,
+            SlotTicketB: slot?.TicketB,
+            SlotStatus: slot?.Status ?? PositionSlotStatus.Closed,
+            IsCloseExecutionPending: slot?.IsCloseExecutionPending ?? false,
+            CloseOwner: slot?.CloseOwner ?? CloseExecutionOwner.None));
+        return (result.Allowed, result.Code);
     }
 
     private static bool RequestTicketsMatchSlot(TradeClosePairRequest request, PositionSlot slot)

@@ -85,11 +85,13 @@ DB integration deferred).
   4. Manual open/close buttons (legacy `CloseOrderAsync`) — dormant, ẩn qua `IsManualTradeButtonsVisible=false` (Phase 6).
   4b. **Nút "Đóng" per-pair ở tab Trade** (grid `TradeRealtimeProfitRows`) → `ManualClosePairBySlotAsync(pairId)`.
      Đường RIÊNG coordinator-safe, ĐỘC LẬP với auto: resolve slot qua `GetSlotByPairId` (bấm là đóng ngay,
-     không modal confirm), dùng chung lock `_autoCloseInFlight` (chặn khi close khác in-flight), `MarkSlotCloseTriggered`
-     (PendingClose + cooldown) lúc dispatch, finalize qua polling gọi `CloseSlotManually(pairId)`
+     không modal confirm), dùng chung lock vật lý `_closeDispatchInFlight` (chặn khi close khác in-flight), claim
+     slot bằng `TryClaimSlotClose(..., CloseExecutionOwner.Manual, ...)` (PendingClose), còn router
+     lấy global action gate/cooldown lúc dispatch; finalize qua polling gọi `CloseSlotManually(pairId)`
      (confirm + remove slot). KHÔNG đụng `_activeAutoCycle` / `_activeAutoCloseRecoveryCycle` / `_autoSlot`,
-     KHÔNG đăng ký isAutoFlow. Pending state đánh dấu `IsManualCoordinatorClose` (chỉ set lúc tạo, không
-     reset khi retry). Đây là user-override đóng tay, KHÔNG phải auto path bỏ qua signal.
+     KHÔNG đăng ký isAutoFlow. Pending state dùng `PendingCloseOrigin.ManualPair` (không reset khi retry).
+     Router chỉ cho phép reason `ManualPairClose` khi pair/slot/ticket và manual ownership khớp chính xác.
+     Đây là user-override đóng tay, KHÔNG phải auto path bỏ qua signal.
   5. Watchdog self-heal resync — khi coordinator under-count drift (số tool-pair mở thật trên MMF >
      số slot coordinator giữ, nhưng trạng thái vật lý vẫn ≤ cap), `EvaluateAndApplyAutoOpenInvariantWatchdog`
      gọi `TryRebuildCoordinatorFromMmf` (dùng chung với resync lúc Start) để rebuild slot từ MMF, KHÔNG tạo
@@ -97,6 +99,35 @@ DB integration deferred).
      và throttle `WatchdogSelfHealMinIntervalSeconds`. Decision thuần ở `WatchdogSelfHealDecision.Decide`.
 - **Khi thêm path mở/đóng mới**: nếu KHÔNG qua signal engine thì BẮT BUỘC phải là recovery/integrity
   rõ ràng, có guard chống đóng/mở nhầm, và phải document thêm vào danh sách exception ở trên.
+
+### Rule F — Close ownership contract (KHÔNG ĐƯỢC THAY ĐỔI NGẦM)
+
+- OPEN vị thế cân bằng chỉ được khởi phát bởi auto signal. Manual open legacy tiếp tục bị execution policy chặn.
+- Có đúng 3 nguồn CLOSE hợp lệ:
+  1. **Recovery** — rollback khi OPEN chỉ thành công một leg, hoặc đóng leg còn lại sau external partial close.
+  2. **Auto** — `CloseSignalEngine` tạo strategic close signal hợp lệ.
+  3. **Manual per-pair** — người dùng nhấn nút Close của một pair; dùng reason `ManualPairClose`, không cần signal.
+- Quyền đóng phải được quản lý theo `pairId` bằng `CloseExecutionOwner`:
+  - Một pair chỉ có tối đa một owner tại một thời điểm.
+  - Recovery/manual đang xử lý pair X thì auto không được dispatch trùng pair X.
+  - Auto đã claim pair X thì manual không được chiếm quyền; UI phải báo pair đang được xử lý.
+  - Manual/recovery trên pair X không được sửa close engine, active cycle hoặc ownership của pair Y.
+- Trạng thái bắt buộc:
+  - Partial OPEN giữ `PendingOpen`, không được đưa vào tập auto-close eligible.
+  - Auto/manual claim thành công chuyển slot `Live -> PendingClose`.
+  - Bị block trước dispatch phải release claim và trả slot về `Live`.
+  - Đã bắt đầu dispatch hoặc chỉ đóng thành công một leg phải giữ pending/retry; không trả slot về `Live` giả tạo.
+  - Chỉ confirm/remove slot sau khi MMF xác nhận các ticket liên quan không còn mở.
+- Manual per-pair authorization bắt buộc đúng source, pairId, slotId, đủ hai leg và ticket A/B khớp slot.
+  `ManualOpen`/`ManualClose` legacy vẫn bị `MANUAL_WITHOUT_SIGNAL_DISABLED`.
+- Ba flow tách biệt ở tầng quyết định/orchestration nhưng dùng chung lớp an toàn vật lý:
+  `_closeDispatchInFlight`, `TryAcquireTradeAction`, ticket/row validation và pending-leg retry.
+- Global action gate có quyền trì hoãn close của pair khác. Snapshot trong cooldown bị bỏ qua theo Rule B;
+  sau cooldown auto chỉ dispatch khi signal mới/latest condition vẫn hợp lệ. Không được bypass gate để làm manual/recovery
+  “không ảnh hưởng” auto.
+- Khi sửa logic này, bắt buộc giữ/pass `ManualPairClosePolicyTests`, các test `TryClaimSlotClose*`,
+  `ManualClaim_DoesNotPreventAutoFromClaimingAnotherPair` và
+  `PartialOpenRecoverySlot_CannotBeClaimedByAutoClose`.
 
 ---
 

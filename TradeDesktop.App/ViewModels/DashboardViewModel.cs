@@ -70,7 +70,8 @@ public sealed class DashboardViewModel : ObservableObject
     private int _autoOpenInFlight;
     private int _autoOpenInFlightBuy;
     private int _autoOpenInFlightSell;
-    private int _autoCloseInFlight;
+    // Shared physical close-dispatch mutex. Auto/manual ownership is tracked per slot.
+    private int _closeDispatchInFlight;
     private DateTimeOffset? _lastAutoOpenClickAtLocal;
     // Phase 3: per-side debounce — Buy không cản Sell và ngược lại.
     private DateTimeOffset? _lastAutoOpenBuyAtLocal;
@@ -207,9 +208,7 @@ public sealed class DashboardViewModel : ObservableObject
         public bool ExhaustedLogged { get; set; }
         public bool IsResolved { get; set; }
 
-        // True khi close này do nút "đóng tay" theo pairId khởi phát (đường riêng, độc lập auto).
-        // Finalize sẽ remove slot khỏi coordinator. Chỉ set lúc tạo state, không reset khi retry.
-        public bool IsManualCoordinatorClose { get; set; }
+        public PendingCloseOrigin Origin { get; set; }
 
         public bool CloseConfirmedA { get; set; }
         public bool CloseConfirmedB { get; set; }
@@ -228,6 +227,13 @@ public sealed class DashboardViewModel : ObservableObject
         public string? SymbolB { get; set; }
         public double? VolumeA { get; set; }
         public double? VolumeB { get; set; }
+    }
+
+    private enum PendingCloseOrigin
+    {
+        LegacyManual = 0,
+        Auto = 1,
+        ManualPair = 2
     }
 
     private sealed class PendingOpenPairState
@@ -1272,6 +1278,9 @@ public sealed class DashboardViewModel : ObservableObject
     private async Task ManualClosePairBySlotAsync(string pairId)
     {
         SafeVmLog($"[CYCLE][INFO] Manual close requested: pairId={pairId}");
+        var closeClaimed = false;
+        var dispatchStarted = false;
+        var appCloseRequestRawMs = 0L;
 
         if (string.IsNullOrWhiteSpace(pairId))
         {
@@ -1309,7 +1318,7 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         // Chặn nếu một close khác (auto hoặc manual) đang in-flight — dùng chung lock với auto close.
-        if (Interlocked.CompareExchange(ref _autoCloseInFlight, 1, 0) != 0)
+        if (Interlocked.CompareExchange(ref _closeDispatchInFlight, 1, 0) != 0)
         {
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 SignalLogItems.Insert(0,
@@ -1344,21 +1353,46 @@ public sealed class DashboardViewModel : ObservableObject
 
             var snapshot = _runtimeConfigState.CurrentDashboardMetrics;
             var appCloseRequestTimeLocal = DateTimeOffset.Now;
-            var appCloseRequestRawMs = Environment.TickCount64;
+            appCloseRequestRawMs = Environment.TickCount64;
 
-            // Capture pending BEFORE dispatch (chống race với polling). isAutoFlow=false.
-            CapturePendingCloseRequest(selectA, snapshot, isExchangeA: true, appCloseRequestTimeLocal, appCloseRequestRawMs, slot.SlotId);
-            CapturePendingCloseRequest(selectB, snapshot, isExchangeA: false, appCloseRequestTimeLocal, appCloseRequestRawMs, slot.SlotId);
-
-            // Đánh dấu pending state là manual-coordinator-close để finalize remove slot.
-            if (_pendingClosePairById.TryGetValue(slot.PairId, out var pendingState))
+            closeClaimed = _portfolioCoordinator.TryClaimSlotClose(
+                slot.PairId,
+                CloseExecutionOwner.Manual,
+                DateTime.UtcNow);
+            if (!closeClaimed)
             {
-                pendingState.IsManualCoordinatorClose = true;
+                SafeVmLog($"[VM][WARN] Manual close skipped: pair already claimed pairId={pairId}");
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                    SignalLogItems.Insert(0,
+                        $"    - [{DateTime.Now:HH:mm:ss.fff}] Đóng tay bị chặn: cặp {pairId} đã được luồng khác nhận xử lý"));
+                return;
             }
 
-            // Coordinator: slot -> PendingClose (chặn auto double-close) + kick cooldown (dispatch time).
-            _portfolioCoordinator.MarkSlotCloseTriggered(slot.PairId, DateTime.UtcNow);
+            // Capture pending BEFORE dispatch (chống race với polling). isAutoFlow=false.
+            CapturePendingCloseRequest(
+                selectA,
+                snapshot,
+                isExchangeA: true,
+                appCloseRequestTimeLocal,
+                appCloseRequestRawMs,
+                slot.SlotId,
+                pairIdOverride: slot.PairId);
+            CapturePendingCloseRequest(
+                selectB,
+                snapshot,
+                isExchangeA: false,
+                appCloseRequestTimeLocal,
+                appCloseRequestRawMs,
+                slot.SlotId,
+                pairIdOverride: slot.PairId);
 
+            // Manual per-pair có lifecycle riêng; retry giữ nguyên origin này.
+            if (_pendingClosePairById.TryGetValue(slot.PairId, out var pendingState))
+            {
+                pendingState.Origin = PendingCloseOrigin.ManualPair;
+            }
+
+            dispatchStarted = true;
             var result = await _tradeExecutionRouter.ClosePairAsync(
                 new TradeClosePairRequest(
                     LegA: new TradeCloseLegRequest(
@@ -1376,7 +1410,7 @@ public sealed class DashboardViewModel : ObservableObject
                         Action: TradeLegAction.Close,
                         RowIndex: selectB.Request.RowIndex),
                     Context: CreateExecutionContext(
-                        TradeExecutionReason.ManualClose,
+                        TradeExecutionReason.ManualPairClose,
                         "manual-close-slot",
                         slot.PairId,
                         slot.SlotId)));
@@ -1385,6 +1419,7 @@ public sealed class DashboardViewModel : ObservableObject
             if (result.IsDispatchBlocked)
             {
                 _portfolioCoordinator.AbortPendingClose(slot.PairId);
+                closeClaimed = false;
                 RemovePendingCloseRequests(appCloseRequestRawMs);
                 if (_pendingClosePairById.TryGetValue(slot.PairId, out var blockedPending))
                 {
@@ -1399,11 +1434,19 @@ public sealed class DashboardViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            if (closeClaimed && !dispatchStarted)
+            {
+                _portfolioCoordinator.AbortPendingClose(pairId);
+                if (appCloseRequestRawMs != 0)
+                {
+                    RemovePendingCloseRequests(appCloseRequestRawMs);
+                }
+            }
             SafeVmLog($"[VM][ERROR] Manual close error pairId={pairId}: {ex}");
         }
         finally
         {
-            Interlocked.Exchange(ref _autoCloseInFlight, 0);
+            Interlocked.Exchange(ref _closeDispatchInFlight, 0);
         }
     }
 
@@ -1850,7 +1893,7 @@ public sealed class DashboardViewModel : ObservableObject
     /// </summary>
     private async Task AutoCloseOrderAsync(GapSignalTriggerResult trigger, PositionSlot? targetSlot = null)
     {
-        if (Interlocked.CompareExchange(ref _autoCloseInFlight, 1, 0) != 0)
+        if (Interlocked.CompareExchange(ref _closeDispatchInFlight, 1, 0) != 0)
         {
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
@@ -2127,7 +2170,7 @@ public sealed class DashboardViewModel : ObservableObject
         }
         finally
         {
-            Interlocked.Exchange(ref _autoCloseInFlight, 0);
+            Interlocked.Exchange(ref _closeDispatchInFlight, 0);
         }
     }
 
@@ -2467,7 +2510,8 @@ public sealed class DashboardViewModel : ObservableObject
         bool isExchangeA,
         DateTimeOffset appCloseRequestTimeLocal,
         long appCloseRequestRawMs,
-        int slotNumber = 0)
+        int slotNumber = 0,
+        string? pairIdOverride = null)
     {
         if (selection.Request is null || !selection.TradeType.HasValue)
         {
@@ -2487,7 +2531,8 @@ public sealed class DashboardViewModel : ObservableObject
             volume: selection.Volume,
             isAutoFlow: false,
             slotNumber: slotNumber,
-            exchangeLabel: isExchangeA ? "A" : "B");
+            exchangeLabel: isExchangeA ? "A" : "B",
+            pairIdOverride: pairIdOverride);
     }
 
     private void RegisterPendingOpenRequest(
@@ -2578,7 +2623,8 @@ public sealed class DashboardViewModel : ObservableObject
         double? volume,
         bool isAutoFlow,
         int slotNumber = 0,
-        string exchangeLabel = "")
+        string exchangeLabel = "",
+        string? pairIdOverride = null)
     {
         var key = NormalizeMapName(tradeMapName);
         if (!_pendingCloseRequestsByMap.TryGetValue(key, out var pendingList))
@@ -2588,7 +2634,9 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         var pending = new PendingCloseRequest(
-            PairId: ResolvePairIdForClose(ticket, slotNumber, appCloseRequestRawMs, isAutoFlow),
+            PairId: string.IsNullOrWhiteSpace(pairIdOverride)
+                ? ResolvePairIdForClose(ticket, slotNumber, appCloseRequestRawMs, isAutoFlow)
+                : pairIdOverride,
             TradeMapName: key,
             Ticket: ticket,
             Symbol: symbol,
@@ -2628,7 +2676,8 @@ public sealed class DashboardViewModel : ObservableObject
                 SlotNumber = pending.SlotNumber,
                 CreatedAtLocal = pending.AppCloseRequestTimeLocal,
                 LastCheckedAtLocal = pending.AppCloseRequestTimeLocal,
-                ClosePendingTimeoutMs = NextClosePendingTimeoutMs(_runtimeConfigState.CurrentClosePendingTimeMs)
+                ClosePendingTimeoutMs = NextClosePendingTimeoutMs(_runtimeConfigState.CurrentClosePendingTimeMs),
+                Origin = pending.IsAutoFlow ? PendingCloseOrigin.Auto : PendingCloseOrigin.LegacyManual
             };
             _pendingClosePairById[pending.PairId] = state;
         }
@@ -2971,7 +3020,7 @@ public sealed class DashboardViewModel : ObservableObject
         _isManualOpenInFlight = false;
         _manualOpenGatePairState = LivePairTradeState.MapUnavailableOrParseError;
         _lastAutoOpenClickAtLocal = null;
-        _autoCloseInFlight = 0;
+        _closeDispatchInFlight = 0;
         _isAutoOpenPausedByInvariant = false;
         _invariantClearStreak = 0;
         _activeAutoCycle = null;
@@ -3694,7 +3743,7 @@ public sealed class DashboardViewModel : ObservableObject
         var hasOpenOrCloseInFlight =
             _autoOpenInFlightBuy != 0
             || _autoOpenInFlightSell != 0
-            || _autoCloseInFlight != 0
+            || _closeDispatchInFlight != 0
             || _activeAutoCloseRecoveryCycle is not null
             || _portfolioCoordinator.PendingCloseSlots.Count > 0;
         var action = WatchdogSelfHealDecision.Decide(
@@ -4236,7 +4285,7 @@ public sealed class DashboardViewModel : ObservableObject
         if (!state.IsAutoFlow)
         {
             // Đóng tay theo pairId: remove slot khỏi coordinator (coordinator-only, không đụng auto state).
-            if (state.IsManualCoordinatorClose)
+            if (state.Origin == PendingCloseOrigin.ManualPair)
             {
                 _portfolioCoordinator.CloseSlotManually(state.PairId, DateTime.UtcNow);
                 SafeVmLog($"[CYCLE][INFO] Manual close resolved: pairId={state.PairId}");

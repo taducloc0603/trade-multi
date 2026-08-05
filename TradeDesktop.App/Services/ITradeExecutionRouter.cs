@@ -29,7 +29,8 @@ public enum TradeExecutionReason
     ManualClose = 3,
     OpenPartialRollback = 4,
     ExternalPartialCloseRecovery = 5,
-    PendingCloseRetry = 6
+    PendingCloseRetry = 6,
+    ManualPairClose = 7
 }
 
 public sealed record SignalAuthorization(

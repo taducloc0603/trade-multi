@@ -21,6 +21,7 @@ public sealed class PositionSlotTests
         Assert.Equal(TradingOpenMode.None, slot.OpenMode);
         Assert.Null(slot.TicketA);
         Assert.Null(slot.TicketB);
+        Assert.Equal(CloseExecutionOwner.None, slot.CloseOwner);
         Assert.NotNull(slot.CloseSignalEngine);
     }
 
@@ -65,6 +66,7 @@ public sealed class PositionSlotTests
         slot.MarkCloseTriggered(ts);
 
         Assert.True(slot.IsCloseExecutionPending);
+        Assert.Equal(CloseExecutionOwner.Auto, slot.CloseOwner);
         Assert.Equal(PositionSlotStatus.PendingClose, slot.Status);
         Assert.Equal(ts, slot.ClosedAtUtc);
     }
@@ -82,7 +84,20 @@ public sealed class PositionSlotTests
 
         Assert.Equal(PositionSlotStatus.Closed, slot.Status);
         Assert.False(slot.IsCloseExecutionPending);
+        Assert.Equal(CloseExecutionOwner.None, slot.CloseOwner);
         Assert.Equal(confirmed, slot.CloseConfirmedAtUtc);
+    }
+
+    [Fact]
+    public void TryMarkCloseTriggered_DoesNotAllowManualToStealAutoClaim()
+    {
+        var slot = CreateSlot();
+        slot.MarkOpenTriggered(TradingPositionSide.Buy, TradingOpenMode.GapBuy, DateTime.UtcNow, 3);
+        slot.MarkOpenConfirmed(1, 2, DateTime.UtcNow);
+
+        Assert.True(slot.TryMarkCloseTriggered(DateTime.UtcNow, CloseExecutionOwner.Auto));
+        Assert.False(slot.TryMarkCloseTriggered(DateTime.UtcNow, CloseExecutionOwner.Manual));
+        Assert.Equal(CloseExecutionOwner.Auto, slot.CloseOwner);
     }
 
     [Fact]

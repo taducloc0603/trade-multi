@@ -48,6 +48,7 @@ public interface IPortfolioCoordinator
     PositionSlot? AllocatePendingOpenSlot(string pairId, GapSignalTriggerResult trigger);
     void MarkSlotOpenConfirmed(string pairId, ulong ticketA, ulong ticketB, DateTime confirmedAtUtc);
     void MarkSlotCloseTriggered(string pairId, DateTime triggeredAtUtc);
+    bool TryClaimSlotClose(string pairId, CloseExecutionOwner owner, DateTime triggeredAtUtc);
     void MarkSlotCloseConfirmed(string pairId, DateTime confirmedAtUtc);
 
     // Manual per-pair close finalize: confirm (nếu chưa Closed) + remove slot theo pairId.

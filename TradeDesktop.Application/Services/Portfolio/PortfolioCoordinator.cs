@@ -247,9 +247,21 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                     .First();
             }
 
-            // Mark IsCloseExecutionPending immediately so next tick doesn't double-trigger.
-            // Note: status transitions to PendingClose only after MarkSlotCloseTriggered from caller.
-            winner.slot.MarkCloseTriggered(winner.trigger.TriggeredAtUtc, winner.trigger.CloseReason);
+            // Claim auto ownership + mark PendingClose immediately so next tick/manual path
+            // cannot dispatch the same pair concurrently.
+            bool claimed;
+            lock (_allocateLock)
+            {
+                claimed = winner.slot.Status == PositionSlotStatus.Live
+                    && winner.slot.TryMarkCloseTriggered(
+                        winner.trigger.TriggeredAtUtc,
+                        CloseExecutionOwner.Auto,
+                        winner.trigger.CloseReason);
+            }
+            if (!claimed)
+            {
+                return PortfolioSnapshotResult.Empty;
+            }
 
             // Reset both engines after a close trigger (matches TradingFlowEngine behavior).
             _openSignalEngine.Reset();
@@ -397,7 +409,21 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         // Slot có thể đã được ProcessSnapshot chuyển sang PendingClose.
         if (slot.Status != PositionSlotStatus.PendingClose)
         {
-            slot.MarkCloseTriggered(triggeredAtUtc);
+            slot.TryMarkCloseTriggered(triggeredAtUtc, CloseExecutionOwner.Auto);
+        }
+    }
+
+    public bool TryClaimSlotClose(string pairId, CloseExecutionOwner owner, DateTime triggeredAtUtc)
+    {
+        lock (_allocateLock)
+        {
+            var slot = _state.GetSlotByPairId(pairId);
+            if (slot is null || slot.Status != PositionSlotStatus.Live)
+            {
+                return false;
+            }
+
+            return slot.TryMarkCloseTriggered(triggeredAtUtc, owner);
         }
     }
 

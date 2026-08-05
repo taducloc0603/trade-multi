@@ -523,10 +523,38 @@ Các reason hiện hành:
 |------|--------|--------|
 | Strategic | `StrategicOpen` | Bắt buộc signal OPEN còn hạn, chiều A/B khớp signal và latest gap vẫn đạt ngưỡng. |
 | Strategic | `StrategicClose` | Bắt buộc signal CLOSE còn hạn, đúng pair/slot/ticket; latest gap hoặc TP vẫn hợp lệ. |
-| Manual | `ManualOpen`, `ManualClose` | Bị chặn bởi policy với `MANUAL_WITHOUT_SIGNAL_DISABLED`. |
+| Manual legacy | `ManualOpen`, `ManualClose` | Bị chặn bởi policy với `MANUAL_WITHOUT_SIGNAL_DISABLED`. |
+| Manual per-pair | `ManualPairClose` | Không cần signal; bắt buộc source per-pair, manual ownership, đúng pair/slot và đủ hai ticket khớp slot. |
 | Recovery | `OpenPartialRollback` | Miễn signal; bắt buộc pair/slot, đúng một ticket và evidence rollback. |
 | Recovery | `ExternalPartialCloseRecovery` | Miễn signal; bắt buộc ticket chân còn lại và evidence partial state. |
 | Recovery | `PendingCloseRetry` | Miễn signal; bắt buộc ticket pending và evidence retry. |
+
+#### 13.10.1 Close ownership contract
+
+OPEN pair chỉ do auto signal khởi phát. Ba nguồn CLOSE hợp lệ là:
+
+1. Recovery khi OPEN lệch một leg hoặc external partial close.
+2. Auto close khi `CloseSignalEngine` phát tín hiệu hợp lệ.
+3. Manual per-pair khi người dùng nhấn nút Close.
+
+Mỗi slot lưu `CloseExecutionOwner` (`None`, `Auto`, `Manual`, `Recovery`). Một `pairId`
+chỉ được một flow sở hữu tại một thời điểm. Manual/recovery trên một pair không được reset
+close engine hoặc active auto cycle của pair khác; auto và manual cũng không được dispatch
+trùng cùng một pair.
+
+Partial OPEN luôn ở `PendingOpen` nên không thuộc tập auto-close. Auto/manual claim thành công
+chuyển slot sang `PendingClose`. Nếu request bị block trước dispatch thì release claim và trả
+slot về `Live`; nếu dispatch đã bắt đầu hoặc còn một leg chưa đóng thì giữ pending/retry cho tới
+khi MMF xác nhận ticket đã biến mất. Chỉ lúc đó mới confirm và remove slot.
+
+Các flow tách biệt ở tầng quyết định nhưng dùng chung execution safety: mutex close vật lý,
+global action gate, ticket/row validation và pending retry. Vì vậy manual/recovery có thể trì hoãn
+auto bằng cooldown, nhưng không được làm sai ownership/state. Sau cooldown, auto chỉ đóng nếu
+latest signal/market condition vẫn hợp lệ.
+
+Contract này được khóa bằng `ManualPairClosePolicyTests` và các ownership/race tests trong
+`TradeDesktop.Tests/Portfolio/PortfolioCoordinatorTests.cs`. Mọi thay đổi execution policy hoặc
+slot lifecycle phải chạy lại các test này.
 
 Strategic authorization:
 

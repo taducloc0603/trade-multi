@@ -134,6 +134,80 @@ public sealed class PortfolioCoordinatorTests
     }
 
     [Fact]
+    public void TryClaimSlotClose_ManualClaimBlocksAutoClaimForSamePair()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+
+        Assert.True(coordinator.TryClaimSlotClose("p1", CloseExecutionOwner.Manual, DateTime.UtcNow));
+        Assert.False(coordinator.TryClaimSlotClose("p1", CloseExecutionOwner.Auto, DateTime.UtcNow));
+        Assert.Equal(CloseExecutionOwner.Manual, coordinator.GetSlotByPairId("p1")!.CloseOwner);
+    }
+
+    [Fact]
+    public void AbortPendingClose_ReleasesManualClaimForAuto()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+        Assert.True(coordinator.TryClaimSlotClose("p1", CloseExecutionOwner.Manual, DateTime.UtcNow));
+
+        coordinator.AbortPendingClose("p1");
+
+        Assert.Equal(CloseExecutionOwner.None, coordinator.GetSlotByPairId("p1")!.CloseOwner);
+        Assert.True(coordinator.TryClaimSlotClose("p1", CloseExecutionOwner.Auto, DateTime.UtcNow));
+    }
+
+    [Fact]
+    public void TryClaimSlotClose_IsAtomicForConcurrentManualAndAutoCallers()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+        var owners = new[] { CloseExecutionOwner.Manual, CloseExecutionOwner.Auto };
+
+        var results = owners
+            .AsParallel()
+            .Select(owner => coordinator.TryClaimSlotClose("p1", owner, DateTime.UtcNow))
+            .ToArray();
+
+        Assert.Single(results.Where(result => result));
+        Assert.NotEqual(CloseExecutionOwner.None, coordinator.GetSlotByPairId("p1")!.CloseOwner);
+    }
+
+    [Fact]
+    public void ManualClaim_DoesNotPreventAutoFromClaimingAnotherPair()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(maxTotal: 2, maxBuy: 2, maxSell: 2);
+        coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+        coordinator.AllocatePendingOpenSlot("p2", CreateOpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p2", 3, 4, DateTime.UtcNow);
+
+        Assert.True(coordinator.TryClaimSlotClose("p1", CloseExecutionOwner.Manual, DateTime.UtcNow));
+        Assert.True(coordinator.TryClaimSlotClose("p2", CloseExecutionOwner.Auto, DateTime.UtcNow));
+        Assert.Equal(CloseExecutionOwner.Manual, coordinator.GetSlotByPairId("p1")!.CloseOwner);
+        Assert.Equal(CloseExecutionOwner.Auto, coordinator.GetSlotByPairId("p2")!.CloseOwner);
+    }
+
+    [Fact]
+    public void PartialOpenRecoverySlot_CannotBeClaimedByAutoClose()
+    {
+        var coordinator = CreateCoordinator();
+        var slot = coordinator.AllocatePendingOpenSlot("partial-open", CreateOpenTrigger());
+
+        Assert.NotNull(slot);
+        Assert.Equal(PositionSlotStatus.PendingOpen, slot!.Status);
+        Assert.False(coordinator.TryClaimSlotClose(
+            "partial-open",
+            CloseExecutionOwner.Auto,
+            DateTime.UtcNow));
+        Assert.Equal(CloseExecutionOwner.None, slot.CloseOwner);
+    }
+
+    [Fact]
     public void TradeGate_WhenSlotAlreadyPendingClose_StillProtectsDispatch()
     {
         // Regression Phase 8: ProcessSnapshot (line ~179) pre-mark slot PendingClose
