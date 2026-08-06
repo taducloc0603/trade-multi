@@ -22,6 +22,7 @@ public sealed class MaxLifeTimeRuleTests
             => NextResult;
 
         public void Reset() { }
+        public void ResetGapState() { }
     }
 
     private sealed class ScriptedFactory : ICloseSignalEngineFactory

@@ -22,7 +22,10 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public double CurrentCloseConfirmTpProfit { get; private set; }
     public double CurrentCloseMaxTpProfit { get; private set; }
     public double CurrentLimitMaxTp { get; private set; }
-    public double CurrentCloseMinProfit { get; private set; }
+    public double CurrentSosTriggerProfitPts { get; private set; }
+    public int CurrentSosTriggerAfterSeconds { get; private set; }
+    public int CurrentSosCloseConfirmGapPts { get; private set; }
+    public int CurrentSosCloseGapPts { get; private set; }
     public int CurrentCloseHoldConfirmMs { get; private set; }
     public int CurrentClosePriceFreezeMs { get; private set; }
     public int CurrentStartTimeHold { get; private set; }
@@ -75,6 +78,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public string CurrentTradeHwndB { get; private set; } = string.Empty;
     public IReadOnlyList<ManualHwndColumnConfig> CurrentManualHwndColumns { get; private set; } = [ManualHwndColumnConfig.Empty];
     public DashboardMetrics? CurrentDashboardMetrics { get; private set; }
+    public DateTime? LastQuoteChangedAtUtcA { get; private set; }
+    public DateTime? LastQuoteChangedAtUtcB { get; private set; }
 
     // Backward-compatible aliases for existing bindings/usages.
     public string MachineHostName => CurrentMachineHostName;
@@ -102,7 +107,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int MaxGap => CurrentMaxGap;
     public int LimitMaxGap => CurrentLimitMaxGap;
     public double LimitMaxTp => CurrentLimitMaxTp;
-    public double CloseMinProfit => CurrentCloseMinProfit;
     public int MaxSpread => CurrentMaxSpread;
     public int OpenMaxTimesTick => CurrentOpenMaxTimesTick;
     public int CloseMaxTimesTick => CurrentCloseMaxTimesTick;
@@ -160,7 +164,10 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         double closeMaxTpProfit = 0,
         double limitMaxTp = 0,
         int freezeLastN = 0,
-        double closeMinProfit = 0,
+        double sosTriggerProfitPts = 0,
+        int sosTriggerAfterSeconds = 0,
+        int sosCloseConfirmGapPts = 0,
+        int sosCloseGapPts = 0,
         int oppositeSideLockSeconds = -1,
         int oppositeOpenMinDistancePts = -1,
         int rdStartSameActionLockSeconds = -1,
@@ -206,7 +213,10 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             closeMaxTpProfit,
             limitMaxTp,
             freezeLastN,
-            closeMinProfit,
+            sosTriggerProfitPts,
+            sosTriggerAfterSeconds,
+            sosCloseConfirmGapPts,
+            sosCloseGapPts,
             oppositeSideLockSeconds,
             oppositeOpenMinDistancePts,
             rdStartSameActionLockSeconds,
@@ -253,7 +263,10 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         double closeMaxTpProfit = 0,
         double limitMaxTp = 0,
         int freezeLastN = 0,
-        double closeMinProfit = 0,
+        double sosTriggerProfitPts = 0,
+        int sosTriggerAfterSeconds = 0,
+        int sosCloseConfirmGapPts = 0,
+        int sosCloseGapPts = 0,
         int oppositeSideLockSeconds = -1,
         int oppositeOpenMinDistancePts = -1,
         int rdStartSameActionLockSeconds = -1,
@@ -280,7 +293,10 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentCloseConfirmTpProfit = Math.Abs(closeConfirmTpProfit);
         CurrentCloseMaxTpProfit = Math.Abs(closeMaxTpProfit);
         CurrentLimitMaxTp = Math.Abs(limitMaxTp);
-        CurrentCloseMinProfit = Math.Abs(closeMinProfit);
+        CurrentSosTriggerProfitPts = Math.Max(0d, sosTriggerProfitPts);
+        CurrentSosTriggerAfterSeconds = Math.Max(0, sosTriggerAfterSeconds);
+        CurrentSosCloseConfirmGapPts = sosCloseConfirmGapPts;
+        CurrentSosCloseGapPts = sosCloseGapPts;
         CurrentCloseHoldConfirmMs = Math.Max(0, closeHoldConfirmMs);
         CurrentClosePriceFreezeMs = closePriceFreezeMs >= 0
             ? Math.Max(0, closePriceFreezeMs)
@@ -417,7 +433,10 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             closeMaxTpProfit: CurrentCloseMaxTpProfit,
             limitMaxTp: CurrentLimitMaxTp,
             freezeLastN: CurrentFreezeLastN,
-            closeMinProfit: CurrentCloseMinProfit);
+            sosTriggerProfitPts: CurrentSosTriggerProfitPts,
+            sosTriggerAfterSeconds: CurrentSosTriggerAfterSeconds,
+            sosCloseConfirmGapPts: CurrentSosCloseConfirmGapPts,
+            sosCloseGapPts: CurrentSosCloseGapPts);
 
     public void Update(string machineHostName, string mapName1, string mapName2)
         => Update(
@@ -456,7 +475,10 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             closeMaxTpProfit: CurrentCloseMaxTpProfit,
             limitMaxTp: CurrentLimitMaxTp,
             freezeLastN: CurrentFreezeLastN,
-            closeMinProfit: CurrentCloseMinProfit);
+            sosTriggerProfitPts: CurrentSosTriggerProfitPts,
+            sosTriggerAfterSeconds: CurrentSosTriggerAfterSeconds,
+            sosCloseConfirmGapPts: CurrentSosCloseConfirmGapPts,
+            sosCloseGapPts: CurrentSosCloseGapPts);
 
     // Quota từ DB (max_total_opens / max_buy_opens / max_sell_opens). Floor về 1 để không
     // bao giờ khoá toàn bộ open. Raise StateChanged để ApplyRuntimeConfig → SyncPortfolioCoordinatorConfig
@@ -484,6 +506,23 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
 
     public void UpdateDashboardMetrics(DashboardMetrics snapshot)
     {
+        var observedAtUtc = DateTime.UtcNow;
+        var previous = CurrentDashboardMetrics;
+
+        if (previous is null
+            || previous.ExchangeA.Bid != snapshot.ExchangeA.Bid
+            || previous.ExchangeA.Ask != snapshot.ExchangeA.Ask)
+        {
+            LastQuoteChangedAtUtcA = observedAtUtc;
+        }
+
+        if (previous is null
+            || previous.ExchangeB.Bid != snapshot.ExchangeB.Bid
+            || previous.ExchangeB.Ask != snapshot.ExchangeB.Ask)
+        {
+            LastQuoteChangedAtUtcB = observedAtUtc;
+        }
+
         CurrentDashboardMetrics = snapshot;
         StateChanged?.Invoke(this, EventArgs.Empty);
     }

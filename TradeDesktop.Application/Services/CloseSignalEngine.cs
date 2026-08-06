@@ -75,9 +75,14 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
 
     public void Reset()
     {
+        ResetGapState();
+        _tpState.Reset();
+    }
+
+    public void ResetGapState()
+    {
         _buyState.Reset();
         _sellState.Reset();
-        _tpState.Reset();
     }
 
     private GapSignalTriggerResult? ProcessTp(

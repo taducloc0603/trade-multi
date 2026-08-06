@@ -22,6 +22,10 @@ public interface IRuntimeConfigProvider
     int CurrentMaxGap { get; }
     int CurrentLimitMaxGap { get; }
     double CurrentLimitMaxTp { get; }
+    double CurrentSosTriggerProfitPts { get; }
+    int CurrentSosTriggerAfterSeconds { get; }
+    int CurrentSosCloseConfirmGapPts { get; }
+    int CurrentSosCloseGapPts { get; }
     int CurrentMaxSpread { get; }
     int CurrentOpenMaxTimesTick { get; }
     int CurrentCloseMaxTimesTick { get; }
@@ -37,4 +41,10 @@ public interface IRuntimeConfigProvider
     string CurrentMapName1 { get; }
     string CurrentMapName2 { get; }
     DashboardMetrics? CurrentDashboardMetrics { get; }
+
+    // Thời điểm ứng dụng quan sát thấy Bid/Ask thực sự thay đổi trên từng sàn.
+    // Default null giữ tương thích với các provider tối giản; production provider
+    // phải cập nhật các giá trị này trên mỗi dashboard snapshot.
+    DateTime? LastQuoteChangedAtUtcA => null;
+    DateTime? LastQuoteChangedAtUtcB => null;
 }

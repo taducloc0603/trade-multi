@@ -18,6 +18,7 @@ public sealed class StabilityStressTests
             double? slotProfit = null)
             => NextResult;
         public void Reset() { }
+        public void ResetGapState() { }
     }
 
     private sealed class ScriptedFactory : ICloseSignalEngineFactory

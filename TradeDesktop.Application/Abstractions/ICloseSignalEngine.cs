@@ -10,5 +10,6 @@ public interface ICloseSignalEngine
         TradingOpenMode openMode,
         double? slotProfit = null);
 
+    void ResetGapState();
     void Reset();
 }

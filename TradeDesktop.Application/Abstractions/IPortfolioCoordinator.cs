@@ -81,10 +81,6 @@ public interface IPortfolioCoordinator
 
     // === Profit tracking (Phase 1 MMF poll; Phase 2 Rule D priority close) ===
     void UpdateProfit(ulong ticket, double profit);
-    CloseDispatchGuardResult CheckCloseDispatch(
-        string pairId,
-        DateTime nowUtc,
-        double closeMinProfit);
 
     // === Rule checks (Phase 2) ===
     bool CanOpenNewSlot(TradingPositionSide side, out string blockReason);
@@ -131,12 +127,6 @@ public enum AutoTradeActionType
     Close = 2
 }
 
-public sealed record CloseDispatchGuardResult(
-    bool Allowed,
-    double? LatestProfit,
-    double MinProfit,
-    bool IsOvertime,
-    string Reason);
 
 public sealed record PortfolioSnapshotResult(
     GapSignalTriggerResult? OpenTrigger,

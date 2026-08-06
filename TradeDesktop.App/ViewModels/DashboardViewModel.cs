@@ -1948,54 +1948,6 @@ public sealed class DashboardViewModel : ObservableObject
 
         try
         {
-            if (targetSlot is not null)
-            {
-                var signalProfit = targetSlot.LastProfitSnapshot;
-                var latestMetrics = _runtimeConfigState.CurrentDashboardMetrics;
-                if (latestMetrics is not null)
-                {
-                    RefreshSlotProfitsEveryTick(latestMetrics, _runtimeConfigState.CurrentPoint);
-                }
-
-                var dispatchGuard = _portfolioCoordinator.CheckCloseDispatch(
-                    targetSlot.PairId,
-                    DateTime.UtcNow,
-                    _runtimeConfigState.CurrentCloseMinProfit);
-
-                if (!dispatchGuard.Allowed)
-                {
-                    _portfolioCoordinator.AbortPendingClose(targetSlot.PairId);
-                    _activeAutoCloseRecoveryCycle = null;
-                    SafeVmLog(
-                        $"[CLOSE_DISPATCH][MINPROFIT_ABORT] slot={targetSlot.SlotId} pairId={targetSlot.PairId} " +
-                        $"reason={trigger.CloseReason} signalProfit={signalProfit?.ToString("0.##") ?? "null"} " +
-                        $"latestProfit={dispatchGuard.LatestProfit?.ToString("0.##") ?? "null"} " +
-                        $"minProfit={dispatchGuard.MinProfit:0.##} overtime={dispatchGuard.IsOvertime} " +
-                        $"guardReason={dispatchGuard.Reason}");
-                    System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                    {
-                        LogFlowTransitionIfChanged("close-aborted-by-dispatch-min-profit");
-                        RaiseCurrentPositionTextChanged();
-                        OnPropertyChanged(nameof(CurrentPhaseText));
-                        SignalLogItems.Insert(0,
-                            $"    - [{DateTime.Now:HH:mm:ss.fff}] Close canceled before dispatch: " +
-                            $"latest profit {dispatchGuard.LatestProfit?.ToString("0.##") ?? "incomplete"} " +
-                            $"< minimum {dispatchGuard.MinProfit:0.##} ({trigger.CloseReason}).");
-                    });
-                    return;
-                }
-
-                if (dispatchGuard.IsOvertime && dispatchGuard.MinProfit > 0d
-                    && (!dispatchGuard.LatestProfit.HasValue
-                        || dispatchGuard.LatestProfit.Value < dispatchGuard.MinProfit))
-                {
-                    SafeVmLog(
-                        $"[CLOSE_DISPATCH][MINPROFIT_BYPASS] slot={targetSlot.SlotId} pairId={targetSlot.PairId} " +
-                        $"reason={trigger.CloseReason} latestProfit={dispatchGuard.LatestProfit?.ToString("0.##") ?? "null"} " +
-                        $"minProfit={dispatchGuard.MinProfit:0.##} overtime=true");
-                }
-            }
-
             var slot = Math.Max(0, _autoSlot - 1);
             _closeConfirmBySlot.Remove(slot);
 
@@ -3278,7 +3230,7 @@ public sealed class DashboardViewModel : ObservableObject
             : $"Sàn B ({_runtimeConfigState.MapName2})";
 
         RuntimeSummary =
-            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  CloseMinProfit: {_runtimeConfigState.CurrentCloseMinProfit}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
+            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  SOS Profit: {_runtimeConfigState.CurrentSosTriggerProfitPts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
 
         HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsComplete);
         RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict()));
@@ -6475,7 +6427,10 @@ public sealed class DashboardViewModel : ObservableObject
                     closeMaxTpProfit: result.CloseMaxTpProfit,
                     limitMaxTp: result.LimitMaxTp,
                     freezeLastN: result.FreezeLastN,
-                    closeMinProfit: result.CloseMinProfit,
+                    sosTriggerProfitPts: result.SosTriggerProfitPts,
+                    sosTriggerAfterSeconds: result.SosTriggerAfterSeconds,
+                    sosCloseConfirmGapPts: result.SosCloseConfirmGapPts,
+                    sosCloseGapPts: result.SosCloseGapPts,
                     oppositeSideLockSeconds: result.OppositeSideLockSeconds,
                     oppositeOpenMinDistancePts: result.OppositeOpenMinDistancePts,
                     rdStartSameActionLockSeconds: result.RdStartSameActionLockSeconds,
@@ -6637,7 +6592,10 @@ public sealed class DashboardViewModel : ObservableObject
                     CloseMaxTimesTick: _runtimeConfigState.CurrentCloseMaxTimesTick,
                     LimitMaxGap: _runtimeConfigState.CurrentLimitMaxGap,
                     LimitMaxTp: _runtimeConfigState.CurrentLimitMaxTp,
-                    CloseMinProfit: _runtimeConfigState.CurrentCloseMinProfit));
+                    SosTriggerProfitPts: _runtimeConfigState.CurrentSosTriggerProfitPts,
+                    SosTriggerAfterSeconds: _runtimeConfigState.CurrentSosTriggerAfterSeconds,
+                    SosCloseConfirmGapPts: _runtimeConfigState.CurrentSosCloseConfirmGapPts,
+                    SosCloseGapPts: _runtimeConfigState.CurrentSosCloseGapPts));
 
             // Reduce 3-field result to single trigger for legacy guard code path below.
             // For close trigger, also capture the target slot (Phase 1 cap=1: at most 1 slot).

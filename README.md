@@ -119,7 +119,7 @@ Rule theo mode đã mở:
   - tick cuối: `GapBuy >= ClosePts`
   - `LimitMaxGap` áp dụng tương tự
 
-> **Guard `CloseMinProfit`** (`close_min_profit`, đơn vị point, default 0 = tắt): SÀN lợi nhuận tối thiểu để **đóng theo signal**. Áp ở **`PortfolioCoordinator.ProcessSnapshot`** khi build `eligibleCloses` (không phải trong signal engine — cần biết tuổi slot). Khi `CloseMinProfit > 0`, **mọi close theo signal** (cả **gap-reversal** `CloseReason.Gap` LẪN **TP** `CloseReason.Tp`) bị chặn nếu profit tổng A+B của slot (`slot.LastProfitSnapshot`) chưa `>= CloseMinProfit` (hoặc chưa có snapshot đầy đủ → fail-safe chặn). **Ngoại lệ**: lệnh **QUÁ HẠN** (`age > max_life_time_by_second`) được **MIỄN** guard → vẫn đóng dù chưa đủ sàn. Không tạo close mới → không đụng Rule E. ⚠️ Nếu `LimitMaxTp`/`close_max_tp_profit` > 0 nhưng < `CloseMinProfit`, TP sẽ không bao giờ khớp — đảm bảo các cap này `>= CloseMinProfit` hoặc `= 0`.
+**SOS close path (theo từng slot):** SOS bật khi một trong hai điều kiện đúng: profit realtime A+B `>= sos_trigger_profit_pts` (giá trị `0` là tắt điều kiện profit), hoặc tuổi lệnh `>= sos_trigger_after_seconds` (giá trị `0` là tắt điều kiện thời gian). Khi SOS bật, Gap Close dùng `sos_close_confirm_gap_pts` và `sos_close_gap_pts`; TP vẫn luôn dùng bộ TP thường. Nếu một trong hai ngưỡng Gap SOS bằng `0`, hệ thống fail-safe về bộ Gap thường. Nếu profit tụt dưới ngưỡng trước khi đủ thời gian, slot trở lại Normal. Khi điều kiện thời gian đã đạt thì SOS tiếp tục bật. Mỗi lần đổi Normal ↔ SOS chỉ reset window Gap của slot, không reset TP window; log chỉ ghi lúc chuyển trạng thái để tránh spam. Trước khi dispatch, Gap được kiểm tra lại bằng đúng bộ ngưỡng Normal/SOS đang áp dụng và phải không vượt `limit_max_gap`.
 
 **TP close path** (song song với gap close, thắng nếu trigger trước):
 
@@ -239,7 +239,10 @@ những limit còn lại dùng `0` để disable):
 | `max_gap` | `CurrentMaxGap` | `int` | Chặn open/close tại trigger nếu `|gap| > max_gap` (post-trigger guard) |
 | `limit_max_gap` | `CurrentLimitMaxGap` | `int` | Reset confirm window ngay nếu `|gap| > limit_max_gap` trong mỗi tick |
 | `limit_max_tp` | `CurrentLimitMaxTp` | `double` | Reset TP window ngay nếu `profit > limit_max_tp` trong mỗi tick |
-| `close_min_profit` | `CurrentCloseMinProfit` | `double` | SÀN lợi nhuận tối thiểu: chặn **mọi close theo signal** (gap-reversal + TP) nếu profit A+B `< close_min_profit` (miễn khi lệnh quá hạn) |
+| `sos_trigger_profit_pts` | `CurrentSosTriggerProfitPts` | `double` | Profit realtime A+B để kích hoạt SOS; `0` tắt điều kiện profit |
+| `sos_trigger_after_seconds` | `CurrentSosTriggerAfterSeconds` | `int` | Tuổi lệnh để kích hoạt SOS; `0` tắt điều kiện thời gian |
+| `sos_close_confirm_gap_pts` | `CurrentSosCloseConfirmGapPts` | `int` | Ngưỡng bắt đầu xác nhận Gap Close khi SOS bật; được phép là số âm |
+| `sos_close_gap_pts` | `CurrentSosCloseGapPts` | `int` | Ngưỡng phát Gap Close khi SOS bật; được phép là số âm |
 | `rd_start_post_open_lock_seconds` / `rd_end_post_open_lock_seconds` | Runtime post-open range | `int` | Random một lần cho từng slot khi Open confirmed; chặn Auto Close của slot đó |
 | `rd_start_post_close_lock_seconds` / `rd_end_post_close_lock_seconds` | Runtime post-close range | `int` | Random một lần cho mỗi Auto Close; chặn Auto Open cho tới hết deadline |
 | `rd_start_same_action_lock_seconds` / `rd_end_same_action_lock_seconds` | Runtime same-action range | `int` | Random cho Open cùng chiều→Open cùng chiều và Close→Close |

@@ -76,6 +76,10 @@ public sealed class GapCalculatorTests
         public int CurrentMaxGap => 0;
         public int CurrentLimitMaxGap => 0;
         public double CurrentLimitMaxTp => 0;
+        public double CurrentSosTriggerProfitPts => 0;
+        public int CurrentSosTriggerAfterSeconds => 0;
+        public int CurrentSosCloseConfirmGapPts => 0;
+        public int CurrentSosCloseGapPts => 0;
         public int CurrentMaxSpread => 0;
         public int CurrentOpenMaxTimesTick => 0;
         public int CurrentCloseMaxTimesTick => 0;

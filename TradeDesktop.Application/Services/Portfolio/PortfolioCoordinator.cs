@@ -192,7 +192,6 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
         // 4. CLOSE path: iterate each Live slot's own CloseSignalEngine.
         var maxLifeTimeSec = _state.MaxLifeTimeBySecond;
-        var minProfit = Math.Abs(config.CloseMinProfit);
         var eligibleCloses = new List<(PositionSlot slot, GapSignalTriggerResult trigger)>();
         foreach (var slot in _state.GetLiveSlots())
         {
@@ -200,37 +199,50 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             if (!IsHoldingElapsedOrFloorReached(slot, effectiveNow)) continue;
             if (!IsPostOpenCloseLockElapsed(slot, effectiveNow)) continue;
 
-            LogTpCheck(slot, config, effectiveNow);
+            var profitSos = config.SosTriggerProfitPts > 0d
+                && slot.HasCompleteProfitSnapshot
+                && slot.LastProfitSnapshot >= config.SosTriggerProfitPts;
+            var timeSos = config.SosTriggerAfterSeconds > 0
+                && slot.OpenConfirmedAtUtc.HasValue
+                && (effectiveNow - slot.OpenConfirmedAtUtc.Value).TotalSeconds >= config.SosTriggerAfterSeconds;
+            var sosActive = profitSos || timeSos;
+            var sosSource = profitSos && timeSos ? "PROFIT_AND_TIME" : profitSos ? "PROFIT" : timeSos ? "TIME" : "NONE";
+            if (slot.UpdateSosMode(sosActive, sosSource))
+            {
+                slot.CloseSignalEngine.ResetGapState();
+                _logger?.Log(
+                    $"[SOS][{(sosActive ? "ACTIVATED" : "DEACTIVATED")}] slot={slot.SlotId} pairId={slot.PairId} " +
+                    $"reason={(sosActive ? SosReasonVietnamese(sosSource) : "Profit đã xuống dưới ngưỡng và chưa quá thời gian kích hoạt")} " +
+                    $"profit={(slot.LastProfitSnapshot.HasValue ? slot.LastProfitSnapshot.Value.ToString("0.##") : "null")} " +
+                    $"profitThreshold={config.SosTriggerProfitPts:0.##} ageSeconds={GetSlotAgeSeconds(slot, effectiveNow):0.##} " +
+                    $"timeThreshold={config.SosTriggerAfterSeconds} " +
+                    $"gapMode={(sosActive
+                        ? SosCloseConfigResolver.HasUsableSosGapThresholds(config.SosCloseConfirmGapPts, config.SosCloseGapPts) ? "SOS" : "NORMAL_FALLBACK"
+                        : "NORMAL")}");
+            }
+
+            var resolvedGap = SosCloseConfigResolver.ResolveGapThresholds(
+                sosActive,
+                config.CloseConfirmGapPts,
+                config.ClosePts,
+                config.SosCloseConfirmGapPts,
+                config.SosCloseGapPts);
+            var effectiveCloseConfig = config with
+            {
+                CloseConfirmGapPts = resolvedGap.ConfirmGapPts,
+                ClosePts = resolvedGap.CloseGapPts
+            };
+
+            LogTpCheck(slot, effectiveCloseConfig, effectiveNow);
 
             var closeTrigger = slot.CloseSignalEngine.ProcessSnapshot(
                 snapshot,
-                config,
+                effectiveCloseConfig,
                 slot.OpenMode,
                 slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot : null);
             if (closeTrigger is null || !closeTrigger.Triggered || closeTrigger.Action != GapSignalAction.Close)
             {
                 continue;
-            }
-
-            // Guard min-profit (close_min_profit): SÀN lợi nhuận tối thiểu để ĐÓNG theo signal.
-            // Áp cho MỌI CloseReason (cả Gap-reversal LẪN TP) — chặn đóng khi profit A+B của slot
-            // chưa đạt ngưỡng. Lệnh QUÁ HẠN (age > max_life_time_by_second) được MIỄN guard → vẫn
-            // đóng dù chưa đủ sàn. CloseMinProfit <= 0 = tắt guard. Không tạo close mới → không đụng Rule E.
-            if (minProfit > 0d)
-            {
-                var isOvertime = maxLifeTimeSec > 0
-                    && slot.OpenConfirmedAtUtc.HasValue
-                    && (effectiveNow - slot.OpenConfirmedAtUtc.Value).TotalSeconds > maxLifeTimeSec;
-                var slotProfit = slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot : null;
-                if (!isOvertime && (!slotProfit.HasValue || slotProfit.Value < minProfit))
-                {
-                    _logger?.Log(
-                        $"[CLOSE_SELECT][MINPROFIT_SKIP] slot={slot.SlotId} pairId={slot.PairId} " +
-                        $"reason={closeTrigger.CloseReason} " +
-                        $"profit={(slotProfit.HasValue ? slotProfit.Value.ToString("0.##") : "null")} " +
-                        $"minProfit={minProfit:0.##} overtime={isOvertime} — close suppressed");
-                    continue;
-                }
             }
 
             eligibleCloses.Add((slot, closeTrigger));
@@ -688,44 +700,6 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         slot.UpdateProfit(ticket, profit);
     }
 
-    public CloseDispatchGuardResult CheckCloseDispatch(
-        string pairId,
-        DateTime nowUtc,
-        double closeMinProfit)
-    {
-        var minProfit = Math.Abs(closeMinProfit);
-        var slot = _state.GetSlotByPairId(pairId);
-        if (slot is null)
-        {
-            return new CloseDispatchGuardResult(false, null, minProfit, false, "SLOT_NOT_FOUND");
-        }
-
-        var effectiveNow = ResolveEffectiveNowUtc(nowUtc);
-        var isOvertime = _state.MaxLifeTimeBySecond > 0
-            && slot.OpenConfirmedAtUtc.HasValue
-            && (effectiveNow - slot.OpenConfirmedAtUtc.Value).TotalSeconds > _state.MaxLifeTimeBySecond;
-        var latestProfit = slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot : null;
-
-        if (minProfit <= 0d)
-        {
-            return new CloseDispatchGuardResult(true, latestProfit, minProfit, isOvertime, "MIN_PROFIT_DISABLED");
-        }
-
-        if (isOvertime)
-        {
-            return new CloseDispatchGuardResult(true, latestProfit, minProfit, true, "OVERTIME_BYPASS");
-        }
-
-        if (!latestProfit.HasValue)
-        {
-            return new CloseDispatchGuardResult(false, null, minProfit, false, "INCOMPLETE_PROFIT");
-        }
-
-        return latestProfit.Value >= minProfit
-            ? new CloseDispatchGuardResult(true, latestProfit, minProfit, false, "MIN_PROFIT_MET")
-            : new CloseDispatchGuardResult(false, latestProfit, minProfit, false, "BELOW_MIN_PROFIT");
-    }
-
     private void LogTpCheck(PositionSlot slot, GapSignalConfirmationConfig config, DateTime effectiveNow)
     {
         if (config.CloseTpProfit <= 0d)
@@ -1080,6 +1054,19 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     }
 
     // ===== Helpers =====
+    private static double GetSlotAgeSeconds(PositionSlot slot, DateTime nowUtc)
+        => slot.OpenConfirmedAtUtc.HasValue
+            ? Math.Max(0d, (nowUtc - slot.OpenConfirmedAtUtc.Value).TotalSeconds)
+            : 0d;
+
+    private static string SosReasonVietnamese(string source) => source switch
+    {
+        "PROFIT" => "Profit hiện tại đã đạt ngưỡng kích hoạt SOS",
+        "TIME" => "Thời gian mở lệnh đã đạt ngưỡng kích hoạt SOS",
+        "PROFIT_AND_TIME" => "Profit và thời gian mở lệnh đều đã đạt ngưỡng kích hoạt SOS",
+        _ => "Không có điều kiện SOS"
+    };
+
     private bool IsHoldingElapsedOrFloorReached(PositionSlot slot, DateTime nowUtc)
     {
         // Slot must have an OpenedAtUtc baseline. If null (race), allow close.

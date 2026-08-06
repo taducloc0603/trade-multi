@@ -40,6 +40,8 @@ public sealed class PositionSlot
     public double? LastProfitB { get; private set; }
     public bool HasCompleteProfitSnapshot => LastProfitA.HasValue && LastProfitB.HasValue;
     public CloseSignalReason? LastCloseReason { get; private set; }
+    public bool IsSosActive { get; private set; }
+    public string SosActivationSource { get; private set; } = "NONE";
     public ICloseSignalEngine CloseSignalEngine { get; private set; }
 
     public void MarkOpenTriggered(
@@ -55,6 +57,8 @@ public sealed class PositionSlot
         Status = PositionSlotStatus.PendingOpen;
         ClearProfitSnapshot();
         LastCloseReason = null;
+        IsSosActive = false;
+        SosActivationSource = "NONE";
     }
 
     public void MarkOpenConfirmed(ulong ticketA, ulong ticketB, DateTime confirmedAtUtc, int postOpenLockSeconds = 0)
@@ -140,6 +144,8 @@ public sealed class PositionSlot
         CloseOwner = CloseExecutionOwner.None;
         ClearProfitSnapshot();
         LastCloseReason = null;
+        IsSosActive = false;
+        SosActivationSource = "NONE";
     }
 
     public void SetSelectedPostOpenLockSeconds(int seconds)
@@ -174,6 +180,14 @@ public sealed class PositionSlot
     public void ResetCloseSignalEngine(ICloseSignalEngine engine)
     {
         CloseSignalEngine = engine;
+    }
+
+    public bool UpdateSosMode(bool isActive, string source)
+    {
+        var changed = IsSosActive != isActive;
+        IsSosActive = isActive;
+        SosActivationSource = isActive ? source : "NONE";
+        return changed;
     }
 
     private void ClearProfitSnapshot()

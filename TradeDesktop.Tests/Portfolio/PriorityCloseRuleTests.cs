@@ -21,6 +21,7 @@ public sealed class PriorityCloseRuleTests
             => NextResult;
 
         public void Reset() { /* no-op for scripted engine */ }
+        public void ResetGapState() { /* no-op for scripted engine */ }
     }
 
     private sealed class ScriptedFactory : ICloseSignalEngineFactory

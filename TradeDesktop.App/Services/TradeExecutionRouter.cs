@@ -404,7 +404,7 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         {
             return (false, "LATEST_SNAPSHOT_UNAVAILABLE");
         }
-        var marketSafety = ValidateLatestMarketSafety(metrics);
+        var marketSafety = ValidateLatestMarketSafety(metrics, _runtimeConfig.CurrentOpenPriceFreezeMs);
         if (!marketSafety.Allowed)
         {
             return marketSafety;
@@ -560,7 +560,7 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         {
             return (false, "LATEST_SNAPSHOT_UNAVAILABLE");
         }
-        var latestSafety = ValidateLatestMarketSafety(latestMetrics);
+        var latestSafety = ValidateLatestMarketSafety(latestMetrics, _runtimeConfig.CurrentClosePriceFreezeMs);
         if (!latestSafety.Allowed)
         {
             return latestSafety;
@@ -576,18 +576,22 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         }
         else
         {
-            var threshold = Math.Max(
-                Math.Abs(_runtimeConfig.CurrentClosePts),
-                Math.Abs(_runtimeConfig.CurrentCloseConfirmGapPts));
-            var valid = signal.TriggerType switch
+            var resolvedGap = SosCloseConfigResolver.ResolveGapThresholds(
+                slot.IsSosActive,
+                _runtimeConfig.CurrentCloseConfirmGapPts,
+                _runtimeConfig.CurrentClosePts,
+                _runtimeConfig.CurrentSosCloseConfirmGapPts,
+                _runtimeConfig.CurrentSosCloseGapPts);
+            var gapError = SosCloseConfigResolver.ValidateLatestGap(
+                signal.TriggerType,
+                latestMetrics.GapBuy,
+                latestMetrics.GapSell,
+                resolvedGap.ConfirmGapPts,
+                resolvedGap.CloseGapPts,
+                _runtimeConfig.CurrentLimitMaxGap);
+            if (gapError is not null)
             {
-                GapSignalTriggerType.CloseByGapBuy => latestMetrics.GapBuy is { } gap && gap >= threshold,
-                GapSignalTriggerType.CloseByGapSell => latestMetrics.GapSell is { } gap && gap <= -threshold,
-                _ => false
-            };
-            if (!valid)
-            {
-                return (false, "LATEST_CLOSE_CONDITION_INVALID");
+                return (false, gapError);
             }
         }
 
@@ -595,7 +599,8 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
     }
 
     private (bool Allowed, string Code) ValidateLatestMarketSafety(
-        TradeDesktop.Domain.Models.DashboardMetrics metrics)
+        TradeDesktop.Domain.Models.DashboardMetrics metrics,
+        int priceFreezeMs)
     {
         var timestampUtc = metrics.TimestampUtc.Kind switch
         {
@@ -606,6 +611,22 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         if ((DateTime.UtcNow - timestampUtc).TotalSeconds > 10)
         {
             return (false, "LATEST_SNAPSHOT_STALE");
+        }
+
+        if (priceFreezeMs > 0)
+        {
+            var nowUtc = DateTime.UtcNow;
+            if (!_runtimeConfig.LastQuoteChangedAtUtcA.HasValue
+                || (nowUtc - _runtimeConfig.LastQuoteChangedAtUtcA.Value).TotalMilliseconds >= priceFreezeMs)
+            {
+                return (false, "LATEST_EXCHANGE_A_QUOTE_FROZEN");
+            }
+
+            if (!_runtimeConfig.LastQuoteChangedAtUtcB.HasValue
+                || (nowUtc - _runtimeConfig.LastQuoteChangedAtUtcB.Value).TotalMilliseconds >= priceFreezeMs)
+            {
+                return (false, "LATEST_EXCHANGE_B_QUOTE_FROZEN");
+            }
         }
 
         var maxLatency = Math.Max(0, _runtimeConfig.CurrentConfirmLatencyMs);
