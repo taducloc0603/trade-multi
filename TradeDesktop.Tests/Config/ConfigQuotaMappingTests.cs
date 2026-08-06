@@ -106,4 +106,37 @@ public sealed class ConfigQuotaMappingTests
         Assert.Equal(30, result.RdStartPostOpenLockSeconds);
         Assert.Equal(45, result.RdEndPostOpenLockSeconds);
     }
+
+    [Fact]
+    public void Success_MapsOppositeOpenMinimumDistance()
+    {
+        var result = ConfigLoadResult.Success(
+            machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
+            platformA: "mt5", platformB: "mt5", point: 100, openPts: 1,
+            confirmGapPts: 0, holdConfirmMs: 650, openPriceFreezeMs: 2000,
+            closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
+            closeConfirmTpProfit: 0, closeMaxTpProfit: 35, closeHoldConfirmMs: 650,
+            closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
+            configId: "id", sansJson: "{}", oppositeOpenMinDistancePts: 25);
+
+        Assert.Equal(25, result.OppositeOpenMinDistancePts);
+    }
+
+    [Fact]
+    public void Success_MapsSameActionRandomRange()
+    {
+        var result = ConfigLoadResult.Success(
+            machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
+            platformA: "mt5", platformB: "mt5", point: 100, openPts: 1,
+            confirmGapPts: 0, holdConfirmMs: 650, openPriceFreezeMs: 2000,
+            closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
+            closeConfirmTpProfit: 0, closeMaxTpProfit: 35, closeHoldConfirmMs: 650,
+            closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
+            configId: "id", sansJson: "{}",
+            rdStartSameActionLockSeconds: 6,
+            rdEndSameActionLockSeconds: 12);
+
+        Assert.Equal(6, result.RdStartSameActionLockSeconds);
+        Assert.Equal(12, result.RdEndSameActionLockSeconds);
+    }
 }

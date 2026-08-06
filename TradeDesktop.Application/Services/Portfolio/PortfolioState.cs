@@ -40,6 +40,8 @@ public sealed class PortfolioState
     public TradingPositionSide LastAutoDispatchSide { get; set; } = TradingPositionSide.None;
     public DateTime? LastAutoDispatchAtUtc { get; set; }
     public int LastAutoRandomIntervalSeconds { get; set; }
+    public int RdStartSameActionLockSeconds { get; set; } = 3;
+    public int RdEndSameActionLockSeconds { get; set; } = 10;
 
     public int CountLiveAndPendingBuy()
         => _slots.Count(s => s.Side == TradingPositionSide.Buy && IsLiveOrPending(s.Status));

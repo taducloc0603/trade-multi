@@ -49,9 +49,10 @@ DB integration deferred).
 
 ### Rule B — Auto cooldown + non-auto close barrier
 - Auto dùng transition gate theo action/side trước và action/side kế tiếp; không dùng một global post-action timer.
-- Open cùng chiều→Open cùng chiều và Close→Close: random 3–10s, sinh đúng một lần tại dispatch.
+- Open cùng chiều→Open cùng chiều và Close→Close: random theo `rd_start_same_action_lock_seconds..rd_end_same_action_lock_seconds`, sinh đúng một lần tại dispatch; invalid fallback 3..10.
 - Close→Open: random một lần trong `rd_start_post_close_lock_seconds..rd_end_post_close_lock_seconds`, lưu theo slot Auto Close. Open ngược chiều: `opposite_side_lock_seconds` + Open point policy.
 - Open→Close theo phương án B: từng slot random một lần khi Open confirmed trong `rd_start_post_open_lock_seconds..rd_end_post_open_lock_seconds`, rồi chỉ eligible khi hết deadline riêng.
+- Auto Open đảo chiều còn phải qua `opposite_open_min_distance_pts`: Buy→Sell dùng `(A.Bid-AvgBuyOpenA)*Point`; Sell→Buy dùng `(AvgSellOpenA-A.Ask)*Point`. Chỉ tính ticket A của slot Auto Live/PendingClose, re-check trong router mutex; Manual/Recovery không áp dụng.
   Open slot mới không refresh thời gian Close của slot cũ.
 - `GlobalActionLockUntilUtc` chỉ dành cho startup/recovery cooldown toàn cục, không dùng cho ma trận thường.
 - Manual/recovery KHÔNG đọc/ghi Auto transition state và dùng non-auto close barrier.
@@ -65,7 +66,7 @@ DB integration deferred).
   - Cả 2 push trong `SyncPortfolioCoordinatorConfig`.
 - **Lock 1 (sau OPEN)** — dùng `OppositeSideLockSeconds`: sau OPEN confirm → CHỈ block OPEN opposite-side. Same-side OPEN refresh timer. KHÔNG block CLOSE. State: `LastOpenConfirmedAtUtc`, `LastOpenConfirmedSide`.
 - **Lock 2 (post-close auto)** — random tại Auto Close dispatch và lưu theo slot; sau MMF confirm, cùng duration được neo lại tại `CloseConfirmedAtUtc` để block Auto Open/re-entry;
-  Auto Close tiếp theo chỉ chờ random 3–10s.
+  Auto Close tiếp theo chỉ chờ random theo same-action range DB.
   Manual/recovery close không set `LastCloseConfirmedAtUtc` và không tạo/gia hạn auto cooldown.
 - Cả 2 check nằm trong `CanOpenNewSlot` (chỉ chặn, không tạo open/close → không vi phạm Rule E). Block reason: `OPPOSITE_SIDE_LOCK` / `POST_CLOSE_LOCK`.
 

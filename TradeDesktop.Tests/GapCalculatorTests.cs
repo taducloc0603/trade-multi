@@ -87,6 +87,7 @@ public sealed class GapCalculatorTests
         public int CurrentDelayCloseBMs => 0;
         public int CurrentOpenNumberOfQualifyingTimes => 1;
         public int CurrentCloseNumberOfQualifyingTimes => 1;
+        public int CurrentOppositeOpenMinDistancePts => 0;
         public int CurrentOpenPriceFreezeMs => 0;
         public int CurrentClosePriceFreezeMs => 0;
         public string CurrentMapName1 => "A";

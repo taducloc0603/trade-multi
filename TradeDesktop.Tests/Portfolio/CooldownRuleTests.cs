@@ -46,6 +46,23 @@ public sealed class CooldownRuleTests
             now.AddSeconds(first.CooldownSeconds), "OPEN", "ready", side: side).Acquired);
     }
 
+    [Fact]
+    public void SameSideOpen_UsesConfiguredDatabaseRange()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateSameActionLockConfig(17, 17);
+        var now = DateTime.UtcNow;
+
+        var first = coordinator.TryAcquireTradeAction(now, "OPEN", "first", side: TradingPositionSide.Buy);
+
+        Assert.True(first.Acquired);
+        Assert.Equal(17, first.CooldownSeconds);
+        Assert.False(coordinator.TryAcquireTradeAction(
+            now.AddSeconds(16), "OPEN", "early", side: TradingPositionSide.Buy).Acquired);
+        Assert.True(coordinator.TryAcquireTradeAction(
+            now.AddSeconds(17), "OPEN", "ready", side: TradingPositionSide.Buy).Acquired);
+    }
+
     [Theory]
     [InlineData(TradingPositionSide.Buy, TradingPositionSide.Sell)]
     [InlineData(TradingPositionSide.Sell, TradingPositionSide.Buy)]
@@ -82,6 +99,27 @@ public sealed class CooldownRuleTests
         Assert.True(coordinator.TryAcquireTradeAction(
             now.AddSeconds(first.CooldownSeconds), "CLOSE", "ready",
             side: TradingPositionSide.Sell, pairId: "p2").Acquired);
+    }
+
+    [Fact]
+    public void CloseToClose_UsesConfiguredDatabaseRange()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateSameActionLockConfig(19, 19);
+        coordinator.UpdatePostOpenLockConfig(0);
+        var now = DateTime.UtcNow;
+        AddLiveSlot(coordinator, "p1", TradingPositionSide.Buy, now.AddMinutes(-1));
+        AddLiveSlot(coordinator, "p2", TradingPositionSide.Sell, now.AddMinutes(-1));
+
+        var first = coordinator.TryAcquireTradeAction(
+            now, "CLOSE", "first", side: TradingPositionSide.Buy, pairId: "p1");
+
+        Assert.True(first.Acquired);
+        Assert.Equal(19, first.CooldownSeconds);
+        Assert.False(coordinator.TryAcquireTradeAction(
+            now.AddSeconds(18), "CLOSE", "early", side: TradingPositionSide.Sell, pairId: "p2").Acquired);
+        Assert.True(coordinator.TryAcquireTradeAction(
+            now.AddSeconds(19), "CLOSE", "ready", side: TradingPositionSide.Sell, pairId: "p2").Acquired);
     }
 
     [Theory]

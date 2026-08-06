@@ -47,6 +47,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     // Rule C — opposite-side OPEN lock (sau OPEN, chỉ chặn chiều ngược). Default 300 khi DB
     // chưa có cột, override từ DB column opposite_side_lock_seconds.
     public int CurrentOppositeSideLockSeconds { get; private set; } = 300;
+    public int CurrentOppositeOpenMinDistancePts { get; private set; }
+    public int CurrentRdStartSameActionLockSeconds { get; private set; } = 3;
+    public int CurrentRdEndSameActionLockSeconds { get; private set; } = 10;
 
     public int CurrentRdStartPostCloseLockSeconds { get; private set; } = 300;
     public int CurrentRdEndPostCloseLockSeconds { get; private set; } = 300;
@@ -159,6 +162,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int freezeLastN = 0,
         double closeMinProfit = 0,
         int oppositeSideLockSeconds = -1,
+        int oppositeOpenMinDistancePts = -1,
+        int rdStartSameActionLockSeconds = -1,
+        int rdEndSameActionLockSeconds = -1,
         int rdStartPostCloseLockSeconds = -1,
         int rdEndPostCloseLockSeconds = -1,
         int rdStartPostOpenLockSeconds = -1,
@@ -202,6 +208,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             freezeLastN,
             closeMinProfit,
             oppositeSideLockSeconds,
+            oppositeOpenMinDistancePts,
+            rdStartSameActionLockSeconds,
+            rdEndSameActionLockSeconds,
             rdStartPostCloseLockSeconds,
             rdEndPostCloseLockSeconds,
             rdStartPostOpenLockSeconds,
@@ -246,6 +255,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int freezeLastN = 0,
         double closeMinProfit = 0,
         int oppositeSideLockSeconds = -1,
+        int oppositeOpenMinDistancePts = -1,
+        int rdStartSameActionLockSeconds = -1,
+        int rdEndSameActionLockSeconds = -1,
         int rdStartPostCloseLockSeconds = -1,
         int rdEndPostCloseLockSeconds = -1,
         int rdStartPostOpenLockSeconds = -1,
@@ -322,6 +334,17 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         {
             // 0 = tắt lock nguy hiểm → giữ default 300 khi <= 0.
             CurrentOppositeSideLockSeconds = oppositeSideLockSeconds > 0 ? oppositeSideLockSeconds : 300;
+        }
+        if (oppositeOpenMinDistancePts >= 0)
+        {
+            CurrentOppositeOpenMinDistancePts = Math.Max(0, oppositeOpenMinDistancePts);
+        }
+        if (rdStartSameActionLockSeconds >= 0 || rdEndSameActionLockSeconds >= 0)
+        {
+            var start = rdStartSameActionLockSeconds > 0 ? rdStartSameActionLockSeconds : 3;
+            var end = rdEndSameActionLockSeconds > 0 ? rdEndSameActionLockSeconds : 10;
+            CurrentRdStartSameActionLockSeconds = Math.Min(start, end);
+            CurrentRdEndSameActionLockSeconds = Math.Max(start, end);
         }
         if (rdStartPostCloseLockSeconds >= 0 || rdEndPostCloseLockSeconds >= 0)
         {

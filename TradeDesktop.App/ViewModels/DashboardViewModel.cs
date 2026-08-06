@@ -82,7 +82,10 @@ public sealed class DashboardViewModel : ObservableObject
     private int _externalPartialCloseStreak = 0;
     private bool _hadBothOpenRecently = false;
     private string _lastExternalCloseGuardBlockReason = string.Empty;
+    private string _lastOppositeOpenGuardBlockSignature = string.Empty;
+    private DateTime _lastOppositeOpenGuardBlockLogAtUtc;
     private const int ExternalPartialCloseStreakRequired = 4;
+    private static readonly TimeSpan OppositeOpenGuardBlockLogInterval = TimeSpan.FromSeconds(30);
     private bool _externalPartialCloseInFlight = false;
     private double? _lastLoggedLatencyA;
     private double? _lastLoggedLatencyB;
@@ -1574,6 +1577,11 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
+        if (!TryAllowOppositeOpenPriceGuard(requestedTradeType: 0, stage: "CHECK", pairId: null))
+        {
+            return;
+        }
+
         // Phase 3: per-side in-flight lock — Buy không cản Sell và ngược lại.
         // Old global lock _autoOpenInFlight still kept for backward compat (e.g., Reset paths).
         if (Interlocked.CompareExchange(ref _autoOpenInFlightBuy, 1, 0) != 0
@@ -1693,6 +1701,11 @@ public sealed class DashboardViewModel : ObservableObject
             if (openResult.IsDispatchBlocked)
             {
                 RemovePendingOpenRequests(appOpenRequestRawMs);
+                if (_pendingOpenPairById.TryGetValue(pairId, out var blockedState))
+                {
+                    blockedState.IsResolved = true;
+                }
+                _portfolioCoordinator.AbortPendingOpen(pairId);
                 SafeVmLog($"[TRADE_GATE][BLOCKED] OPEN pairId={pairId} remainingMs={openResult.GateRemainingMilliseconds}");
                 return;
             }
@@ -1744,6 +1757,11 @@ public sealed class DashboardViewModel : ObservableObject
                 SignalLogItems.Insert(0,
                     $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: invariant watchdog is active (auto-open paused)");
             });
+            return;
+        }
+
+        if (!TryAllowOppositeOpenPriceGuard(requestedTradeType: 1, stage: "CHECK", pairId: null))
+        {
             return;
         }
 
@@ -1864,6 +1882,11 @@ public sealed class DashboardViewModel : ObservableObject
             if (openResult.IsDispatchBlocked)
             {
                 RemovePendingOpenRequests(appOpenRequestRawMs);
+                if (_pendingOpenPairById.TryGetValue(pairId, out var blockedState))
+                {
+                    blockedState.IsResolved = true;
+                }
+                _portfolioCoordinator.AbortPendingOpen(pairId);
                 SafeVmLog($"[TRADE_GATE][BLOCKED] OPEN pairId={pairId} remainingMs={openResult.GateRemainingMilliseconds}");
                 return;
             }
@@ -3255,7 +3278,7 @@ public sealed class DashboardViewModel : ObservableObject
             : $"Sàn B ({_runtimeConfigState.MapName2})";
 
         RuntimeSummary =
-            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  CloseMinProfit: {_runtimeConfigState.CurrentCloseMinProfit}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
+            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  CloseMinProfit: {_runtimeConfigState.CurrentCloseMinProfit}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
 
         HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsComplete);
         RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict()));
@@ -3296,6 +3319,9 @@ public sealed class DashboardViewModel : ObservableObject
         _portfolioCoordinator.UpdatePostOpenLockConfig(
             _runtimeConfigState.CurrentRdStartPostOpenLockSeconds,
             _runtimeConfigState.CurrentRdEndPostOpenLockSeconds);
+        _portfolioCoordinator.UpdateSameActionLockConfig(
+            _runtimeConfigState.CurrentRdStartSameActionLockSeconds,
+            _runtimeConfigState.CurrentRdEndSameActionLockSeconds);
         _portfolioCoordinator.UpdateScheduleSleepingConfig(
             _runtimeConfigState.CurrentScheduleSleepingJson);
     }
@@ -6451,6 +6477,9 @@ public sealed class DashboardViewModel : ObservableObject
                     freezeLastN: result.FreezeLastN,
                     closeMinProfit: result.CloseMinProfit,
                     oppositeSideLockSeconds: result.OppositeSideLockSeconds,
+                    oppositeOpenMinDistancePts: result.OppositeOpenMinDistancePts,
+                    rdStartSameActionLockSeconds: result.RdStartSameActionLockSeconds,
+                    rdEndSameActionLockSeconds: result.RdEndSameActionLockSeconds,
                     rdStartPostCloseLockSeconds: result.RdStartPostCloseLockSeconds,
                     rdEndPostCloseLockSeconds: result.RdEndPostCloseLockSeconds,
                     rdStartPostOpenLockSeconds: result.RdStartPostOpenLockSeconds,
@@ -6474,7 +6503,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
                     DbInlineData =
-                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | freeze_last_n={result.FreezeLastN} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={result.SansJson}";
+                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={result.RdStartSameActionLockSeconds}..{result.RdEndSameActionLockSeconds}s | open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | freeze_last_n={result.FreezeLastN} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={result.SansJson}";
                     IsDbInlineDataVisible = true;
                 }
                 else
@@ -6768,6 +6797,81 @@ public sealed class DashboardViewModel : ObservableObject
         _lastLoggedPhase = phase;
         _lastLoggedOpenMode = openMode;
         _lastLoggedPositionSide = side;
+    }
+
+    private bool TryAllowOppositeOpenPriceGuard(int requestedTradeType, string stage, string? pairId)
+    {
+        var records = _latestTradeLeftResult is { IsMapAvailable: true, IsParseSuccess: true }
+            ? _latestTradeLeftResult.Records
+            : (IReadOnlyList<TradeSharedRecord>)[];
+        var eligibleTickets = _portfolioCoordinator.LiveSlots
+            .Concat(_portfolioCoordinator.PendingCloseSlots)
+            .Where(x => x.TicketA.HasValue)
+            .Select(x => x.TicketA!.Value)
+            .ToHashSet();
+        var metrics = _runtimeConfigState.CurrentDashboardMetrics;
+        var result = eligibleTickets.Count > 0
+            && _runtimeConfigState.CurrentOppositeOpenMinDistancePts > 0
+            && _latestTradeLeftResult is not { IsMapAvailable: true, IsParseSuccess: true }
+                ? OppositeOpenPriceGuardResult.Block(
+                    "OPEN_PRICE_A_MISSING",
+                    "Không có giá mở hợp lệ trên sàn A để tính giá trung bình")
+                : OppositeOpenPriceGuard.Evaluate(
+                    records,
+                    eligibleTickets,
+                    requestedTradeType,
+                    metrics?.ExchangeA.Bid,
+                    metrics?.ExchangeA.Ask,
+                    _runtimeConfigState.CurrentPoint,
+                    _runtimeConfigState.CurrentOppositeOpenMinDistancePts);
+
+        var status = result.Skipped ? "SKIP" : result.Allowed ? "PASS" : "BLOCK";
+        var direction = result.LastTradeType switch
+        {
+            0 when requestedTradeType == 1 => "BUY->SELL",
+            1 when requestedTradeType == 0 => "SELL->BUY",
+            _ => requestedTradeType == 0 ? "NONE->BUY" : "NONE->SELL"
+        };
+        var signature = $"{direction}|{result.ReasonCode}|{result.LastTradeType}|{result.RequiredPts}";
+        var nowUtc = DateTime.UtcNow;
+        var shouldLog = (result.Allowed && !result.Skipped)
+            || !string.Equals(signature, _lastOppositeOpenGuardBlockSignature, StringComparison.Ordinal)
+            || nowUtc - _lastOppositeOpenGuardBlockLogAtUtc >= OppositeOpenGuardBlockLogInterval;
+
+        if (shouldLog)
+        {
+            if (!result.Allowed || result.Skipped)
+            {
+                _lastOppositeOpenGuardBlockSignature = signature;
+                _lastOppositeOpenGuardBlockLogAtUtc = nowUtc;
+            }
+            else if (result.Allowed && !result.Skipped)
+            {
+                _lastOppositeOpenGuardBlockSignature = string.Empty;
+            }
+
+            var log = FormatOppositeOpenGuardLog(stage, status, direction, pairId, result);
+            SafeVmLog(log);
+            AddSignalLog($"[{DateTime.Now:HH:mm:ss.fff}] {log}");
+        }
+
+        return result.Allowed;
+    }
+
+    private static string FormatOppositeOpenGuardLog(
+        string stage,
+        string status,
+        string direction,
+        string? pairId,
+        OppositeOpenPriceGuardResult result)
+    {
+        static string Number(double? value) => value?.ToString("F5", CultureInfo.InvariantCulture) ?? "null";
+        return $"[OPPOSITE_OPEN_GUARD][{stage}_{status}] direction={direction} pairId={pairId ?? "-"} " +
+               $"avgOpenA={Number(result.AverageOpenPriceA)} currentA={Number(result.CurrentPriceA)} " +
+               $"currentPriceType={result.CurrentPriceType ?? "-"} positionCount={result.PositionCount} " +
+               $"distancePts={result.DistancePts?.ToString(CultureInfo.InvariantCulture) ?? "null"} " +
+               $"requiredPts={result.RequiredPts} result={status} reasonCode={result.ReasonCode} " +
+               $"reason=\"{result.ReasonVietnamese}\"";
     }
 
     private bool TryAllowAutoOpenByToggle(GapSignalTriggerResult trigger, out string blockedReason)

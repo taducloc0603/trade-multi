@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Collections.Concurrent;
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
+using TradeDesktop.Application.Services;
 using TradeDesktop.Application.Services.Portfolio;
 
 namespace TradeDesktop.App.Services;
@@ -66,7 +67,7 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         }
         try
         {
-            policy = ValidateOpenPolicy(request);
+            policy = ValidateOpenPolicy(request, logOppositeGuard: true);
             if (!policy.Allowed)
             {
                 ReleaseSignalReservation(request.Context);
@@ -363,7 +364,7 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             $"signalAgeMs={signalAgeMs} recoveryTicket={context.Recovery?.Ticket.ToString() ?? "-"}");
     }
 
-    private (bool Allowed, string Code) ValidateOpenPolicy(TradeOpenPairRequest request)
+    private (bool Allowed, string Code) ValidateOpenPolicy(TradeOpenPairRequest request, bool logOppositeGuard = false)
     {
         var context = request.Context;
         if (context.Reason == TradeExecutionReason.ManualOpen)
@@ -409,6 +410,12 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             return marketSafety;
         }
 
+        var oppositeGuard = ValidateOppositeOpenPriceGuard(request, metrics, logOppositeGuard);
+        if (!oppositeGuard.Allowed)
+        {
+            return oppositeGuard;
+        }
+
         var openThreshold = Math.Abs(_runtimeConfig.CurrentOpenPts);
         var confirmThreshold = Math.Abs(_runtimeConfig.CurrentConfirmGapPts);
         var threshold = Math.Max(openThreshold, confirmThreshold);
@@ -434,6 +441,63 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
 
         return (true, "ALLOWED");
     }
+
+    private (bool Allowed, string Code) ValidateOppositeOpenPriceGuard(
+        TradeOpenPairRequest request,
+        TradeDesktop.Domain.Models.DashboardMetrics metrics,
+        bool shouldLog)
+    {
+        var requestedTradeType = request.LegA.Action == TradeLegAction.Buy ? 0 : 1;
+        var eligibleTickets = _portfolioCoordinator.LiveSlots
+            .Concat(_portfolioCoordinator.PendingCloseSlots)
+            .Where(x => x.TicketA.HasValue)
+            .Select(x => x.TicketA!.Value)
+            .ToHashSet();
+        var read = _tradesSharedMemoryReader.ReadTrades(_runtimeConfig.CurrentMapName1);
+        OppositeOpenPriceGuardResult result;
+        if (_runtimeConfig.CurrentOppositeOpenMinDistancePts > 0
+            && eligibleTickets.Count > 0
+            && (!read.IsMapAvailable || !read.IsParseSuccess))
+        {
+            result = OppositeOpenPriceGuardResult.Block(
+                "OPEN_PRICE_A_MISSING",
+                "Không có giá mở hợp lệ trên sàn A để tính giá trung bình");
+        }
+        else
+        {
+            result = OppositeOpenPriceGuard.Evaluate(
+                read.Records,
+                eligibleTickets,
+                requestedTradeType,
+                metrics.ExchangeA.Bid,
+                metrics.ExchangeA.Ask,
+                _runtimeConfig.CurrentPoint,
+                _runtimeConfig.CurrentOppositeOpenMinDistancePts);
+        }
+
+        if (shouldLog)
+        {
+            var status = result.Skipped ? "SKIP" : result.Allowed ? "PASS" : "BLOCK";
+            var direction = result.LastTradeType switch
+            {
+                0 when requestedTradeType == 1 => "BUY->SELL",
+                1 when requestedTradeType == 0 => "SELL->BUY",
+                _ => requestedTradeType == 0 ? "NONE->BUY" : "NONE->SELL"
+            };
+            SafeLog(
+                $"[OPPOSITE_OPEN_GUARD][RECHECK_{status}] direction={direction} pairId={request.Context.PairId ?? "-"} " +
+                $"avgOpenA={FormatGuardNumber(result.AverageOpenPriceA)} currentA={FormatGuardNumber(result.CurrentPriceA)} " +
+                $"currentPriceType={result.CurrentPriceType ?? "-"} positionCount={result.PositionCount} " +
+                $"distancePts={result.DistancePts?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null"} " +
+                $"requiredPts={result.RequiredPts} result={status} reasonCode={result.ReasonCode} " +
+                $"reason=\"{result.ReasonVietnamese}\"");
+        }
+
+        return (result.Allowed, result.ReasonCode);
+    }
+
+    private static string FormatGuardNumber(double? value)
+        => value?.ToString("F5", System.Globalization.CultureInfo.InvariantCulture) ?? "null";
 
     private (bool Allowed, string Code) ValidateClosePolicy(TradeClosePairRequest request)
     {
