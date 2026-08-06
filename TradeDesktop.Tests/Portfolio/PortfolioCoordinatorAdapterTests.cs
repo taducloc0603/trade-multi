@@ -25,9 +25,7 @@ public sealed class PortfolioCoordinatorAdapterTests
         ClosePts: 8,
         CloseHoldConfirmMs: 400,
         StartTimeHold: 2,
-        EndTimeHold: 2,
-        StartWaitTime: 3,
-        EndWaitTime: 3);
+        EndTimeHold: 2);
 
     private static ITradingFlowEngine CreateSut()
     {
@@ -195,8 +193,7 @@ public sealed class PortfolioCoordinatorAdapterTests
         var config = new GapSignalConfirmationConfig(
             ConfirmGapPts: 5, OpenPts: 8, HoldConfirmMs: 500,
             CloseConfirmGapPts: 5, ClosePts: 8, CloseHoldConfirmMs: 400,
-            StartTimeHold: 9, EndTimeHold: 4,
-            StartWaitTime: 7, EndWaitTime: 2);
+            StartTimeHold: 9, EndTimeHold: 4);
 
         var start = new DateTime(2026, 3, 18, 16, 20, 0, DateTimeKind.Utc);
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, config);

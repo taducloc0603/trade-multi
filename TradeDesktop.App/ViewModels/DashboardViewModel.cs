@@ -82,10 +82,7 @@ public sealed class DashboardViewModel : ObservableObject
     private int _externalPartialCloseStreak = 0;
     private bool _hadBothOpenRecently = false;
     private string _lastExternalCloseGuardBlockReason = string.Empty;
-    private string _lastSkipSignalLogSignature = string.Empty;
-    private DateTime _lastSkipSignalLogAtUtc;
     private const int ExternalPartialCloseStreakRequired = 4;
-    private const string GapCooldownSkipReason = "GAP_COOLDOWN_ACTIVE";
     private bool _externalPartialCloseInFlight = false;
     private double? _lastLoggedLatencyA;
     private double? _lastLoggedLatencyB;
@@ -123,7 +120,6 @@ public sealed class DashboardViewModel : ObservableObject
 
     private static readonly TimeSpan OrderInfoPollInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan OpenPartialRecheckDelay = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan SkipSignalLogThrottleInterval = TimeSpan.FromMilliseconds(500);
     private const int StableBothFlatPollsRequired = 4;
 
     // UI render throttle: snapshot event fires every 50ms (logic path),
@@ -3259,7 +3255,7 @@ public sealed class DashboardViewModel : ObservableObject
             : $"Sàn B ({_runtimeConfigState.MapName2})";
 
         RuntimeSummary =
-            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  StartWaitTime: {_runtimeConfigState.CurrentStartWaitTime}  |  EndWaitTime: {_runtimeConfigState.CurrentEndWaitTime}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  CloseMinProfit: {_runtimeConfigState.CurrentCloseMinProfit}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
+            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  CloseMinProfit: {_runtimeConfigState.CurrentCloseMinProfit}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
 
         HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsComplete);
         RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict()));
@@ -3282,9 +3278,8 @@ public sealed class DashboardViewModel : ObservableObject
             maxBuy: _runtimeConfigState.CurrentMaxBuyOpens,
             maxSell: _runtimeConfigState.CurrentMaxSellOpens);
 
-        // start_wait_time/end_wait_time are retained in the DB/runtime model for compatibility,
-        // but no longer participate in trade gating. After a confirmed close, the only OPEN
-        // re-entry delay is post_close_lock_seconds (checked by CanOpenNewSlot).
+        // Legacy random wait columns were removed. Global range remains zero; transition
+        // spacing is owned by the Auto transition gate and post-close config.
         _portfolioCoordinator.UpdateCooldownConfig(minSec: 0, maxSec: 0);
 
         _portfolioCoordinator.UpdateMaxLifeTimeConfig(
@@ -3292,13 +3287,15 @@ public sealed class DashboardViewModel : ObservableObject
 
         // Rule C — 2 lock độc lập từ DB, thay hardcode 300 cũ:
         // opposite_side_lock_seconds → lock sau OPEN (chỉ chặn chiều ngược).
-        // post_close_lock_seconds   → lock sau CLOSE (chặn cả 2 chiều).
+        // Random post-open/post-close ranges are sampled once per corresponding transition.
         _portfolioCoordinator.UpdateOppositeSideLockConfig(
             _runtimeConfigState.CurrentOppositeSideLockSeconds);
         _portfolioCoordinator.UpdatePostCloseLockConfig(
-            _runtimeConfigState.CurrentPostCloseLockSeconds);
+            _runtimeConfigState.CurrentRdStartPostCloseLockSeconds,
+            _runtimeConfigState.CurrentRdEndPostCloseLockSeconds);
         _portfolioCoordinator.UpdatePostOpenLockConfig(
-            _runtimeConfigState.CurrentPostOpenLockSeconds);
+            _runtimeConfigState.CurrentRdStartPostOpenLockSeconds,
+            _runtimeConfigState.CurrentRdEndPostOpenLockSeconds);
         _portfolioCoordinator.UpdateScheduleSleepingConfig(
             _runtimeConfigState.CurrentScheduleSleepingJson);
     }
@@ -3414,7 +3411,7 @@ public sealed class DashboardViewModel : ObservableObject
                 // engine WaitingClose → WaitingOpen with CurrentWaitSeconds set from config.
                 // If sync runs first and sees BothFlat, it calls ForceWaitingOpen() that wipes
                 // CurrentWaitSeconds = 0 and BeginWaitAfterClose's guard then returns early —
-                // a new signal can open immediately after close, ignoring start/end_wait_time.
+                // a new signal can open immediately after close; transition gate owns the wait.
                 closeRetryActions = CollectPendingCloseRetryActions();
 
                 RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(livePairStateFromPoll));
@@ -6434,8 +6431,6 @@ public sealed class DashboardViewModel : ObservableObject
                     closePriceFreezeMs: result.ClosePriceFreezeMs,
                     startTimeHold: result.StartTimeHold,
                     endTimeHold: result.EndTimeHold,
-                    startWaitTime: result.StartWaitTime,
-                    endWaitTime: result.EndWaitTime,
                     confirmLatencyMs: result.ConfirmLatencyMs,
                     maxGap: result.MaxGap,
                     limitMaxGap: result.LimitMaxGap,
@@ -6450,17 +6445,16 @@ public sealed class DashboardViewModel : ObservableObject
                     delayCloseBMs: result.DelayCloseBMs,
                     openNumberOfQualifyingTimes: result.OpenNumberOfQualifyingTimes,
                     closeNumberOfQualifyingTimes: result.CloseNumberOfQualifyingTimes,
-                    openGapTick: result.OpenGapTick,
-                    closeGapTick: result.CloseGapTick,
-                    coolDownGapTick: result.CoolDownGapTick,
                     maxLifeTimeBySecond: result.MaxLifeTimeBySecond,
                     closeMaxTpProfit: result.CloseMaxTpProfit,
                     limitMaxTp: result.LimitMaxTp,
                     freezeLastN: result.FreezeLastN,
                     closeMinProfit: result.CloseMinProfit,
                     oppositeSideLockSeconds: result.OppositeSideLockSeconds,
-                    postCloseLockSeconds: result.PostCloseLockSeconds,
-                    postOpenLockSeconds: result.PostOpenLockSeconds);
+                    rdStartPostCloseLockSeconds: result.RdStartPostCloseLockSeconds,
+                    rdEndPostCloseLockSeconds: result.RdEndPostCloseLockSeconds,
+                    rdStartPostOpenLockSeconds: result.RdStartPostOpenLockSeconds,
+                    rdEndPostOpenLockSeconds: result.RdEndPostOpenLockSeconds);
                 _runtimeConfigState.UpdateScheduleSleeping(result.ScheduleSleepingJson);
                 _runtimeConfigState.UpdateQuota(
                     result.MaxTotalOpens,
@@ -6480,7 +6474,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
                     DbInlineData =
-                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | freeze_last_n={result.FreezeLastN} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | start_wait_time={result.StartWaitTime} | end_wait_time={result.EndWaitTime} | sans={result.SansJson}";
+                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | freeze_last_n={result.FreezeLastN} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={result.SansJson}";
                     IsDbInlineDataVisible = true;
                 }
                 else
@@ -6610,13 +6604,8 @@ public sealed class DashboardViewModel : ObservableObject
                     CloseHoldConfirmMs: _runtimeConfigState.CurrentCloseHoldConfirmMs,
                     StartTimeHold: _runtimeConfigState.CurrentStartTimeHold,
                     EndTimeHold: _runtimeConfigState.CurrentEndTimeHold,
-                    StartWaitTime: _runtimeConfigState.CurrentStartWaitTime,
-                    EndWaitTime: _runtimeConfigState.CurrentEndWaitTime,
                     OpenMaxTimesTick: _runtimeConfigState.CurrentOpenMaxTimesTick,
                     CloseMaxTimesTick: _runtimeConfigState.CurrentCloseMaxTimesTick,
-                    OpenGapTick: _runtimeConfigState.CurrentOpenGapTick,
-                    CloseGapTick: _runtimeConfigState.CurrentCloseGapTick,
-                    CoolDownGapTick: _runtimeConfigState.CurrentCoolDownGapTick,
                     LimitMaxGap: _runtimeConfigState.CurrentLimitMaxGap,
                     LimitMaxTp: _runtimeConfigState.CurrentLimitMaxTp,
                     CloseMinProfit: _runtimeConfigState.CurrentCloseMinProfit));
@@ -6635,7 +6624,6 @@ public sealed class DashboardViewModel : ObservableObject
 
             if (trigger is null || !trigger.Triggered)
             {
-                TryLogGapCooldownSkipSignal();
                 return;
             }
 
@@ -6780,33 +6768,6 @@ public sealed class DashboardViewModel : ObservableObject
         _lastLoggedPhase = phase;
         _lastLoggedOpenMode = openMode;
         _lastLoggedPositionSide = side;
-    }
-
-    private void TryLogGapCooldownSkipSignal()
-    {
-        var diagnostic = _tradingFlowEngine.LastSkipDiagnostic;
-        if (diagnostic is null
-            || !string.Equals(diagnostic.Reason, GapCooldownSkipReason, StringComparison.Ordinal))
-        {
-            _lastSkipSignalLogSignature = string.Empty;
-            return;
-        }
-
-        var signature = $"{diagnostic.Reason}|{diagnostic.Phase}|{diagnostic.OpenGapTick}|{diagnostic.CloseGapTick}";
-        var nowUtc = DateTime.UtcNow;
-        var shouldLog = !string.Equals(_lastSkipSignalLogSignature, signature, StringComparison.Ordinal)
-            || (nowUtc - _lastSkipSignalLogAtUtc) >= SkipSignalLogThrottleInterval;
-
-        if (!shouldLog)
-        {
-            return;
-        }
-
-        _lastSkipSignalLogSignature = signature;
-        _lastSkipSignalLogAtUtc = nowUtc;
-
-        SignalLogItems.Insert(0,
-            $"[{DateTime.Now:HH:mm:ss.fff}] [SKIP SIGNAL] reason={diagnostic.Reason} phase={diagnostic.Phase} cooldown_left_ms={diagnostic.CooldownLeftMs} open_gap_tick={diagnostic.OpenGapTick} close_gap_tick={diagnostic.CloseGapTick}");
     }
 
     private bool TryAllowAutoOpenByToggle(GapSignalTriggerResult trigger, out string blockedReason)
@@ -6955,9 +6916,9 @@ public sealed class DashboardViewModel : ObservableObject
         if (_portfolioCoordinator.LastCloseConfirmedAtUtc is { } lastCloseAt)
         {
             var elapsedSec = (now - lastCloseAt).TotalSeconds;
-            if (elapsedSec < _portfolioCoordinator.PostCloseLockSeconds)
+            if (elapsedSec < _portfolioCoordinator.LastSelectedPostCloseLockSeconds)
             {
-                var remaining = _portfolioCoordinator.PostCloseLockSeconds - (int)elapsedSec;
+                var remaining = _portfolioCoordinator.LastSelectedPostCloseLockSeconds - (int)elapsedSec;
                 return $"POST-CLOSE LOCK (no open for {remaining}s)";
             }
         }

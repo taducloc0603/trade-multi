@@ -27,16 +27,20 @@ public interface IPortfolioCoordinator
     TradingPositionSide LastOpenConfirmedSide { get; }
     DateTime? LastCloseConfirmedAtUtc { get; }
     int OppositeSideLockSeconds { get; }
-    int PostCloseLockSeconds { get; }
-    int PostOpenLockSeconds { get; }
-    TradingFlowSkipDiagnostic? LastSkipDiagnostic { get; }
+    int RdStartPostCloseLockSeconds { get; }
+    int RdEndPostCloseLockSeconds { get; }
+    int LastSelectedPostCloseLockSeconds { get; }
+    int RdStartPostOpenLockSeconds { get; }
+    int RdEndPostOpenLockSeconds { get; }
     int GlobalCooldownMinSec { get; }
     int GlobalCooldownMaxSec { get; }
     TradeActionGateResult TryAcquireTradeAction(
         DateTime requestedAtUtc,
         string action,
         string source,
-        TradeActionOrigin origin = TradeActionOrigin.Auto);
+        TradeActionOrigin origin = TradeActionOrigin.Auto,
+        TradingPositionSide side = TradingPositionSide.None,
+        string? pairId = null);
     void BeginNonAutoCloseOperation(string operationId);
     void EndNonAutoCloseOperation(string operationId);
 
@@ -89,8 +93,8 @@ public interface IPortfolioCoordinator
     void UpdateCooldownConfig(int minSec, int maxSec);
     void UpdateMaxLifeTimeConfig(int maxLifeTimeSec);
     void UpdateOppositeSideLockConfig(int seconds);
-    void UpdatePostCloseLockConfig(int seconds);
-    void UpdatePostOpenLockConfig(int seconds);
+    void UpdatePostCloseLockConfig(int startSeconds, int endSeconds);
+    void UpdatePostOpenLockConfig(int startSeconds, int endSeconds);
     void UpdateScheduleSleepingConfig(string? scheduleSleepingJson);
 
     // === Rollback (open/close execution failed) ===
@@ -115,6 +119,13 @@ public enum TradeActionOrigin
     Auto = 0,
     Manual = 1,
     Recovery = 2
+}
+
+public enum AutoTradeActionType
+{
+    None = 0,
+    Open = 1,
+    Close = 2
 }
 
 public sealed record CloseDispatchGuardResult(

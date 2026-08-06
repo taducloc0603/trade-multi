@@ -30,6 +30,9 @@ public sealed class PositionSlot
     public DateTime? ClosedAtUtc { get; private set; }
     public DateTime? CloseConfirmedAtUtc { get; private set; }
     public int HoldingSeconds { get; private set; }
+    // Sampled once and retained so later config reloads/other slots cannot move this slot's deadlines.
+    public int SelectedPostOpenLockSeconds { get; private set; }
+    public int SelectedPostCloseLockSeconds { get; private set; }
     public bool IsCloseExecutionPending { get; private set; }
     public CloseExecutionOwner CloseOwner { get; private set; }
     public double? LastProfitSnapshot { get; internal set; }
@@ -54,11 +57,12 @@ public sealed class PositionSlot
         LastCloseReason = null;
     }
 
-    public void MarkOpenConfirmed(ulong ticketA, ulong ticketB, DateTime confirmedAtUtc)
+    public void MarkOpenConfirmed(ulong ticketA, ulong ticketB, DateTime confirmedAtUtc, int postOpenLockSeconds = 0)
     {
         TicketA = ticketA;
         TicketB = ticketB;
         OpenConfirmedAtUtc = confirmedAtUtc;
+        SelectedPostOpenLockSeconds = Math.Max(0, postOpenLockSeconds);
         Status = PositionSlotStatus.Live;
     }
 
@@ -130,12 +134,19 @@ public sealed class PositionSlot
         OpenedAtUtc = openConfirmedAtUtc;
         OpenConfirmedAtUtc = openConfirmedAtUtc;
         HoldingSeconds = holdingSeconds;
+        SelectedPostOpenLockSeconds = 0;
         Status = PositionSlotStatus.Live;
         IsCloseExecutionPending = false;
         CloseOwner = CloseExecutionOwner.None;
         ClearProfitSnapshot();
         LastCloseReason = null;
     }
+
+    public void SetSelectedPostOpenLockSeconds(int seconds)
+        => SelectedPostOpenLockSeconds = Math.Max(0, seconds);
+
+    public void SetSelectedPostCloseLockSeconds(int seconds)
+        => SelectedPostCloseLockSeconds = Math.Max(0, seconds);
 
     public void UpdateProfit(ulong ticket, double profit)
     {

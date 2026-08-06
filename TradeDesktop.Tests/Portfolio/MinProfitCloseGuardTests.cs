@@ -81,9 +81,11 @@ public sealed class MinProfitCloseGuardTests
         DateTime now,
         int ageSeconds,
         double combinedProfit,
-        GapSignalTriggerResult closeTrigger)
+        GapSignalTriggerResult closeTrigger,
+        int postOpenLockSeconds = 0)
     {
         var coordinator = BuildCoordinator(factory, maxLifeTimeSec);
+        coordinator.UpdatePostOpenLockConfig(postOpenLockSeconds, postOpenLockSeconds);
         coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
         coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-ageSeconds));
         coordinator.UpdateProfit(100, combinedProfit / 2.0);
@@ -284,8 +286,7 @@ public sealed class MinProfitCloseGuardTests
         var factory = new ScriptedFactory();
         var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
         var trigger = reason == CloseSignalReason.Tp ? TpCloseTrigger() : GapCloseTrigger();
-        var coordinator = SetupSingleSlot(factory, 1200, now, 30, 25.0, trigger);
-        coordinator.UpdatePostOpenLockConfig(60);
+        var coordinator = SetupSingleSlot(factory, 1200, now, 30, 25.0, trigger, postOpenLockSeconds: 60);
 
         var result = coordinator.ProcessSnapshot(Snapshot(now), Config(closeMinProfit: 20));
 
@@ -301,8 +302,7 @@ public sealed class MinProfitCloseGuardTests
         var factory = new ScriptedFactory();
         var now = new DateTime(2026, 7, 17, 12, 0, 0, DateTimeKind.Utc);
         var trigger = reason == CloseSignalReason.Tp ? TpCloseTrigger() : GapCloseTrigger();
-        var coordinator = SetupSingleSlot(factory, 1200, now, 61, 25.0, trigger);
-        coordinator.UpdatePostOpenLockConfig(60);
+        var coordinator = SetupSingleSlot(factory, 1200, now, 61, 25.0, trigger, postOpenLockSeconds: 60);
 
         var result = coordinator.ProcessSnapshot(Snapshot(now), Config(closeMinProfit: 20));
 

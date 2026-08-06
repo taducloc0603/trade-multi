@@ -409,8 +409,6 @@ public sealed class ConfigViewModel : ObservableObject
                 loadResult.ClosePriceFreezeMs,
                 loadResult.StartTimeHold,
                 loadResult.EndTimeHold,
-                loadResult.StartWaitTime,
-                loadResult.EndWaitTime,
                 loadResult.ConfirmLatencyMs,
                 loadResult.MaxGap,
                 loadResult.LimitMaxGap,
@@ -425,13 +423,13 @@ public sealed class ConfigViewModel : ObservableObject
                 loadResult.DelayCloseBMs,
                 loadResult.OpenNumberOfQualifyingTimes,
                 loadResult.CloseNumberOfQualifyingTimes,
-                loadResult.OpenGapTick,
-                loadResult.CloseGapTick,
-                loadResult.CoolDownGapTick,
                 closeMaxTpProfit: loadResult.CloseMaxTpProfit,
                 limitMaxTp: loadResult.LimitMaxTp,
                 freezeLastN: loadResult.FreezeLastN,
-                postOpenLockSeconds: loadResult.PostOpenLockSeconds);
+                rdStartPostCloseLockSeconds: loadResult.RdStartPostCloseLockSeconds,
+                rdEndPostCloseLockSeconds: loadResult.RdEndPostCloseLockSeconds,
+                rdStartPostOpenLockSeconds: loadResult.RdStartPostOpenLockSeconds,
+                rdEndPostOpenLockSeconds: loadResult.RdEndPostOpenLockSeconds);
             _runtimeConfigState.UpdateScheduleSleeping(loadResult.ScheduleSleepingJson);
             _runtimeConfigState.UpdateManualTradeHwnd(BuildManualHwndColumns());
 

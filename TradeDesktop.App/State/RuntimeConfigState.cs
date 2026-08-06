@@ -27,8 +27,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentClosePriceFreezeMs { get; private set; }
     public int CurrentStartTimeHold { get; private set; }
     public int CurrentEndTimeHold { get; private set; }
-    public int CurrentStartWaitTime { get; private set; }
-    public int CurrentEndWaitTime { get; private set; }
     public int CurrentConfirmLatencyMs { get; private set; }
     public int CurrentMaxGap { get; private set; }
     public int CurrentLimitMaxGap { get; private set; }
@@ -44,21 +42,16 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentDelayCloseBMs { get; private set; }
     public int CurrentOpenNumberOfQualifyingTimes { get; private set; } = 1;
     public int CurrentCloseNumberOfQualifyingTimes { get; private set; } = 1;
-    public int CurrentOpenGapTick { get; private set; }
-    public int CurrentCloseGapTick { get; private set; }
-    public int CurrentCoolDownGapTick { get; private set; }
     public int CurrentMaxLifeTimeBySecond { get; private set; }
 
     // Rule C — opposite-side OPEN lock (sau OPEN, chỉ chặn chiều ngược). Default 300 khi DB
     // chưa có cột, override từ DB column opposite_side_lock_seconds.
     public int CurrentOppositeSideLockSeconds { get; private set; } = 300;
 
-    // Rule C — post-close lock (sau CLOSE, chặn cả 2 chiều). Default 300 khi DB chưa có cột,
-    // override từ DB column post_close_lock_seconds.
-    public int CurrentPostCloseLockSeconds { get; private set; } = 300;
-
-    // Sau OPEN confirmed, chặn auto CLOSE GAP/TP theo từng slot trong số giây cấu hình.
-    public int CurrentPostOpenLockSeconds { get; private set; }
+    public int CurrentRdStartPostCloseLockSeconds { get; private set; } = 300;
+    public int CurrentRdEndPostCloseLockSeconds { get; private set; } = 300;
+    public int CurrentRdStartPostOpenLockSeconds { get; private set; }
+    public int CurrentRdEndPostOpenLockSeconds { get; private set; }
 
     // Raw JSONB config; empty/null/malformed values are treated as disabled.
     public string CurrentScheduleSleepingJson { get; private set; } = string.Empty;
@@ -102,8 +95,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int ClosePriceFreezeMs => CurrentClosePriceFreezeMs;
     public int StartTimeHold => CurrentStartTimeHold;
     public int EndTimeHold => CurrentEndTimeHold;
-    public int StartWaitTime => CurrentStartWaitTime;
-    public int EndWaitTime => CurrentEndWaitTime;
     public int ConfirmLatencyMs => CurrentConfirmLatencyMs;
     public int MaxGap => CurrentMaxGap;
     public int LimitMaxGap => CurrentLimitMaxGap;
@@ -120,9 +111,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int DelayCloseBMs => CurrentDelayCloseBMs;
     public int OpenNumberOfQualifyingTimes => CurrentOpenNumberOfQualifyingTimes;
     public int CloseNumberOfQualifyingTimes => CurrentCloseNumberOfQualifyingTimes;
-    public int OpenGapTick => CurrentOpenGapTick;
-    public int CloseGapTick => CurrentCloseGapTick;
-    public int CoolDownGapTick => CurrentCoolDownGapTick;
 
     public event EventHandler? StateChanged;
     public event EventHandler? QualifyingConfigChanged;
@@ -151,8 +139,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int closePriceFreezeMs,
         int startTimeHold,
         int endTimeHold,
-        int startWaitTime,
-        int endWaitTime,
         int confirmLatencyMs = 0,
         int maxGap = 0,
         int limitMaxGap = 0,
@@ -167,17 +153,16 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int delayCloseBMs = -1,
         int openNumberOfQualifyingTimes = -1,
         int closeNumberOfQualifyingTimes = -1,
-        int openGapTick = -1,
-        int closeGapTick = -1,
-        int coolDownGapTick = -1,
         int maxLifeTimeBySecond = -1,
         double closeMaxTpProfit = 0,
         double limitMaxTp = 0,
         int freezeLastN = 0,
         double closeMinProfit = 0,
         int oppositeSideLockSeconds = -1,
-        int postCloseLockSeconds = -1,
-        int postOpenLockSeconds = -1)
+        int rdStartPostCloseLockSeconds = -1,
+        int rdEndPostCloseLockSeconds = -1,
+        int rdStartPostOpenLockSeconds = -1,
+        int rdEndPostOpenLockSeconds = -1)
         => Update(
             machineHostName,
             mapName1,
@@ -197,8 +182,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             closePriceFreezeMs,
             startTimeHold,
             endTimeHold,
-            startWaitTime,
-            endWaitTime,
             confirmLatencyMs,
             maxGap,
             limitMaxGap,
@@ -213,17 +196,16 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             delayCloseBMs,
             openNumberOfQualifyingTimes,
             closeNumberOfQualifyingTimes,
-            openGapTick,
-            closeGapTick,
-            coolDownGapTick,
             maxLifeTimeBySecond,
             closeMaxTpProfit,
             limitMaxTp,
             freezeLastN,
             closeMinProfit,
             oppositeSideLockSeconds,
-            postCloseLockSeconds,
-            postOpenLockSeconds);
+            rdStartPostCloseLockSeconds,
+            rdEndPostCloseLockSeconds,
+            rdStartPostOpenLockSeconds,
+            rdEndPostOpenLockSeconds);
 
     public void Update(
         string machineHostName,
@@ -244,8 +226,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int closePriceFreezeMs,
         int startTimeHold,
         int endTimeHold,
-        int startWaitTime,
-        int endWaitTime,
         int confirmLatencyMs = 0,
         int maxGap = 0,
         int limitMaxGap = 0,
@@ -260,17 +240,16 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int delayCloseBMs = -1,
         int openNumberOfQualifyingTimes = -1,
         int closeNumberOfQualifyingTimes = -1,
-        int openGapTick = -1,
-        int closeGapTick = -1,
-        int coolDownGapTick = -1,
         int maxLifeTimeBySecond = -1,
         double closeMaxTpProfit = 0,
         double limitMaxTp = 0,
         int freezeLastN = 0,
         double closeMinProfit = 0,
         int oppositeSideLockSeconds = -1,
-        int postCloseLockSeconds = -1,
-        int postOpenLockSeconds = -1)
+        int rdStartPostCloseLockSeconds = -1,
+        int rdEndPostCloseLockSeconds = -1,
+        int rdStartPostOpenLockSeconds = -1,
+        int rdEndPostOpenLockSeconds = -1)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
         var oldCloseN = CurrentCloseNumberOfQualifyingTimes;
@@ -296,8 +275,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             : CurrentCloseHoldConfirmMs;
         CurrentStartTimeHold = Math.Max(0, startTimeHold);
         CurrentEndTimeHold = Math.Max(0, endTimeHold);
-        CurrentStartWaitTime = Math.Max(0, startWaitTime);
-        CurrentEndWaitTime = Math.Max(0, endWaitTime);
         CurrentConfirmLatencyMs = Math.Max(0, confirmLatencyMs);
         CurrentMaxGap = Math.Max(0, maxGap);
         CurrentLimitMaxGap = Math.Max(0, limitMaxGap);
@@ -337,18 +314,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         {
             CurrentCloseNumberOfQualifyingTimes = Math.Max(1, closeNumberOfQualifyingTimes);
         }
-        if (openGapTick >= 0)
-        {
-            CurrentOpenGapTick = Math.Max(0, openGapTick);
-        }
-        if (closeGapTick >= 0)
-        {
-            CurrentCloseGapTick = Math.Max(0, closeGapTick);
-        }
-        if (coolDownGapTick >= 0)
-        {
-            CurrentCoolDownGapTick = Math.Max(0, coolDownGapTick);
-        }
         if (maxLifeTimeBySecond >= 0)
         {
             CurrentMaxLifeTimeBySecond = Math.Max(0, maxLifeTimeBySecond);
@@ -358,14 +323,19 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             // 0 = tắt lock nguy hiểm → giữ default 300 khi <= 0.
             CurrentOppositeSideLockSeconds = oppositeSideLockSeconds > 0 ? oppositeSideLockSeconds : 300;
         }
-        if (postCloseLockSeconds >= 0)
+        if (rdStartPostCloseLockSeconds >= 0 || rdEndPostCloseLockSeconds >= 0)
         {
-            // 0 = tắt lock nguy hiểm → giữ default 300 khi <= 0.
-            CurrentPostCloseLockSeconds = postCloseLockSeconds > 0 ? postCloseLockSeconds : 300;
+            var start = rdStartPostCloseLockSeconds > 0 ? rdStartPostCloseLockSeconds : 300;
+            var end = rdEndPostCloseLockSeconds > 0 ? rdEndPostCloseLockSeconds : 300;
+            CurrentRdStartPostCloseLockSeconds = Math.Min(start, end);
+            CurrentRdEndPostCloseLockSeconds = Math.Max(start, end);
         }
-        if (postOpenLockSeconds >= 0)
+        if (rdStartPostOpenLockSeconds >= 0 || rdEndPostOpenLockSeconds >= 0)
         {
-            CurrentPostOpenLockSeconds = Math.Max(0, postOpenLockSeconds);
+            var start = Math.Max(0, rdStartPostOpenLockSeconds);
+            var end = Math.Max(0, rdEndPostOpenLockSeconds);
+            CurrentRdStartPostOpenLockSeconds = Math.Min(start, end);
+            CurrentRdEndPostOpenLockSeconds = Math.Max(start, end);
         }
         CurrentMapName1 = (mapName1 ?? string.Empty).Trim();
         CurrentMapName2 = (mapName2 ?? string.Empty).Trim();
@@ -407,8 +377,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentClosePriceFreezeMs,
             CurrentStartTimeHold,
             CurrentEndTimeHold,
-            CurrentStartWaitTime,
-            CurrentEndWaitTime,
             CurrentConfirmLatencyMs,
             CurrentMaxGap,
             CurrentLimitMaxGap,
@@ -423,9 +391,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentDelayCloseBMs,
             CurrentOpenNumberOfQualifyingTimes,
             CurrentCloseNumberOfQualifyingTimes,
-            CurrentOpenGapTick,
-            CurrentCloseGapTick,
-            CurrentCoolDownGapTick,
             closeMaxTpProfit: CurrentCloseMaxTpProfit,
             limitMaxTp: CurrentLimitMaxTp,
             freezeLastN: CurrentFreezeLastN,
@@ -451,8 +416,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentClosePriceFreezeMs,
             CurrentStartTimeHold,
             CurrentEndTimeHold,
-            CurrentStartWaitTime,
-            CurrentEndWaitTime,
             CurrentConfirmLatencyMs,
             CurrentMaxGap,
             CurrentLimitMaxGap,
@@ -467,9 +430,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentDelayCloseBMs,
             CurrentOpenNumberOfQualifyingTimes,
             CurrentCloseNumberOfQualifyingTimes,
-            CurrentOpenGapTick,
-            CurrentCloseGapTick,
-            CurrentCoolDownGapTick,
             closeMaxTpProfit: CurrentCloseMaxTpProfit,
             limitMaxTp: CurrentLimitMaxTp,
             freezeLastN: CurrentFreezeLastN,

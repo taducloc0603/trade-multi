@@ -52,17 +52,18 @@ public sealed class DisplayPropertyTests
     }
 
     [Fact]
-    public void CooldownActive_RemainingSecondsPositive()
+    public void SameSideTransitionLock_RemainingSecondsPositive()
     {
         var coordinator = CreateCoordinator();
-        coordinator.UpdateCooldownConfig(minSec: 30, maxSec: 30);
-        coordinator.TryAcquireTradeAction(DateTime.UtcNow, "OPEN", "test");
-        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
-        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+        var now = DateTime.UtcNow;
+        var first = coordinator.TryAcquireTradeAction(
+            now, "OPEN", "test", side: TradingPositionSide.Buy);
+        var blocked = coordinator.TryAcquireTradeAction(
+            now.AddSeconds(1), "OPEN", "test-2", side: TradingPositionSide.Buy);
 
-        Assert.NotNull(coordinator.GlobalActionLockUntilUtc);
-        var remaining = (coordinator.GlobalActionLockUntilUtc!.Value - DateTime.UtcNow).TotalSeconds;
-        Assert.InRange(remaining, 29.0, 30.5);
+        Assert.True(first.Acquired);
+        Assert.False(blocked.Acquired);
+        Assert.InRange(blocked.Remaining.TotalSeconds, 2, 9);
     }
 
     [Fact]

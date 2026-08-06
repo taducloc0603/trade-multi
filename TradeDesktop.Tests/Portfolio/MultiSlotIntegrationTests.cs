@@ -110,17 +110,17 @@ public sealed class MultiSlotIntegrationTests
     }
 
     [Fact]
-    public void Scenario_CloseDuringCooldown_Deferred()
+    public void Scenario_CloseBeforePerSlotPostOpenLock_Deferred()
     {
         var c = CreateCoordinator();
-        c.UpdateCooldownConfig(minSec: 60, maxSec: 60);
+        c.UpdatePostOpenLockConfig(60);
 
         c.AllocatePendingOpenSlot("p1", Trigger(GapSignalSide.Buy));
-        c.TryAcquireTradeAction(DateTime.UtcNow, "OPEN", "test");
         c.MarkSlotOpenConfirmed("p1", 100, 200, DateTime.UtcNow);
 
-        // Cooldown 60s active → close blocked.
-        Assert.False(c.CanCloseNow(out var reason));
-        Assert.Contains("GLOBAL_COOLDOWN", reason);
+        var gate = c.TryAcquireTradeAction(
+            DateTime.UtcNow, "CLOSE", "test", side: TradingPositionSide.Buy, pairId: "p1");
+        Assert.False(gate.Acquired);
+        Assert.Equal("PER_SLOT_POST_OPEN_LOCK", gate.Reason);
     }
 }

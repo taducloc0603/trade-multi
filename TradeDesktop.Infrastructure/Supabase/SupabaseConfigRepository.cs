@@ -60,8 +60,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             ClosePriceFreezeMs: row.ClosePriceFreezeMs > 0 ? row.ClosePriceFreezeMs : row.CloseHoldConfirmMs,
             StartTimeHold: row.StartTimeHold,
             EndTimeHold: row.EndTimeHold,
-            StartWaitTime: row.StartWaitTime,
-            EndWaitTime: row.EndWaitTime,
             ConfirmLatencyMs: row.ConfirmLatencyMs,
             MaxGap: row.MaxGap,
             LimitMaxGap: row.LimitMaxGap,
@@ -77,9 +75,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             DelayCloseBMs: row.DelayCloseBMs,
             OpenNumberOfQualifyingTimes: row.OpenNumberOfQualifyingTimes,
             CloseNumberOfQualifyingTimes: row.CloseNumberOfQualifyingTimes,
-            OpenGapTick: row.OpenGapTick,
-            CloseGapTick: row.CloseGapTick,
-            CoolDownGapTick: row.CoolDownGapTick,
             IsShowConfig: row.IsShowConfig,
             CurrentTickA: row.CurrentTickA ?? string.Empty,
             CurrentTickB: row.CurrentTickB ?? string.Empty,
@@ -89,8 +84,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxSellOpens: row.MaxSellOpens,
             MaxTotalOpens: row.MaxTotalOpens,
             OppositeSideLockSeconds: row.OppositeSideLockSeconds,
-            PostCloseLockSeconds: row.PostCloseLockSeconds,
-            PostOpenLockSeconds: row.PostOpenLockSeconds,
+            RdStartPostCloseLockSeconds: row.RdStartPostCloseLockSeconds,
+            RdEndPostCloseLockSeconds: row.RdEndPostCloseLockSeconds,
+            RdStartPostOpenLockSeconds: row.RdStartPostOpenLockSeconds,
+            RdEndPostOpenLockSeconds: row.RdEndPostOpenLockSeconds,
             ScheduleSleepingJson: row.ScheduleSleepingJson,
             CloseMinProfit: row.CloseMinProfit);
     }
@@ -291,8 +288,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("close_price_freeze_ms", out var closePriceFreezeMsElement);
         first.TryGetProperty("start_time_hold", out var startTimeHoldElement);
         first.TryGetProperty("end_time_hold", out var endTimeHoldElement);
-        first.TryGetProperty("start_wait_time", out var startWaitTimeElement);
-        first.TryGetProperty("end_wait_time", out var endWaitTimeElement);
         first.TryGetProperty("confirm_latency", out var confirmLatencyMsElement);
         first.TryGetProperty("max_gap", out var maxGapElement);
         first.TryGetProperty("limit_max_gap", out var limitMaxGapElement);
@@ -308,9 +303,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("delay_close_b_ms", out var delayCloseBMsElement);
         first.TryGetProperty("open_number_of_qualifying_times", out var openQtElement);
         first.TryGetProperty("close_number_of_qualifying_times", out var closeQtElement);
-        first.TryGetProperty("open_gap_tick", out var openGapTickElement);
-        first.TryGetProperty("close_gap_tick", out var closeGapTickElement);
-        first.TryGetProperty("cool_down_gap_tick", out var coolDownGapTickElement);
         first.TryGetProperty("platform_a", out var platformAElement);
         first.TryGetProperty("platform_b", out var platformBElement);
         first.TryGetProperty("is_show_config", out var isShowConfigElement);
@@ -322,8 +314,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_sell_opens", out var maxSellOpensElement);
         first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
         first.TryGetProperty("opposite_side_lock_seconds", out var oppositeSideLockSecondsElement);
-        first.TryGetProperty("post_close_lock_seconds", out var postCloseLockSecondsElement);
-        first.TryGetProperty("post_open_lock_seconds", out var postOpenLockSecondsElement);
+        first.TryGetProperty("rd_start_post_close_lock_seconds", out var rdStartPostCloseLockSecondsElement);
+        first.TryGetProperty("rd_end_post_close_lock_seconds", out var rdEndPostCloseLockSecondsElement);
+        first.TryGetProperty("rd_start_post_open_lock_seconds", out var rdStartPostOpenLockSecondsElement);
+        first.TryGetProperty("rd_end_post_open_lock_seconds", out var rdEndPostOpenLockSecondsElement);
         first.TryGetProperty("schedule_sleeping", out var scheduleSleepingElement);
 
         // DB column name is lowercase: hostname
@@ -357,8 +351,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             ClosePriceFreezeMs = closePriceFreezeMsElement.ValueKind == JsonValueKind.Number && closePriceFreezeMsElement.TryGetInt32(out var closePriceFreezeMs) ? closePriceFreezeMs : 0,
             StartTimeHold = startTimeHoldElement.ValueKind == JsonValueKind.Number && startTimeHoldElement.TryGetInt32(out var startTimeHold) ? startTimeHold : 0,
             EndTimeHold = endTimeHoldElement.ValueKind == JsonValueKind.Number && endTimeHoldElement.TryGetInt32(out var endTimeHold) ? endTimeHold : 0,
-            StartWaitTime = startWaitTimeElement.ValueKind == JsonValueKind.Number && startWaitTimeElement.TryGetInt32(out var startWaitTime) ? startWaitTime : 0,
-            EndWaitTime = endWaitTimeElement.ValueKind == JsonValueKind.Number && endWaitTimeElement.TryGetInt32(out var endWaitTime) ? endWaitTime : 0,
             ConfirmLatencyMs = confirmLatencyMsElement.ValueKind == JsonValueKind.Number && confirmLatencyMsElement.TryGetInt32(out var confirmLatencyMs) ? confirmLatencyMs : 0,
             MaxGap = maxGapElement.ValueKind == JsonValueKind.Number && maxGapElement.TryGetInt32(out var maxGap) ? maxGap : 0,
             LimitMaxGap = limitMaxGapElement.ValueKind == JsonValueKind.Number && limitMaxGapElement.TryGetInt32(out var limitMaxGap) ? limitMaxGap : 0,
@@ -374,9 +366,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             DelayCloseBMs = delayCloseBMsElement.ValueKind == JsonValueKind.Number && delayCloseBMsElement.TryGetInt32(out var delayCloseBMs) ? delayCloseBMs : 0,
             OpenNumberOfQualifyingTimes = openQtElement.ValueKind == JsonValueKind.Number && openQtElement.TryGetInt32(out var openQt) ? openQt : 1,
             CloseNumberOfQualifyingTimes = closeQtElement.ValueKind == JsonValueKind.Number && closeQtElement.TryGetInt32(out var closeQt) ? closeQt : 1,
-            OpenGapTick = openGapTickElement.ValueKind == JsonValueKind.Number && openGapTickElement.TryGetInt32(out var openGapTick) ? openGapTick : 0,
-            CloseGapTick = closeGapTickElement.ValueKind == JsonValueKind.Number && closeGapTickElement.TryGetInt32(out var closeGapTick) ? closeGapTick : 0,
-            CoolDownGapTick = coolDownGapTickElement.ValueKind == JsonValueKind.Number && coolDownGapTickElement.TryGetInt32(out var coolDownGapTick) ? coolDownGapTick : 0,
             PlatformA = platformAElement.ValueKind == JsonValueKind.String ? platformAElement.GetString() : null,
             PlatformB = platformBElement.ValueKind == JsonValueKind.String ? platformBElement.GetString() : null,
             IsShowConfig = isShowConfigElement.ValueKind == JsonValueKind.Number && isShowConfigElement.TryGetInt32(out var isShowConfig) ? isShowConfig : 0,
@@ -390,8 +379,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
             MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5,
             OppositeSideLockSeconds = oppositeSideLockSecondsElement.ValueKind == JsonValueKind.Number && oppositeSideLockSecondsElement.TryGetInt32(out var oppositeSideLockSeconds) ? oppositeSideLockSeconds : 300,
-            PostCloseLockSeconds = postCloseLockSecondsElement.ValueKind == JsonValueKind.Number && postCloseLockSecondsElement.TryGetInt32(out var postCloseLockSeconds) ? postCloseLockSeconds : 300,
-            PostOpenLockSeconds = postOpenLockSecondsElement.ValueKind == JsonValueKind.Number && postOpenLockSecondsElement.TryGetInt32(out var postOpenLockSeconds) ? postOpenLockSeconds : 0,
+            RdStartPostCloseLockSeconds = rdStartPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostCloseLockSecondsElement.TryGetInt32(out var rdStartPostCloseLockSeconds) ? rdStartPostCloseLockSeconds : 300,
+            RdEndPostCloseLockSeconds = rdEndPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostCloseLockSecondsElement.TryGetInt32(out var rdEndPostCloseLockSeconds) ? rdEndPostCloseLockSeconds : 300,
+            RdStartPostOpenLockSeconds = rdStartPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostOpenLockSecondsElement.TryGetInt32(out var rdStartPostOpenLockSeconds) ? rdStartPostOpenLockSeconds : 0,
+            RdEndPostOpenLockSeconds = rdEndPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostOpenLockSecondsElement.TryGetInt32(out var rdEndPostOpenLockSeconds) ? rdEndPostOpenLockSeconds : 0,
             ScheduleSleeping = scheduleSleepingElement.ValueKind == JsonValueKind.Object
                 ? scheduleSleepingElement.Clone()
                 : default
@@ -445,8 +436,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("close_price_freeze_ms", out var closePriceFreezeMsElement);
         first.TryGetProperty("start_time_hold", out var startTimeHoldElement);
         first.TryGetProperty("end_time_hold", out var endTimeHoldElement);
-        first.TryGetProperty("start_wait_time", out var startWaitTimeElement);
-        first.TryGetProperty("end_wait_time", out var endWaitTimeElement);
         first.TryGetProperty("confirm_latency", out var confirmLatencyMsElement);
         first.TryGetProperty("max_gap", out var maxGapElement);
         first.TryGetProperty("limit_max_gap", out var limitMaxGapElement);
@@ -462,9 +451,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("delay_close_b_ms", out var delayCloseBMsElement);
         first.TryGetProperty("open_number_of_qualifying_times", out var openQtElement);
         first.TryGetProperty("close_number_of_qualifying_times", out var closeQtElement);
-        first.TryGetProperty("open_gap_tick", out var openGapTickElement);
-        first.TryGetProperty("close_gap_tick", out var closeGapTickElement);
-        first.TryGetProperty("cool_down_gap_tick", out var coolDownGapTickElement);
         first.TryGetProperty("platform_a", out var platformAElement);
         first.TryGetProperty("platform_b", out var platformBElement);
         first.TryGetProperty("is_show_config", out var isShowConfigElement);
@@ -476,8 +462,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_sell_opens", out var maxSellOpensElement);
         first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
         first.TryGetProperty("opposite_side_lock_seconds", out var oppositeSideLockSecondsElement);
-        first.TryGetProperty("post_close_lock_seconds", out var postCloseLockSecondsElement);
-        first.TryGetProperty("post_open_lock_seconds", out var postOpenLockSecondsElement);
+        first.TryGetProperty("rd_start_post_close_lock_seconds", out var rdStartPostCloseLockSecondsElement);
+        first.TryGetProperty("rd_end_post_close_lock_seconds", out var rdEndPostCloseLockSecondsElement);
+        first.TryGetProperty("rd_start_post_open_lock_seconds", out var rdStartPostOpenLockSecondsElement);
+        first.TryGetProperty("rd_end_post_open_lock_seconds", out var rdEndPostOpenLockSecondsElement);
         first.TryGetProperty("schedule_sleeping", out var scheduleSleepingElement);
 
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
@@ -509,8 +497,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             ClosePriceFreezeMs = closePriceFreezeMsElement.ValueKind == JsonValueKind.Number && closePriceFreezeMsElement.TryGetInt32(out var closePriceFreezeMs) ? closePriceFreezeMs : 0,
             StartTimeHold = startTimeHoldElement.ValueKind == JsonValueKind.Number && startTimeHoldElement.TryGetInt32(out var startTimeHold) ? startTimeHold : 0,
             EndTimeHold = endTimeHoldElement.ValueKind == JsonValueKind.Number && endTimeHoldElement.TryGetInt32(out var endTimeHold) ? endTimeHold : 0,
-            StartWaitTime = startWaitTimeElement.ValueKind == JsonValueKind.Number && startWaitTimeElement.TryGetInt32(out var startWaitTime) ? startWaitTime : 0,
-            EndWaitTime = endWaitTimeElement.ValueKind == JsonValueKind.Number && endWaitTimeElement.TryGetInt32(out var endWaitTime) ? endWaitTime : 0,
             ConfirmLatencyMs = confirmLatencyMsElement.ValueKind == JsonValueKind.Number && confirmLatencyMsElement.TryGetInt32(out var confirmLatencyMs) ? confirmLatencyMs : 0,
             MaxGap = maxGapElement.ValueKind == JsonValueKind.Number && maxGapElement.TryGetInt32(out var maxGap) ? maxGap : 0,
             LimitMaxGap = limitMaxGapElement.ValueKind == JsonValueKind.Number && limitMaxGapElement.TryGetInt32(out var limitMaxGap) ? limitMaxGap : 0,
@@ -526,9 +512,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             DelayCloseBMs = delayCloseBMsElement.ValueKind == JsonValueKind.Number && delayCloseBMsElement.TryGetInt32(out var delayCloseBMs) ? delayCloseBMs : 0,
             OpenNumberOfQualifyingTimes = openQtElement.ValueKind == JsonValueKind.Number && openQtElement.TryGetInt32(out var openQt) ? openQt : 1,
             CloseNumberOfQualifyingTimes = closeQtElement.ValueKind == JsonValueKind.Number && closeQtElement.TryGetInt32(out var closeQt) ? closeQt : 1,
-            OpenGapTick = openGapTickElement.ValueKind == JsonValueKind.Number && openGapTickElement.TryGetInt32(out var openGapTick) ? openGapTick : 0,
-            CloseGapTick = closeGapTickElement.ValueKind == JsonValueKind.Number && closeGapTickElement.TryGetInt32(out var closeGapTick) ? closeGapTick : 0,
-            CoolDownGapTick = coolDownGapTickElement.ValueKind == JsonValueKind.Number && coolDownGapTickElement.TryGetInt32(out var coolDownGapTick) ? coolDownGapTick : 0,
             PlatformA = platformAElement.ValueKind == JsonValueKind.String ? platformAElement.GetString() : null,
             PlatformB = platformBElement.ValueKind == JsonValueKind.String ? platformBElement.GetString() : null,
             IsShowConfig = isShowConfigElement.ValueKind == JsonValueKind.Number && isShowConfigElement.TryGetInt32(out var isShowConfig) ? isShowConfig : 0,
@@ -542,8 +525,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
             MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5,
             OppositeSideLockSeconds = oppositeSideLockSecondsElement.ValueKind == JsonValueKind.Number && oppositeSideLockSecondsElement.TryGetInt32(out var oppositeSideLockSeconds) ? oppositeSideLockSeconds : 300,
-            PostCloseLockSeconds = postCloseLockSecondsElement.ValueKind == JsonValueKind.Number && postCloseLockSecondsElement.TryGetInt32(out var postCloseLockSeconds) ? postCloseLockSeconds : 300,
-            PostOpenLockSeconds = postOpenLockSecondsElement.ValueKind == JsonValueKind.Number && postOpenLockSecondsElement.TryGetInt32(out var postOpenLockSeconds) ? postOpenLockSeconds : 0,
+            RdStartPostCloseLockSeconds = rdStartPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostCloseLockSecondsElement.TryGetInt32(out var rdStartPostCloseLockSeconds) ? rdStartPostCloseLockSeconds : 300,
+            RdEndPostCloseLockSeconds = rdEndPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostCloseLockSecondsElement.TryGetInt32(out var rdEndPostCloseLockSeconds) ? rdEndPostCloseLockSeconds : 300,
+            RdStartPostOpenLockSeconds = rdStartPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostOpenLockSecondsElement.TryGetInt32(out var rdStartPostOpenLockSeconds) ? rdStartPostOpenLockSeconds : 0,
+            RdEndPostOpenLockSeconds = rdEndPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostOpenLockSecondsElement.TryGetInt32(out var rdEndPostOpenLockSeconds) ? rdEndPostOpenLockSeconds : 0,
             ScheduleSleeping = scheduleSleepingElement.ValueKind == JsonValueKind.Object
                 ? scheduleSleepingElement.Clone()
                 : default
@@ -656,11 +641,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         [JsonPropertyName("end_time_hold")]
         public int EndTimeHold { get; set; }
 
-        [JsonPropertyName("start_wait_time")]
-        public int StartWaitTime { get; set; }
-
-        [JsonPropertyName("end_wait_time")]
-        public int EndWaitTime { get; set; }
 
         [JsonPropertyName("confirm_latency")]
         public int ConfirmLatencyMs { get; set; }
@@ -707,14 +687,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         [JsonPropertyName("close_number_of_qualifying_times")]
         public int CloseNumberOfQualifyingTimes { get; set; } = 1;
 
-        [JsonPropertyName("open_gap_tick")]
-        public int OpenGapTick { get; set; }
-
-        [JsonPropertyName("close_gap_tick")]
-        public int CloseGapTick { get; set; }
-
-        [JsonPropertyName("cool_down_gap_tick")]
-        public int CoolDownGapTick { get; set; }
 
         [JsonPropertyName("platform_a")]
         public string? PlatformA { get; set; }
@@ -749,11 +721,17 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         [JsonPropertyName("opposite_side_lock_seconds")]
         public int OppositeSideLockSeconds { get; set; } = 300;
 
-        [JsonPropertyName("post_close_lock_seconds")]
-        public int PostCloseLockSeconds { get; set; } = 300;
+        [JsonPropertyName("rd_start_post_close_lock_seconds")]
+        public int RdStartPostCloseLockSeconds { get; set; } = 300;
 
-        [JsonPropertyName("post_open_lock_seconds")]
-        public int PostOpenLockSeconds { get; set; }
+        [JsonPropertyName("rd_end_post_close_lock_seconds")]
+        public int RdEndPostCloseLockSeconds { get; set; } = 300;
+
+        [JsonPropertyName("rd_start_post_open_lock_seconds")]
+        public int RdStartPostOpenLockSeconds { get; set; }
+
+        [JsonPropertyName("rd_end_post_open_lock_seconds")]
+        public int RdEndPostOpenLockSeconds { get; set; }
 
         [JsonPropertyName("schedule_sleeping")]
         public JsonElement ScheduleSleeping { get; set; }

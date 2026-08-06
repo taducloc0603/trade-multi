@@ -52,7 +52,6 @@ public sealed class PortfolioCoordinatorAdapter : ITradingFlowEngine
     public int CurrentWaitSeconds => _adapterCurrentWaitSeconds;
     public int CurrentOpenQualifyingCount => _openQualifyingCount;
     public int CurrentCloseQualifyingCount => _closeQualifyingCount;
-    public TradingFlowSkipDiagnostic? LastSkipDiagnostic => _coordinator.LastSkipDiagnostic;
 
     // ===== ProcessSnapshot (legacy single-trigger API) =====
     public GapSignalTriggerResult? ProcessSnapshot(

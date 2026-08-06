@@ -7,7 +7,7 @@ namespace TradeDesktop.Tests.Portfolio;
 // Rule C — 2 lock độc lập, config từ DB:
 //  - opposite_side_lock_seconds (default 300): sau OPEN, block opposite-side OPEN;
 //    same-side OPEN refreshes timer; CLOSE unaffected.
-//  - post_close_lock_seconds (default 300): sau CLOSE confirm, block MỌI OPEN (cả 2 chiều);
+//  - random post-close range (default 300..300): sau AUTO CLOSE, block MỌI OPEN;
 //    CLOSE unaffected.
 public sealed class OppositeSideLockTests
 {
@@ -220,10 +220,11 @@ public sealed class OppositeSideLockTests
     }
 
     [Fact]
-    public void PostCloseLockSeconds_DefaultsTo300()
+    public void PostCloseLockRange_DefaultsTo300()
     {
         Assert.Equal(300, PortfolioCoordinator.DefaultPostCloseLockSeconds);
-        Assert.Equal(300, CreateCoordinator().PostCloseLockSeconds);
+        Assert.Equal(300, CreateCoordinator().RdStartPostCloseLockSeconds);
+        Assert.Equal(300, CreateCoordinator().RdEndPostCloseLockSeconds);
     }
 
     [Fact]
@@ -231,11 +232,14 @@ public sealed class OppositeSideLockTests
     {
         var coordinator = CreateCoordinator();
         coordinator.UpdatePostCloseLockConfig(45);
-        Assert.Equal(45, coordinator.PostCloseLockSeconds);
+        Assert.Equal(45, coordinator.RdStartPostCloseLockSeconds);
+        Assert.Equal(45, coordinator.RdEndPostCloseLockSeconds);
         coordinator.UpdatePostCloseLockConfig(0);
-        Assert.Equal(300, coordinator.PostCloseLockSeconds);
+        Assert.Equal(300, coordinator.RdStartPostCloseLockSeconds);
+        Assert.Equal(300, coordinator.RdEndPostCloseLockSeconds);
         coordinator.UpdatePostCloseLockConfig(-9);
-        Assert.Equal(300, coordinator.PostCloseLockSeconds);
+        Assert.Equal(300, coordinator.RdStartPostCloseLockSeconds);
+        Assert.Equal(300, coordinator.RdEndPostCloseLockSeconds);
     }
 
     // 2 giá trị độc lập: opposite (sau OPEN) và post-close (sau CLOSE) tách biệt.

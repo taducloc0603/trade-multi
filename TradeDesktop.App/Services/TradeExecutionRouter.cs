@@ -77,7 +77,9 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
                 DateTime.UtcNow,
                 action: "OPEN",
                 source: "TradeExecutionRouter.OpenPairAsync",
-                origin: ResolveActionOrigin(request.Context.Reason));
+                origin: ResolveActionOrigin(request.Context.Reason),
+                side: ResolveOpenSide(request),
+                pairId: request.Context.PairId);
             if (!gate.Acquired)
             {
                 ReleaseSignalReservation(request.Context);
@@ -196,7 +198,9 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
                 DateTime.UtcNow,
                 action: "CLOSE",
                 source: "TradeExecutionRouter.ClosePairAsync",
-                origin: ResolveActionOrigin(request.Context.Reason));
+                origin: ResolveActionOrigin(request.Context.Reason),
+                side: ResolveCloseSide(request),
+                pairId: request.Context.PairId);
             if (!gate.Acquired)
             {
                 ReleaseSignalReservation(request.Context);
@@ -313,6 +317,20 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
                 => TradeActionOrigin.Recovery,
             _ => TradeActionOrigin.Auto
         };
+
+    private static TradingPositionSide ResolveOpenSide(TradeOpenPairRequest request)
+        => request.LegA.Action switch
+        {
+            TradeLegAction.Buy => TradingPositionSide.Buy,
+            TradeLegAction.Sell => TradingPositionSide.Sell,
+            _ => TradingPositionSide.None
+        };
+
+    private TradingPositionSide ResolveCloseSide(TradeClosePairRequest request)
+        => string.IsNullOrWhiteSpace(request.Context.PairId)
+            ? TradingPositionSide.None
+            : _portfolioCoordinator.GetSlotByPairId(request.Context.PairId)?.Side
+                ?? TradingPositionSide.None;
 
     private ManualTradeResult PolicyBlockedResult(
         string action,

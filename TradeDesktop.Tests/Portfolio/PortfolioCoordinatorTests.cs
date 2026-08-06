@@ -82,26 +82,25 @@ public sealed class PortfolioCoordinatorTests
     }
 
     [Fact]
-    public void MarkSlotCloseConfirmed_TransitionsToClosed_WithoutResettingDispatchCooldown()
+    public void MarkSlotCloseConfirmed_TransitionsToClosed_WithoutCreatingGlobalCooldown()
     {
         // Phase 8: cooldown kicked tại CLOSE DISPATCH (MarkSlotCloseTriggered), không phải confirm.
         var coordinator = CreateCoordinator();
-        coordinator.UpdateCooldownConfig(minSec: 5, maxSec: 5);
+        coordinator.UpdatePostOpenLockConfig(0);
         var slot = coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
         coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
 
         var triggerTime = DateTime.UtcNow;
-        coordinator.TryAcquireTradeAction(triggerTime, "CLOSE", "test");
+        coordinator.TryAcquireTradeAction(
+            triggerTime, "CLOSE", "test", side: TradingPositionSide.Buy, pairId: "p1");
         coordinator.MarkSlotCloseTriggered("p1", triggerTime);
 
         var confirmedAt = triggerTime.AddSeconds(1);
         coordinator.MarkSlotCloseConfirmed("p1", confirmedAt);
 
         Assert.Equal(PositionSlotStatus.Closed, slot!.Status);
-        Assert.NotNull(coordinator.GlobalActionLockUntilUtc);
-        // Lock = triggerTime + 5s (MAX với allocate lock — triggerTime > allocate).
-        var elapsed = (coordinator.GlobalActionLockUntilUtc!.Value - triggerTime).TotalSeconds;
-        Assert.InRange(elapsed, 4.5, 5.5);
+        Assert.Null(coordinator.GlobalActionLockUntilUtc);
+        Assert.Equal(confirmedAt, coordinator.LastCloseConfirmedAtUtc);
     }
 
     [Fact]
@@ -262,28 +261,24 @@ public sealed class PortfolioCoordinatorTests
     {
         // Regression Phase 8: ProcessSnapshot (line ~179) pre-mark slot PendingClose
         // via slot.MarkCloseTriggered trước khi caller dispatch close. Khi
-        // AutoCloseOrderAsync gọi coordinator.MarkSlotCloseTriggered tại dispatch time,
-        // status đã PendingClose. Trước fix: status guard bao luôn KickGlobalCooldown
-        // → close không kích cooldown → tick kế tiếp dispatch OPEN đồng thời (Rule B vi phạm,
-        // production observed: OPEN+CLOSE cùng millisecond).
+        // AutoCloseOrderAsync pre-marks PendingClose trước router. Transition gate vẫn phải
+        // chấp nhận đúng slot context và commit Close reservation atomically.
         var coordinator = CreateCoordinator();
-        coordinator.UpdateCooldownConfig(minSec: 5, maxSec: 5);
+        coordinator.UpdatePostOpenLockConfig(0);
+        var triggerTime = new DateTime(2026, 5, 21, 10, 0, 30, DateTimeKind.Utc);
         var slot = coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
-        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, triggerTime.AddMinutes(-1));
 
         // Mô phỏng ProcessSnapshot line 179: slot pre-mark PendingClose.
-        var triggerTime = new DateTime(2026, 5, 21, 10, 0, 30, DateTimeKind.Utc);
         slot!.MarkCloseTriggered(triggerTime);
         Assert.Equal(PositionSlotStatus.PendingClose, slot.Status);
 
-        var gate = coordinator.TryAcquireTradeAction(triggerTime, "CLOSE", "test");
+        var gate = coordinator.TryAcquireTradeAction(
+            triggerTime, "CLOSE", "test", side: TradingPositionSide.Buy, pairId: "p1");
         coordinator.MarkSlotCloseTriggered("p1", triggerTime);
 
         Assert.True(gate.Acquired);
-        Assert.NotNull(coordinator.GlobalActionLockUntilUtc);
-        // Lock phải được extend tới triggerTime + 5s (MAX so với allocate lock).
-        var elapsed = (coordinator.GlobalActionLockUntilUtc!.Value - triggerTime).TotalSeconds;
-        Assert.InRange(elapsed, 4.5, 5.5);
+        Assert.InRange(gate.CooldownSeconds, 3, 10);
     }
 
     [Fact]

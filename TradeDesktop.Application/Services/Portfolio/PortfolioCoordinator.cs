@@ -12,7 +12,7 @@ namespace TradeDesktop.Application.Services.Portfolio;
 /// Phase 2: cap raised to 7 via UpdateQuotaConfig, full Rules A/B/C/D enabled.
 ///
 /// ProcessSnapshot loop:
-///   1. Check global cooldown (Rule B framework, default off Phase 0).
+///   1. Check startup cooldown + non-auto barrier.
 ///   2. OPEN path: if quota allows, ask shared _openSignalEngine for trigger.
 ///   3. CLOSE path: iterate Live slots, ask each slot's own CloseSignalEngine.
 ///      Pick winner by LastProfitSnapshot (Rule D framework, trivial at cap=1).
@@ -22,7 +22,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     // Rule C — default fallback khi DB thiếu cột; runtime override từ DB column.
     // opposite_side_lock_seconds → lock sau OPEN (chỉ chặn chiều ngược).
     public const int DefaultOppositeSideLockSeconds = 300;
-    // post_close_lock_seconds → lock sau CLOSE (chặn cả 2 chiều).
+    // Random post-close range → lock sau CLOSE (chặn cả 2 chiều).
     public const int DefaultPostCloseLockSeconds = 300;
 
     // Wall-clock fallback tolerance for stale snapshot timestamps (mirrors TradingFlowEngine).
@@ -105,11 +105,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public TradingPositionSide LastOpenConfirmedSide => _state.LastOpenConfirmedSide;
     public DateTime? LastCloseConfirmedAtUtc => _state.LastCloseConfirmedAtUtc;
     public int OppositeSideLockSeconds => _state.OppositeSideLockSeconds;
-    public int PostCloseLockSeconds => _state.PostCloseLockSeconds;
-    public int PostOpenLockSeconds => _state.PostOpenLockSeconds;
+    public int RdStartPostCloseLockSeconds => _state.RdStartPostCloseLockSeconds;
+    public int RdEndPostCloseLockSeconds => _state.RdEndPostCloseLockSeconds;
+    public int LastSelectedPostCloseLockSeconds => _state.LastSelectedPostCloseLockSeconds;
+    public int RdStartPostOpenLockSeconds => _state.RdStartPostOpenLockSeconds;
+    public int RdEndPostOpenLockSeconds => _state.RdEndPostOpenLockSeconds;
     public int GlobalCooldownMinSec => _state.GlobalCooldownMinSec;
     public int GlobalCooldownMaxSec => _state.GlobalCooldownMaxSec;
-    public TradingFlowSkipDiagnostic? LastSkipDiagnostic { get; private set; }
 
     internal PortfolioState State => _state;
     internal int LastSeenStartTimeHold => _lastSeenStartTimeHold;
@@ -123,7 +125,6 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         GapSignalSnapshot snapshot,
         GapSignalConfirmationConfig config)
     {
-        LastSkipDiagnostic = null;
 
         // 1. Cache hold range for fallback (CanCheckClose floor protection).
         _lastSeenStartTimeHold = Math.Max(0, config.StartTimeHold);
@@ -131,7 +132,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
         var effectiveNow = ResolveEffectiveNowUtc(snapshot.TimestampUtc);
 
-        // 2. Check global cooldown (Rule B). Phase 0: cooldown 0s default → never blocks.
+        // 2. Startup/recovery cooldown is the only remaining portfolio-wide timer.
         if (HasNonAutoCloseInFlight)
         {
             return PortfolioSnapshotResult.Empty;
@@ -195,6 +196,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         {
             if (slot.IsCloseExecutionPending) continue;
             if (!IsHoldingElapsedOrFloorReached(slot, effectiveNow)) continue;
+            if (!IsPostOpenCloseLockElapsed(slot, effectiveNow)) continue;
 
             LogTpCheck(slot, config, effectiveNow);
 
@@ -327,7 +329,9 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         DateTime requestedAtUtc,
         string action,
         string source,
-        TradeActionOrigin origin = TradeActionOrigin.Auto)
+        TradeActionOrigin origin = TradeActionOrigin.Auto,
+        TradingPositionSide side = TradingPositionSide.None,
+        string? pairId = null)
     {
         var requestedUtc = requestedAtUtc.Kind switch
         {
@@ -379,32 +383,120 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                     Reason: "GLOBAL_ACTION_COOLDOWN");
             }
 
-            // Auto-only lock by action type. Manual/recovery returned above without reading
-            // or mutating this timer and are serialized by the non-auto barrier + physical mutex.
             var normalizedAction = (action ?? string.Empty).Trim().ToUpperInvariant();
-            var cooldownSec = normalizedAction switch
+            var requestedType = normalizedAction switch
             {
-                "OPEN" when _state.IsPostOpenLockConfigured => _state.PostOpenLockSeconds,
-                "CLOSE" when _state.IsPostCloseLockConfigured => _state.PostCloseLockSeconds,
-                _ => NextSecondsInRange(_state.GlobalCooldownMinSec, _state.GlobalCooldownMaxSec)
+                "OPEN" => AutoTradeActionType.Open,
+                "CLOSE" => AutoTradeActionType.Close,
+                _ => AutoTradeActionType.None
             };
-            var newLockUntilUtc = requestedUtc.AddSeconds(cooldownSec);
-            _state.GlobalActionLockUntilUtc = cooldownSec > 0
-                ? newLockUntilUtc
-                : null;
+
+            if (requestedType == AutoTradeActionType.None || side == TradingPositionSide.None)
+            {
+                return new TradeActionGateResult(false, null, TimeSpan.Zero, 0, "AUTO_ACTION_CONTEXT_INVALID");
+            }
+
+            var transition = EvaluateAutoTransition(requestedUtc, requestedType, side, pairId);
+            if (!transition.Acquired)
+            {
+                Interlocked.Increment(ref _cooldownSkipCount);
+                _logger?.Log(
+                    $"[TRADE_GATE][BLOCKED] action={action} side={side} source={source} " +
+                    $"reason={transition.Reason} remainingMs={transition.Remaining.TotalMilliseconds:F0}");
+                return transition;
+            }
+
+            // Sinh đúng một lần tại mỗi Auto dispatch. Giá trị này chỉ được dùng nếu
+            // transition kế tiếp là Open→Open cùng chiều hoặc Close→Close.
+            var randomSec = NextSecondsInRange(3, 10);
+            _state.LastAutoDispatchType = requestedType;
+            _state.LastAutoDispatchSide = side;
+            _state.LastAutoDispatchAtUtc = requestedUtc;
+            _state.LastAutoRandomIntervalSeconds = randomSec;
+            if (requestedType == AutoTradeActionType.Close)
+            {
+                _state.LastSelectedPostCloseLockSeconds = NextSecondsInRange(
+                    _state.RdStartPostCloseLockSeconds,
+                    _state.RdEndPostCloseLockSeconds);
+                if (!string.IsNullOrWhiteSpace(pairId))
+                {
+                    _state.GetSlotByPairId(pairId)?.SetSelectedPostCloseLockSeconds(
+                        _state.LastSelectedPostCloseLockSeconds);
+                }
+            }
 
             _logger?.Log(
-                $"[TRADE_GATE][ACQUIRED] action={action} source={source} " +
-                $"cooldownSec={cooldownSec} lockUntil={(cooldownSec > 0 ? newLockUntilUtc.ToString("O") : "none")}");
+                $"[TRADE_GATE][ACQUIRED] action={action} side={side} source={source} " +
+                $"transitionFrom={transition.Reason} nextSameTypeRandomSec={randomSec}");
 
             return new TradeActionGateResult(
                 Acquired: true,
-                LockUntilUtc: _state.GlobalActionLockUntilUtc,
-                Remaining: cooldownSec > 0 ? TimeSpan.FromSeconds(cooldownSec) : TimeSpan.Zero,
-                CooldownSeconds: cooldownSec,
-                Reason: cooldownSec > 0 ? "ACQUIRED" : "ACQUIRED_COOLDOWN_DISABLED");
+                LockUntilUtc: null,
+                Remaining: TimeSpan.Zero,
+                CooldownSeconds: randomSec,
+                Reason: "AUTO_TRANSITION_ACQUIRED");
         }
     }
+
+    private TradeActionGateResult EvaluateAutoTransition(
+        DateTime requestedUtc,
+        AutoTradeActionType requestedType,
+        TradingPositionSide requestedSide,
+        string? pairId)
+    {
+        if (requestedType == AutoTradeActionType.Close)
+        {
+            var slot = string.IsNullOrWhiteSpace(pairId) ? null : _state.GetSlotByPairId(pairId);
+            if (slot is null || slot.Side != requestedSide || !slot.OpenConfirmedAtUtc.HasValue)
+            {
+                return new TradeActionGateResult(false, null, TimeSpan.Zero, 0, "AUTO_CLOSE_SLOT_CONTEXT_INVALID");
+            }
+
+            var perSlotLockUntil = slot.OpenConfirmedAtUtc.Value.AddSeconds(slot.SelectedPostOpenLockSeconds);
+            if (_state.IsPostOpenLockConfigured && requestedUtc < perSlotLockUntil)
+            {
+                return BlockedTransition(perSlotLockUntil, requestedUtc, "PER_SLOT_POST_OPEN_LOCK");
+            }
+        }
+
+        if (!_state.LastAutoDispatchAtUtc.HasValue || _state.LastAutoDispatchType == AutoTradeActionType.None)
+        {
+            return AcquiredTransition("NO_PREVIOUS_AUTO_ACTION");
+        }
+
+        DateTime? lockUntil = null;
+        var reason = "TRANSITION_NO_DELAY";
+        if (_state.LastAutoDispatchType == AutoTradeActionType.Open
+            && requestedType == AutoTradeActionType.Open
+            && _state.LastAutoDispatchSide == requestedSide)
+        {
+            lockUntil = _state.LastAutoDispatchAtUtc.Value.AddSeconds(_state.LastAutoRandomIntervalSeconds);
+            reason = "SAME_SIDE_OPEN_RANDOM_LOCK";
+        }
+        else if (_state.LastAutoDispatchType == AutoTradeActionType.Close
+                 && requestedType == AutoTradeActionType.Close)
+        {
+            lockUntil = _state.LastAutoDispatchAtUtc.Value.AddSeconds(_state.LastAutoRandomIntervalSeconds);
+            reason = "CLOSE_TO_CLOSE_RANDOM_LOCK";
+        }
+        else if (_state.LastAutoDispatchType == AutoTradeActionType.Close
+                 && requestedType == AutoTradeActionType.Open)
+        {
+            lockUntil = _state.LastAutoDispatchAtUtc.Value.AddSeconds(_state.LastSelectedPostCloseLockSeconds);
+            reason = "POST_CLOSE_OPEN_LOCK";
+        }
+
+        return lockUntil.HasValue && requestedUtc < lockUntil.Value
+            ? BlockedTransition(lockUntil.Value, requestedUtc, reason)
+            : AcquiredTransition(reason);
+    }
+
+    private static TradeActionGateResult BlockedTransition(DateTime lockUntil, DateTime requestedUtc, string reason)
+        => new(false, lockUntil, lockUntil - requestedUtc,
+            Math.Max(0, (int)Math.Ceiling((lockUntil - requestedUtc).TotalSeconds)), reason);
+
+    private static TradeActionGateResult AcquiredTransition(string reason)
+        => new(true, null, TimeSpan.Zero, 0, reason);
 
     public void BeginNonAutoCloseOperation(string operationId)
     {
@@ -437,7 +529,10 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var slot = _state.GetSlotByPairId(pairId);
         if (slot is null) return;
 
-        slot.MarkOpenConfirmed(ticketA, ticketB, confirmedAtUtc);
+        var selectedPostOpenLockSeconds = NextSecondsInRange(
+            _state.RdStartPostOpenLockSeconds,
+            _state.RdEndPostOpenLockSeconds);
+        slot.MarkOpenConfirmed(ticketA, ticketB, confirmedAtUtc, selectedPostOpenLockSeconds);
         Interlocked.Increment(ref _totalOpensAllTime);
 
         // Phase 8: cooldown ĐÃ được set tại dispatch (AllocatePendingOpenSlot).
@@ -446,20 +541,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _state.LastOpenConfirmedAtUtc = confirmedAtUtc;
         _state.LastOpenConfirmedSide = slot.Side;
 
-        if (_state.IsPostOpenLockConfigured && _state.PostOpenLockSeconds > 0)
-        {
-            ExtendGlobalActionLock(
-                confirmedAtUtc.AddSeconds(_state.PostOpenLockSeconds),
-                $"open-confirm slot={slot.SlotId}");
-        }
-
-        // Log include lock state để dễ correlate confirm time với cooldown window.
-        var lockSummary = _state.GlobalActionLockUntilUtc.HasValue
-            ? $"lockUntil={_state.GlobalActionLockUntilUtc:HH:mm:ss}UTC"
-            : "lockNone";
+        var slotCloseAllowedAt = confirmedAtUtc.AddSeconds(selectedPostOpenLockSeconds);
         _logger?.Log(
             $"[SLOT][OPEN_CONFIRMED] slot={slot.SlotId} side={slot.Side} " +
-            $"ticketA={ticketA} ticketB={ticketB} {lockSummary}");
+            $"ticketA={ticketA} ticketB={ticketB} " +
+            $"autoCloseAllowedAt={slotCloseAllowedAt:O}");
 
         var oppositeLockUntilUtc = confirmedAtUtc.AddSeconds(_state.OppositeSideLockSeconds);
         var oppositeSide = slot.Side == TradingPositionSide.Buy ? TradingPositionSide.Sell : TradingPositionSide.Buy;
@@ -478,6 +564,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         {
             slot.TryMarkCloseTriggered(triggeredAtUtc, CloseExecutionOwner.Auto);
         }
+        EnsurePostCloseLockSelected(triggeredAtUtc);
+        slot.SetSelectedPostCloseLockSeconds(_state.LastSelectedPostCloseLockSeconds);
     }
 
     public bool TryClaimSlotClose(string pairId, CloseExecutionOwner owner, DateTime triggeredAtUtc)
@@ -491,6 +579,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             }
 
             var claimed = slot.TryMarkCloseTriggered(triggeredAtUtc, owner);
+            if (claimed && owner == CloseExecutionOwner.Auto)
+            {
+                EnsurePostCloseLockSelected(triggeredAtUtc);
+                slot.SetSelectedPostCloseLockSeconds(_state.LastSelectedPostCloseLockSeconds);
+            }
             if (claimed && owner is CloseExecutionOwner.Manual or CloseExecutionOwner.Recovery)
             {
                 BeginNonAutoCloseOperation(pairId);
@@ -513,32 +606,23 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         // Manual/recovery must not read or mutate the auto cooldown timer.
         if (closeOwner == CloseExecutionOwner.Auto)
         {
+            if (slot.SelectedPostCloseLockSeconds > 0)
+            {
+                _state.LastSelectedPostCloseLockSeconds = slot.SelectedPostCloseLockSeconds;
+            }
             _state.LastCloseConfirmedAtUtc = confirmedAtUtc;
         }
 
-        if (closeOwner == CloseExecutionOwner.Auto
-            && _state.IsPostCloseLockConfigured
-            && _state.PostCloseLockSeconds > 0)
-        {
-            ExtendGlobalActionLock(
-                confirmedAtUtc.AddSeconds(_state.PostCloseLockSeconds),
-                $"close-confirm slot={slot.SlotId}");
-        }
-
-        // Phase 8: cooldown ĐÃ được set tại close dispatch (MarkSlotCloseTriggered).
-        // Tại confirm chỉ log + update slot status, không reset cooldown.
-        var lockSummary = _state.GlobalActionLockUntilUtc.HasValue
-            ? $"lockUntil={_state.GlobalActionLockUntilUtc:HH:mm:ss}UTC"
-            : "lockNone";
         _logger?.Log(
             $"[SLOT][CLOSE_CONFIRMED] slot={slot.SlotId} side={slot.Side} " +
             $"profit={slot.LastProfitSnapshot:F2} closeReason={slot.LastCloseReason ?? CloseSignalReason.Gap} " +
-            $"owner={closeOwner} {lockSummary}");
+            $"owner={closeOwner}");
         if (closeOwner == CloseExecutionOwner.Auto)
         {
-            var postCloseLockUntilUtc = confirmedAtUtc.AddSeconds(_state.PostCloseLockSeconds);
+            var postCloseLockSeconds = _state.LastSelectedPostCloseLockSeconds;
+            var postCloseLockUntilUtc = confirmedAtUtc.AddSeconds(postCloseLockSeconds);
             _logger?.Log(
-                $"[SLOT][WAITING][POST_CLOSE_LOCK] Block AUTO action trong {_state.PostCloseLockSeconds}s " +
+                $"[SLOT][WAITING][POST_CLOSE_LOCK] Block AUTO action trong {postCloseLockSeconds}s " +
                 $"(đến {postCloseLockUntilUtc:HH:mm:ss} UTC) — slot={slot.SlotId} side={slot.Side}");
         }
     }
@@ -579,11 +663,17 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         if (existing is not null)
         {
             existing.MarkSynced(side, openMode, ticketA, ticketB, openConfirmedAtUtc, holdingSeconds);
+            existing.SetSelectedPostOpenLockSeconds(NextSecondsInRange(
+                _state.RdStartPostOpenLockSeconds,
+                _state.RdEndPostOpenLockSeconds));
             return existing;
         }
 
         var slot = _state.AllocateNewSlot(pairId, _closeSignalEngineFactory);
         slot.MarkSynced(side, openMode, ticketA, ticketB, openConfirmedAtUtc, holdingSeconds);
+        slot.SetSelectedPostOpenLockSeconds(NextSecondsInRange(
+            _state.RdStartPostOpenLockSeconds,
+            _state.RdEndPostOpenLockSeconds));
         return slot;
     }
 
@@ -736,14 +826,14 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         }
 
         // Rule C (post-close) — sau CLOSE confirm, khoá MỌI open (cả 2 chiều) trong
-        // PostCloseLockSeconds giây. Re-entry cooldown: vừa đóng thì phải chờ hết window
+        // Giá trị post-close đã random. Re-entry cooldown: vừa đóng thì phải chờ hết window
         // mới được vào lệnh mới. KHÔNG khoá CLOSE (CanCloseNow không check anchor này).
         if (_state.LastCloseConfirmedAtUtc.HasValue)
         {
             var elapsedSec = (DateTime.UtcNow - _state.LastCloseConfirmedAtUtc.Value).TotalSeconds;
-            if (elapsedSec < _state.PostCloseLockSeconds)
+            if (elapsedSec < _state.LastSelectedPostCloseLockSeconds)
             {
-                var remaining = _state.PostCloseLockSeconds - (int)elapsedSec;
+                var remaining = _state.LastSelectedPostCloseLockSeconds - (int)elapsedSec;
                 blockReason = $"POST_CLOSE_LOCK (remaining {remaining}s, chặn CẢ 2 CHIỀU sau CLOSE lúc {_state.LastCloseConfirmedAtUtc.Value:HH:mm:ss}UTC)";
                 Interlocked.Increment(ref _oppositeLockSkipCount);
                 return false;
@@ -811,17 +901,39 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _state.OppositeSideLockSeconds = seconds > 0 ? seconds : DefaultOppositeSideLockSeconds;
     }
 
-    public void UpdatePostCloseLockConfig(int seconds)
+    public void UpdatePostCloseLockConfig(int startSeconds, int endSeconds)
     {
-        // <= 0 = tắt lock nguy hiểm → giữ default thay vì disable.
-        _state.PostCloseLockSeconds = seconds > 0 ? seconds : DefaultPostCloseLockSeconds;
+        var start = startSeconds > 0 ? startSeconds : DefaultPostCloseLockSeconds;
+        var end = endSeconds > 0 ? endSeconds : DefaultPostCloseLockSeconds;
+        _state.RdStartPostCloseLockSeconds = Math.Min(start, end);
+        _state.RdEndPostCloseLockSeconds = Math.Max(start, end);
         _state.IsPostCloseLockConfigured = true;
     }
 
-    public void UpdatePostOpenLockConfig(int seconds)
+    public void UpdatePostOpenLockConfig(int startSeconds, int endSeconds)
     {
-        _state.PostOpenLockSeconds = Math.Max(0, seconds);
+        var start = Math.Max(0, startSeconds);
+        var end = Math.Max(0, endSeconds);
+        _state.RdStartPostOpenLockSeconds = Math.Min(start, end);
+        _state.RdEndPostOpenLockSeconds = Math.Max(start, end);
         _state.IsPostOpenLockConfigured = true;
+    }
+
+    public void UpdatePostCloseLockConfig(int seconds) => UpdatePostCloseLockConfig(seconds, seconds);
+
+    public void UpdatePostOpenLockConfig(int seconds) => UpdatePostOpenLockConfig(seconds, seconds);
+
+    private void EnsurePostCloseLockSelected(DateTime triggeredAtUtc)
+    {
+        if (_state.LastAutoDispatchType == AutoTradeActionType.Close
+            && _state.LastAutoDispatchAtUtc == triggeredAtUtc)
+        {
+            return;
+        }
+
+        _state.LastSelectedPostCloseLockSeconds = NextSecondsInRange(
+            _state.RdStartPostCloseLockSeconds,
+            _state.RdEndPostCloseLockSeconds);
     }
 
     public void UpdateScheduleSleepingConfig(string? scheduleSleepingJson)
@@ -907,6 +1019,9 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 ticketB: data.TicketB,
                 openConfirmedAtUtc: data.OpenConfirmedAtUtc,
                 holdingSeconds: data.HoldingSeconds);
+            slot.SetSelectedPostOpenLockSeconds(NextSecondsInRange(
+                _state.RdStartPostOpenLockSeconds,
+                _state.RdEndPostOpenLockSeconds));
             _state.AddRecoveredSlot(slot);
 
             maxSlotId = Math.Max(maxSlotId, data.SlotId);
@@ -962,11 +1077,22 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var configuredHolding = slot.HoldingSeconds > 0
             ? slot.HoldingSeconds
             : _lastSeenStartTimeHold;
-        var effectiveHolding = Math.Max(configuredHolding, _state.PostOpenLockSeconds);
+        var effectiveHolding = Math.Max(configuredHolding, slot.SelectedPostOpenLockSeconds);
 
         if (effectiveHolding <= 0) return true;
 
         return (nowUtc - baseline.Value) >= TimeSpan.FromSeconds(effectiveHolding);
+    }
+
+    private bool IsPostOpenCloseLockElapsed(PositionSlot slot, DateTime nowUtc)
+    {
+        if (!_state.IsPostOpenLockConfigured || slot.SelectedPostOpenLockSeconds <= 0)
+        {
+            return true;
+        }
+
+        return slot.OpenConfirmedAtUtc.HasValue
+            && nowUtc >= slot.OpenConfirmedAtUtc.Value.AddSeconds(slot.SelectedPostOpenLockSeconds);
     }
 
     private void ExtendGlobalActionLock(DateTime proposedUntilUtc, string reason)

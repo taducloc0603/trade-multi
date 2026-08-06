@@ -28,8 +28,6 @@ public sealed class ConfigQuotaMappingTests
             closePriceFreezeMs: 2000,
             startTimeHold: 5,
             endTimeHold: 15,
-            startWaitTime: 5,
-            endWaitTime: 15,
             configId: "id",
             sansJson: "{}",
             maxBuyOpens: maxBuy,
@@ -83,8 +81,6 @@ public sealed class ConfigQuotaMappingTests
             closePriceFreezeMs: 2000,
             startTimeHold: 5,
             endTimeHold: 15,
-            startWaitTime: 5,
-            endWaitTime: 15,
             configId: "id",
             sansJson: "{}");
 
@@ -94,7 +90,7 @@ public sealed class ConfigQuotaMappingTests
     }
 
     [Fact]
-    public void Success_MapsPostOpenLockSeconds()
+    public void Success_MapsRandomPostOpenLockRange()
     {
         var result = ConfigLoadResult.Success(
             machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
@@ -103,9 +99,11 @@ public sealed class ConfigQuotaMappingTests
             closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
             closeConfirmTpProfit: 0, closeMaxTpProfit: 35, closeHoldConfirmMs: 650,
             closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
-            startWaitTime: 5, endWaitTime: 15, configId: "id", sansJson: "{}",
-            postOpenLockSeconds: 45);
+            configId: "id", sansJson: "{}",
+            rdStartPostOpenLockSeconds: 30,
+            rdEndPostOpenLockSeconds: 45);
 
-        Assert.Equal(45, result.PostOpenLockSeconds);
+        Assert.Equal(30, result.RdStartPostOpenLockSeconds);
+        Assert.Equal(45, result.RdEndPostOpenLockSeconds);
     }
 }

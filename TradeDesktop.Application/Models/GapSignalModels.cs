@@ -39,13 +39,6 @@ public enum TradingPositionSide
     Sell = 2
 }
 
-public sealed record TradingFlowSkipDiagnostic(
-    string Reason,
-    TradingFlowPhase Phase,
-    int CooldownLeftMs,
-    int OpenGapTick,
-    int CloseGapTick);
-
 public sealed record GapSignalSnapshot(
     DateTime TimestampUtc,
     decimal? ExchangeABid,
@@ -68,13 +61,8 @@ public sealed record GapSignalConfirmationConfig(
     int CloseHoldConfirmMs = 0,
     int StartTimeHold = 0,
     int EndTimeHold = 0,
-    int StartWaitTime = 0,
-    int EndWaitTime = 0,
     int OpenMaxTimesTick = 0,
     int CloseMaxTimesTick = 0,
-    int OpenGapTick = 0,
-    int CloseGapTick = 0,
-    int CoolDownGapTick = 0,
     int LimitMaxGap = 0,
     double LimitMaxTp = 0,
     double CloseMinProfit = 0);

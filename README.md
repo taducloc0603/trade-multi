@@ -159,9 +159,11 @@ File: `TradeDesktop.Application/Services/TradingFlowEngine.cs`
 
 => Mục tiêu nghiệp vụ: hạn chế spam lệnh, tránh vào/ra liên tục theo nhiễu ngắn hạn.
 
-> `start_wait_time`/`end_wait_time` vẫn được đọc để tương thích DB nhưng không còn tham gia
-> quyết định giao dịch. Global action gate hiện dùng `post_open_lock_seconds` và
-> `post_close_lock_seconds`; chi tiết tại mục 13.3.
+> `start_wait_time`/`end_wait_time` đã được xóa khỏi DB và toàn bộ config pipeline.
+> Global action gate dùng các khoảng random `rd_start_post_open_lock_seconds` →
+> `rd_end_post_open_lock_seconds`, `rd_start_post_close_lock_seconds` →
+> `rd_end_post_close_lock_seconds` và khoảng
+> random 3–10 giây theo transition matrix; chi tiết tại mục 13.3.
 
 ### 5.3 Race protection cho auto-open (3 lớp)
 
@@ -228,7 +230,7 @@ Files:
 - Nhiều trường số được normalize an toàn (`Abs`, `Max(0)`, fallback point = 1).
 - `platform_a/platform_b` normalize về `mt4` hoặc `mt5` (default `mt5`).
 
-DB fields liên quan đến guard/limit (`post_close_lock_seconds <= 0` fallback `300s`;
+DB fields liên quan đến guard/limit (mỗi đầu post-close `<= 0` fallback `300s`;
 những limit còn lại dùng `0` để disable):
 
 | DB column | C# property | Kiểu | Ý nghĩa |
@@ -237,8 +239,8 @@ những limit còn lại dùng `0` để disable):
 | `limit_max_gap` | `CurrentLimitMaxGap` | `int` | Reset confirm window ngay nếu `|gap| > limit_max_gap` trong mỗi tick |
 | `limit_max_tp` | `CurrentLimitMaxTp` | `double` | Reset TP window ngay nếu `profit > limit_max_tp` trong mỗi tick |
 | `close_min_profit` | `CurrentCloseMinProfit` | `double` | SÀN lợi nhuận tối thiểu: chặn **mọi close theo signal** (gap-reversal + TP) nếu profit A+B `< close_min_profit` (miễn khi lệnh quá hạn) |
-| `post_open_lock_seconds` | `CurrentPostOpenLockSeconds` | `int` | Sau auto OPEN, chặn auto OPEN/CLOSE trên toàn bộ slot trong số giây cấu hình |
-| `post_close_lock_seconds` | `CurrentPostCloseLockSeconds` | `int` | Sau auto CLOSE, chặn auto OPEN/CLOSE trên toàn bộ slot trong số giây cấu hình |
+| `rd_start_post_open_lock_seconds` / `rd_end_post_open_lock_seconds` | Runtime post-open range | `int` | Random một lần cho từng slot khi Open confirmed; chặn Auto Close của slot đó |
+| `rd_start_post_close_lock_seconds` / `rd_end_post_close_lock_seconds` | Runtime post-close range | `int` | Random một lần cho mỗi Auto Close; chặn Auto Open cho tới hết deadline |
 
 ### 7.2 Routing thực thi lệnh
 
@@ -410,8 +412,8 @@ Fields chính:
 | Rule | Spec |
 |------|------|
 | **A — Quota** | Cấu hình qua `max_total_opens`, `max_buy_opens`, `max_sell_opens` (code default 5/3/3). Đếm cả `PendingOpen + Live + PendingClose`. |
-| **B — Auto action gate** | Gate atomic cho auto flow. Auto OPEN acquire lock theo `post_open_lock_seconds`; auto CLOSE theo `post_close_lock_seconds`. Manual/recovery không đọc hoặc ghi timer này; thay vào đó tạo non-auto barrier đến khi MMF confirm hoàn tất. |
-| **C — Opposite-side lock** | `opposite_side_lock_seconds` (default 300s): sau OPEN block OPEN opposite-side; same-side OPEN refresh timer. Đây là lớp bổ sung ngoài global action gate. |
+| **B — Auto transition gate** | Gate atomic theo action trước/action kế tiếp. Open cùng chiều và Close→Close chờ random 3–10s; Close→Open random theo post-close range; Open→Close dùng giá trị random post-open riêng của slot (phương án B). Manual/recovery không mutate state Auto. |
+| **C — Opposite-side lock** | `opposite_side_lock_seconds` (default 300s): sau OPEN block OPEN opposite-side; same-side OPEN refresh timer. Đây là lớp bổ sung ngoài Auto transition gate. |
 | **D — Priority close (extended)** | Khi nhiều slot trigger close cùng tick: (1) nếu `max_life_time_by_second > 0`, lọc ra các slot có tuổi `(now - OpenConfirmedAtUtc) > max_life_time_by_second` (overtime tier) → chọn profit cao nhất trong tier đó; (2) nếu không có slot nào overtime, chọn profit cao nhất trong tất cả eligible (Rule D gốc). Losers giữ window. `max_life_time_by_second = 0` (default) = disable tier, hành vi giống Rule D gốc. |
 
 Rule A + C check trong `CanOpenNewSlot(side, out reason)`. Rule B được pre-check trong
@@ -419,21 +421,58 @@ Rule A + C check trong `CanOpenNewSlot(side, out reason)`. Rule B được pre-c
 `TradeExecutionRouter` → `PortfolioCoordinator.TryAcquireTradeAction`.
 Rule D pick trong `ProcessSnapshot` close path: overtime tier nếu có, fallback toàn bộ eligible — cả 2 đều `OrderByDescending(LastProfitSnapshot ?? double.MinValue).First()`.
 
-Hành vi global lock sau mỗi thao tác:
+Ma trận Auto transition:
 
-```text
-Sau OPEN:
-    chặn mọi OPEN và CLOSE trên mọi slot
-    trong post_open_lock_seconds
+| # | Lệnh vừa thực hiện | Hành động tiếp theo | Thời gian chờ | Kết quả |
+|---:|---|---|---|---|
+| 1 | Open Buy | Open Buy | Random 3–10 giây | Được xét mở thêm Buy |
+| 2 | Open Buy | Open Sell | Opposite-side lock hiện tại | Được xét mở Sell sau khi hết khóa ngược chiều |
+| 3 | Open Buy | Close Buy | Random post-open của slot cần đóng | Được xét Close Buy sau cooldown |
+| 4 | Open Buy | Close Sell | Random post-open của slot cần đóng | Được xét Close Sell sau cooldown |
+| 5 | Open Sell | Open Sell | Random 3–10 giây | Được xét mở thêm Sell |
+| 6 | Open Sell | Open Buy | Opposite-side lock hiện tại | Được xét mở Buy sau khi hết khóa ngược chiều |
+| 7 | Open Sell | Close Sell | Random post-open của slot cần đóng | Được xét Close Sell sau cooldown |
+| 8 | Open Sell | Close Buy | Random post-open của slot cần đóng | Được xét Close Buy sau cooldown |
+| 9 | Close Buy | Close Buy | Random 3–10 giây | Được xét đóng slot Buy tiếp theo |
+| 10 | Close Buy | Close Sell | Random 3–10 giây | Được xét đóng slot Sell tiếp theo |
+| 11 | Close Buy | Open Sell | Random post-close của Auto Close | Được xét Open Sell sau cooldown |
+| 12 | Close Buy | Open Buy | Random post-close của Auto Close | Được xét Open Buy sau cooldown |
+| 13 | Close Sell | Close Sell | Random 3–10 giây | Được xét đóng slot Sell tiếp theo |
+| 14 | Close Sell | Close Buy | Random 3–10 giây | Được xét đóng slot Buy tiếp theo |
+| 15 | Close Sell | Open Buy | Random post-close của Auto Close | Được xét Open Buy sau cooldown |
+| 16 | Close Sell | Open Sell | Random post-close của Auto Close | Được xét Open Sell sau cooldown |
+| 17 | Manual Close | Auto Open Buy/Sell | Đến khi MMF xác nhận hoàn tất | Auto pause; không tạo cooldown |
+| 18 | Manual Close | Auto Close Buy/Sell | Đến khi MMF xác nhận hoàn tất | Auto pause; không tạo cooldown |
+| 19 | Recovery Close | Auto Open Buy/Sell | Đến khi MMF xác nhận hoàn tất | Auto pause; không tạo cooldown |
+| 20 | Recovery Close | Auto Close Buy/Sell | Đến khi MMF xác nhận hoàn tất | Auto pause; không tạo cooldown |
 
-Sau CLOSE:
-    chặn mọi OPEN và CLOSE trên mọi slot
-    trong post_close_lock_seconds
-```
+Phương án B: giá trị random trong post-open range tính từ `OpenConfirmedAtUtc` của chính slot đang
+được xét close. Open slot mới không kéo dài thời gian chờ của slot cũ. Random được sinh đúng
+một lần khi MMF xác nhận Open và lưu trên slot, không random lại mỗi snapshot.
 
-Lock được acquire trước khi router gửi bất kỳ leg nào, vì vậy hai thao tác đồng thời trên hai
-slot khác nhau không thể cùng vượt gate. Khi OPEN/CLOSE được confirm, hạn lock được kéo dài tới
-`confirmedAtUtc + post_*_lock_seconds` nếu mốc này muộn hơn hạn hiện tại.
+Post-close được random một lần khi Auto Close được dispatch và lưu trên slot đóng. Transition
+Close→Open dùng deadline từ dispatch; sau khi MMF xác nhận Close, re-entry guard tiếp tục dùng
+cùng số giây đó tính từ `CloseConfirmedAtUtc`. Manual/Recovery Close không random, không cập
+nhật anchor và không tạo Auto cooldown.
+
+Quy tắc chuẩn hóa range:
+
+- Nếu `start > end`, ứng dụng tự đổi thứ tự trước khi random.
+- Post-open cho phép `0..0` để không tạo post-open lock.
+- Mỗi đầu post-close `<= 0` được thay bằng fallback an toàn `300` giây.
+- Random bao gồm cả giá trị `start` và `end`.
+
+Mô tả ngắn dùng cho comment cột DB:
+
+| Cột | Mô tả |
+|---|---|
+| `rd_start_post_open_lock_seconds` | Số giây nhỏ nhất chờ sau Auto Open trước khi được Auto Close. |
+| `rd_end_post_open_lock_seconds` | Số giây lớn nhất chờ sau Auto Open trước khi được Auto Close. |
+| `rd_start_post_close_lock_seconds` | Số giây nhỏ nhất chờ sau Auto Close trước khi được Auto Open. |
+| `rd_end_post_close_lock_seconds` | Số giây lớn nhất chờ sau Auto Close trước khi được Auto Open. |
+
+Transition gate được acquire sau physical mutex và policy revalidation, trước khi router gửi leg.
+Vì vậy hai thao tác trên hai slot khác nhau không thể cùng commit transition/native dispatch.
 
 ### 13.4 Cap config
 
@@ -444,9 +483,9 @@ với single-slot. Phase 5 sẽ load từ DB column `current_slots` (đã có co
 ViewModel push config xuống coordinator qua `SyncPortfolioCoordinatorConfig()`:
 - Gọi từ constructor + sau mỗi `ApplyRuntimeConfig()`.
 - Map `RuntimeConfigState.CurrentMaxTotal/Buy/SellOpens` → `coordinator.UpdateQuotaConfig`.
-- `start_wait_time/end_wait_time` không còn tham gia trade gate; coordinator đặt legacy cooldown về `0`.
-- Map `CurrentPostOpenLockSeconds` → `coordinator.UpdatePostOpenLockConfig`.
-- Map `CurrentPostCloseLockSeconds` → `coordinator.UpdatePostCloseLockConfig`.
+- `start_wait_time/end_wait_time` đã được xóa; coordinator không nhận hai cấu hình legacy này.
+- Map hai đầu post-open range → `coordinator.UpdatePostOpenLockConfig(start, end)`.
+- Map hai đầu post-close range → `coordinator.UpdatePostCloseLockConfig(start, end)`.
 - Map `CurrentMaxLifeTimeBySecond` (từ DB column `max_life_time_by_second`) → `coordinator.UpdateMaxLifeTimeConfig`.
 
 ### 13.5 ProcessSnapshot flow (mỗi tick 50ms)
@@ -454,7 +493,7 @@ ViewModel push config xuống coordinator qua `SyncPortfolioCoordinatorConfig()`
 ```
 1. Cache lastSeen* hold range cho close-gate fallback.
 2. Resolve effectiveNow với wall-clock tolerance.
-3. Check global cooldown (Rule B) → return Empty nếu active.
+3. Check startup cooldown/non-auto barrier → return Empty nếu active.
 4. OPEN path:
    - Quota A allow → openSignalEngine.ProcessSnapshot → trigger.
    - Loop triggers, skip nếu CanOpenNewSlot fail (logs skip reason).
@@ -577,11 +616,13 @@ Thứ tự enforcement:
 Validate execution reason/context
 → validate current signal hoặc recovery evidence
 → reserve signal (strategic)
-→ atomic acquire global action gate
+→ acquire physical dispatch mutex
+→ revalidate policy/signal/MMF target
+→ atomic acquire Auto transition gate hoặc non-auto bypass
 → dispatch A/B
 ```
 
-Policy/global-gate block trả `ManualTradeResult.IsDispatchBlocked = true`. ViewModel phải
+Policy/transition-gate block trả `ManualTradeResult.IsDispatchBlocked = true`. ViewModel phải
 rollback slot state và xóa pending MMF/history match request; không queue request cũ để chạy
 sau khi signal đã hết hiệu lực.
 
@@ -596,10 +637,10 @@ Log audit:
 Hệ thống luôn phải thỏa các invariants (verified qua integration tests):
 
 1. **Quota**: `LiveBuyCount ≤ MaxBuyOpens ∧ LiveSellCount ≤ MaxSellOpens ∧ LiveAndPendingTotalCount ≤ MaxTotalOpens`.
-2. **Auto action gate**: giữa hai auto action liên tiếp, action sau chỉ acquire khi
-   `now ≥ GlobalActionLockUntilUtc`; OPEN dùng `post_open_lock_seconds`, CLOSE dùng
-   `post_close_lock_seconds`. Quy tắc áp dụng cho cả OPEN→OPEN, OPEN→CLOSE,
-   CLOSE→OPEN và CLOSE→CLOSE của auto flow. Manual/recovery bypass và không mutate timer.
+2. **Auto transition gate**: Open cùng chiều và Close→Close chờ random 3–10s;
+   Close→Open chờ giá trị post-close đã random; mỗi slot chỉ được Close khi
+   `now ≥ slot.OpenConfirmedAtUtc + selectedPostOpenLockSeconds`. Opposite Open dùng opposite lock.
+   Manual/recovery không mutate transition state.
 3. **Opposite-lock**: nếu OPEN side X tại `T`, không OPEN side ¬X trong `[T, T+300s]` (CLOSE bypass).
 4. **Close priority**: slot được close phải có `LastProfitSnapshot ≥` mọi slot khác trong eligibleCloses.
 5. **Slot isolation**: mỗi slot có CloseSignalEngine riêng, không share window state.

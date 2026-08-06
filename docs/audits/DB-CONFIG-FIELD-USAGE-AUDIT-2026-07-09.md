@@ -103,34 +103,32 @@
 
 ## 7. ⚠️ Các thông số "để đó cho có" — chỉnh KHÔNG thay đổi gì
 
-Những thông số này vẫn nằm trong DB và có thể sửa được, **nhưng hiện tại app không dùng tới** —
-chỉnh chúng sẽ không làm thay đổi cách app chạy:
+Các cột legacy bên dưới đã được xóa khỏi DB và config pipeline ngày 2026-08-06.
+`group_name` và `created_at` vẫn còn trong DB nhưng không tham gia quyết định giao dịch:
 
 | Thông số | Vì sao không có tác dụng |
 |---|---|
-| `open_gap_tick` | App bản mới không đọc thông số này nữa (chỉ phần code cũ đã ngừng dùng mới đọc). |
-| `close_gap_tick` | Như trên. |
-| `cool_down_gap_tick` | Như trên — **và** thời gian nghỉ giữa các lệnh đang bị cố định trong code (xem mục 🔒). |
-| `start_wait_time` | App không dùng để tính thời gian chờ; thời gian chờ sau khi đóng đang lấy theo cơ chế nghỉ cố định. |
-| `end_wait_time` | Như `start_wait_time`. |
+| `open_gap_tick` | **Đã xóa khỏi DB/source config.** |
+| `close_gap_tick` | **Đã xóa khỏi DB/source config.** |
+| `cool_down_gap_tick` | **Đã xóa khỏi DB/source config.** |
+| `start_wait_time` | **Đã xóa khỏi DB/source config.** |
+| `end_wait_time` | **Đã xóa khỏi DB/source config.** |
 | `group_name` | Chỉ là **nhãn/tên nhóm** để con người dễ nhìn, app không dùng để xử lý. |
 | `created_at` | Chỉ là **ngày tạo dòng cài đặt**, app không dùng để xử lý. |
 
 ---
 
-## 8. 🔒 Các thông số bị app ghi đè bằng số cố định
+## 8. 🔒 Quy tắc thời gian do transition matrix quản lý
 
-Với những mục này, **dù bạn sửa trong DB, app vẫn chạy theo con số cố định trong code**:
+Các cột legacy không còn tồn tại. Thời gian chờ được xác định trực tiếp bởi transition matrix:
 
 | Việc | App đang chạy theo | Ghi đè lên thông số DB nào |
 |---|---|---|
-| Thời gian nghỉ giữa 2 lần vào/thoát lệnh | **3–10 giây** (cố định) | `cool_down_gap_tick`, `start_wait_time`, `end_wait_time` |
+| Thời gian nghỉ giữa các transition được quy định random | **3–10 giây** | Không dùng cột legacy |
 | Khoá không cho mở lệnh **ngược chiều** sau khi vừa mở | **5 phút (300 giây)** (cố định) | (không có thông số DB tương ứng) |
 
-**Ví dụ thực tế:** một dòng cài đặt để `cool_down_gap_tick = 60`, `start_wait_time = 15`,
-`end_wait_time = 10`, nhưng thực tế app vẫn nghỉ **3–10 giây** — chứng tỏ các thông số này đang bị ghi đè.
-
-> Đây là trạng thái tạm thời do đội phát triển đặt; sau này có thể chuyển cho DB điều khiển.
+Hai range random post-open/post-close và opposite-side lock vẫn được giữ riêng
+theo transition matrix trong README.
 
 ---
 

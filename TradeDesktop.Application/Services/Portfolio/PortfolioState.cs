@@ -27,12 +27,19 @@ public sealed class PortfolioState
     public int MaxLifeTimeBySecond { get; set; } = 0;
     // Rule C — opposite-side OPEN lock (sau OPEN, chỉ chặn chiều ngược). Config từ DB.
     public int OppositeSideLockSeconds { get; set; } = 300;
-    // Rule C — post-close lock (sau CLOSE, chặn cả 2 chiều). Config từ DB (post_close_lock_seconds).
-    public int PostCloseLockSeconds { get; set; } = 300;
+    // Config ranges are normalized before use. Selected durations are stable per transition/slot.
+    public int RdStartPostCloseLockSeconds { get; set; } = 300;
+    public int RdEndPostCloseLockSeconds { get; set; } = 300;
+    public int LastSelectedPostCloseLockSeconds { get; set; } = 300;
     public bool IsPostCloseLockConfigured { get; set; }
-    // Per-slot minimum hold after OPEN confirmed before strategic GAP/TP close is evaluated.
-    public int PostOpenLockSeconds { get; set; }
+    public int RdStartPostOpenLockSeconds { get; set; }
+    public int RdEndPostOpenLockSeconds { get; set; }
     public bool IsPostOpenLockConfigured { get; set; }
+    // Auto transition gate. Manual/Recovery never mutate these fields.
+    public AutoTradeActionType LastAutoDispatchType { get; set; } = AutoTradeActionType.None;
+    public TradingPositionSide LastAutoDispatchSide { get; set; } = TradingPositionSide.None;
+    public DateTime? LastAutoDispatchAtUtc { get; set; }
+    public int LastAutoRandomIntervalSeconds { get; set; }
 
     public int CountLiveAndPendingBuy()
         => _slots.Count(s => s.Side == TradingPositionSide.Buy && IsLiveOrPending(s.Status));
@@ -98,6 +105,11 @@ public sealed class PortfolioState
         LastOpenConfirmedAtUtc = null;
         LastOpenConfirmedSide = TradingPositionSide.None;
         LastCloseConfirmedAtUtc = null;
+        LastAutoDispatchType = AutoTradeActionType.None;
+        LastAutoDispatchSide = TradingPositionSide.None;
+        LastAutoDispatchAtUtc = null;
+        LastAutoRandomIntervalSeconds = 0;
+        LastSelectedPostCloseLockSeconds = RdStartPostCloseLockSeconds;
     }
 
     private static bool IsLiveOrPending(PositionSlotStatus status)

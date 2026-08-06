@@ -48,22 +48,24 @@ DB integration deferred).
 - Implementation: `coordinator.CanOpenNewSlot(side, out reason)`.
 
 ### Rule B — Auto cooldown + non-auto close barrier
-- Auto OPEN/CLOSE dispatch tạo auto cooldown. Manual/recovery KHÔNG đọc và KHÔNG ghi timer auto cooldown.
-- Cooldown bắt đầu từ **DISPATCH time** (lúc tool gửi request đến router/broker), KHÔNG phải confirm time.
-- MAX semantics: cooldown lock chỉ extend, không rút ngắn. Confirm sau dispatch không reset lock.
-- Auto cooldown chỉ chặn auto OPEN/CLOSE. Manual/recovery bypass timer nhưng dùng non-auto close barrier.
-- Implementation: `coordinator.AllocatePendingOpenSlot` và `MarkSlotCloseTriggered` đều gọi `KickGlobalCooldown` để set `GlobalActionLockUntilUtc`. ViewModel `KickGlobalCooldown` cho path không qua slot lifecycle (external close).
-- Hardcode min=3, max=10 trong `DashboardViewModel.SyncPortfolioCoordinatorConfig` (sẽ chuyển sang DB sau).
+- Auto dùng transition gate theo action/side trước và action/side kế tiếp; không dùng một global post-action timer.
+- Open cùng chiều→Open cùng chiều và Close→Close: random 3–10s, sinh đúng một lần tại dispatch.
+- Close→Open: random một lần trong `rd_start_post_close_lock_seconds..rd_end_post_close_lock_seconds`, lưu theo slot Auto Close. Open ngược chiều: `opposite_side_lock_seconds` + Open point policy.
+- Open→Close theo phương án B: từng slot random một lần khi Open confirmed trong `rd_start_post_open_lock_seconds..rd_end_post_open_lock_seconds`, rồi chỉ eligible khi hết deadline riêng.
+  Open slot mới không refresh thời gian Close của slot cũ.
+- `GlobalActionLockUntilUtc` chỉ dành cho startup/recovery cooldown toàn cục, không dùng cho ma trận thường.
+- Manual/recovery KHÔNG đọc/ghi Auto transition state và dùng non-auto close barrier.
 - Khi manual/recovery đang xử lý, `HasNonAutoCloseInFlight=true`: chặn auto dispatch và disable toàn bộ
   nút Close đến khi MMF xác nhận pair cân bằng/flat. Barrier không có thời gian chờ thêm sau confirm.
 
 ### Rule C — Opposite-side OPEN lock + Post-close lock (2 giá trị ĐỘC LẬP)
 - **2 cột DB riêng, mỗi cái default 300s** (`<= 0` → giữ default):
   - `opposite_side_lock_seconds` → `RuntimeConfigState.CurrentOppositeSideLockSeconds` → `coordinator.UpdateOppositeSideLockConfig` (`DefaultOppositeSideLockSeconds`).
-  - `post_close_lock_seconds` → `RuntimeConfigState.CurrentPostCloseLockSeconds` → `coordinator.UpdatePostCloseLockConfig` (`DefaultPostCloseLockSeconds`).
+  - post-close start/end → `RuntimeConfigState` → `coordinator.UpdatePostCloseLockConfig(start, end)` (`DefaultPostCloseLockSeconds`).
   - Cả 2 push trong `SyncPortfolioCoordinatorConfig`.
 - **Lock 1 (sau OPEN)** — dùng `OppositeSideLockSeconds`: sau OPEN confirm → CHỈ block OPEN opposite-side. Same-side OPEN refresh timer. KHÔNG block CLOSE. State: `LastOpenConfirmedAtUtc`, `LastOpenConfirmedSide`.
-- **Lock 2 (post-close auto)** — dùng `PostCloseLockSeconds`: sau AUTO CLOSE confirm → block auto action/re-entry.
+- **Lock 2 (post-close auto)** — random tại Auto Close dispatch và lưu theo slot; sau MMF confirm, cùng duration được neo lại tại `CloseConfirmedAtUtc` để block Auto Open/re-entry;
+  Auto Close tiếp theo chỉ chờ random 3–10s.
   Manual/recovery close không set `LastCloseConfirmedAtUtc` và không tạo/gia hạn auto cooldown.
 - Cả 2 check nằm trong `CanOpenNewSlot` (chỉ chặn, không tạo open/close → không vi phạm Rule E). Block reason: `OPPOSITE_SIDE_LOCK` / `POST_CLOSE_LOCK`.
 
@@ -89,7 +91,7 @@ DB integration deferred).
      Đường RIÊNG coordinator-safe, ĐỘC LẬP với auto: resolve slot qua `GetSlotByPairId` (bấm là đóng ngay,
      không modal confirm), dùng chung lock vật lý `_closeDispatchInFlight` (chặn khi close khác in-flight), claim
      slot bằng `TryClaimSlotClose(..., CloseExecutionOwner.Manual, ...)` (PendingClose), còn router
-     lấy global action gate/cooldown lúc dispatch; finalize qua polling gọi `CloseSlotManually(pairId)`
+     lấy physical mutex/non-auto gate lúc dispatch; finalize qua polling gọi `CloseSlotManually(pairId)`
      (confirm + remove slot). KHÔNG đụng `_activeAutoCycle` / `_activeAutoCloseRecoveryCycle` / `_autoSlot`,
      KHÔNG đăng ký isAutoFlow. Pending state dùng `PendingCloseOrigin.ManualPair` (không reset khi retry).
      Router chỉ cho phép reason `ManualPairClose` khi pair/slot/ticket và manual ownership khớp chính xác.
@@ -332,7 +334,7 @@ New code MUST NOT introduce new failures.
 - ❌ Đừng share `CloseSignalEngine` giữa slots — Rule D requires isolated window state.
 - ❌ Đừng dùng scalar state (`CurrentOpenMode`, `CurrentPositionSide`) ở code mới — dùng `PositionSlot`.
 - ❌ Đừng đếm quota chỉ theo Live — phải bao gồm `PendingOpen + PendingClose`.
-- ❌ Đừng kích cooldown tại confirm time — phải kick tại DISPATCH time (Phase 8); confirm KHÔNG reset lock (MAX semantics chỉ extend).
+- ❌ Đừng khôi phục global post-action lock cũ. Ma trận Auto phải qua transition gate; per-slot post-open lock dùng Open confirm của chính slot.
 - ❌ Đừng modify `TradingFlowEngine.cs` cũ — `[Obsolete]`, dùng `PortfolioCoordinator`.
 - ❌ Đừng hardcode profit threshold cho Rule D — Rule D pick max, không filter.
 - ❌ Đừng remove logs `[CYCLE]` `[SLOT]` `[CLOSE_SELECT]` — cần cho debug production.

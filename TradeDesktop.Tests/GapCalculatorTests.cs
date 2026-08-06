@@ -72,8 +72,6 @@ public sealed class GapCalculatorTests
         public int CurrentCloseHoldConfirmMs => 0;
         public int CurrentStartTimeHold => 0;
         public int CurrentEndTimeHold => 0;
-        public int CurrentStartWaitTime => 0;
-        public int CurrentEndWaitTime => 0;
         public int CurrentConfirmLatencyMs => 0;
         public int CurrentMaxGap => 0;
         public int CurrentLimitMaxGap => 0;
@@ -89,9 +87,6 @@ public sealed class GapCalculatorTests
         public int CurrentDelayCloseBMs => 0;
         public int CurrentOpenNumberOfQualifyingTimes => 1;
         public int CurrentCloseNumberOfQualifyingTimes => 1;
-        public int CurrentOpenGapTick => 0;
-        public int CurrentCloseGapTick => 0;
-        public int CurrentCoolDownGapTick => 0;
         public int CurrentOpenPriceFreezeMs => 0;
         public int CurrentClosePriceFreezeMs => 0;
         public string CurrentMapName1 => "A";

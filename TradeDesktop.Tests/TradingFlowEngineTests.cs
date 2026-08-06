@@ -21,9 +21,7 @@ public sealed class TradingFlowEngineTests
         ClosePts: 8,
         CloseHoldConfirmMs: 400,
         StartTimeHold: 2,
-        EndTimeHold: 2,
-        StartWaitTime: 3,
-        EndWaitTime: 3);
+        EndTimeHold: 2);
 
     [Fact]
     public void ProcessSnapshot_RunsSequentialFlow_OpenBuyThenCloseBuy()
@@ -227,9 +225,7 @@ public sealed class TradingFlowEngineTests
             ClosePts: 8,
             CloseHoldConfirmMs: 400,
             StartTimeHold: 9,
-            EndTimeHold: 4,
-            StartWaitTime: 7,
-            EndWaitTime: 2);
+            EndTimeHold: 4);
 
         var start = new DateTime(2026, 3, 18, 16, 20, 0, DateTimeKind.Utc);
 
@@ -444,86 +440,6 @@ public sealed class TradingFlowEngineTests
         // Tại T=500ms sau force — close signal KHÔNG được fire (chưa đủ 2s)
         Assert.Null(Process(sut, start.AddMilliseconds(500), gapBuy: 8, gapSell: null, ConfigWithTimeGuards));
         Assert.Equal(TradingFlowPhase.WaitingCloseFromGapSell, sut.CurrentPhase);
-    }
-
-    [Fact]
-    public void ProcessSnapshot_WhenOpenSpikeDetected_StartsCooldownAndBlocksOpenUntilElapsed()
-    {
-        var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var config = new GapSignalConfirmationConfig(
-            ConfirmGapPts: 5,
-            OpenPts: 8,
-            HoldConfirmMs: 0,
-            CloseConfirmGapPts: 5,
-            ClosePts: 8,
-            CloseHoldConfirmMs: 0,
-            OpenGapTick: 2,
-            CloseGapTick: 2,
-            CoolDownGapTick: 2);
-        var start = new DateTime(2026, 3, 18, 18, 0, 0, DateTimeKind.Utc);
-
-        // Establish previous ask values.
-        Assert.Null(ProcessWithPrices(sut, start, 2945.12m, 2945.34m, 2945.56m, 2945.78m, gapBuy: null, gapSell: null, config, pointMultiplier: 100));
-
-        // Ask spike on A: abs(2945.40 - 2945.34) * 100 = 6 > open_gap_tick(2) -> cooldown starts.
-        Assert.Null(ProcessWithPrices(sut, start.AddMilliseconds(100), 2945.12m, 2945.40m, 2945.56m, 2945.78m, gapBuy: 8, gapSell: null, config, pointMultiplier: 100));
-        Assert.NotNull(sut.LastSkipDiagnostic);
-        Assert.Equal("GAP_COOLDOWN_ACTIVE", sut.LastSkipDiagnostic!.Reason);
-        Assert.Equal(TradingFlowPhase.WaitingOpen, sut.LastSkipDiagnostic.Phase);
-        Assert.True(sut.LastSkipDiagnostic.CooldownLeftMs > 0);
-        Assert.Equal(2, sut.LastSkipDiagnostic.OpenGapTick);
-        Assert.Equal(2, sut.LastSkipDiagnostic.CloseGapTick);
-
-        // During cooldown, open signal must still be blocked.
-        Assert.Null(ProcessWithPrices(sut, start.AddMilliseconds(1500), 2945.13m, 2945.41m, 2945.56m, 2945.78m, gapBuy: 8, gapSell: null, config, pointMultiplier: 100));
-        Assert.Equal(TradingFlowPhase.WaitingOpen, sut.CurrentPhase);
-
-        // After cooldown elapsed, open can trigger again.
-        var open = ProcessWithPrices(sut, start.AddMilliseconds(2200), 2945.14m, 2945.42m, 2945.57m, 2945.79m, gapBuy: 8, gapSell: null, config, pointMultiplier: 100);
-        Assert.NotNull(open);
-        Assert.Equal(GapSignalAction.Open, open!.Action);
-        Assert.Null(sut.LastSkipDiagnostic);
-    }
-
-    [Fact]
-    public void ProcessSnapshot_WhenCloseSpikeDetected_StartsCooldownAndBlocksCloseUntilElapsed()
-    {
-        var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var config = new GapSignalConfirmationConfig(
-            ConfirmGapPts: 5,
-            OpenPts: 8,
-            HoldConfirmMs: 0,
-            CloseConfirmGapPts: 5,
-            ClosePts: 8,
-            CloseHoldConfirmMs: 0,
-            OpenGapTick: 2,
-            CloseGapTick: 2,
-            CoolDownGapTick: 2);
-        var start = new DateTime(2026, 3, 18, 18, 10, 0, DateTimeKind.Utc);
-
-        // Open first to enter waiting-close phase.
-        Assert.Null(ProcessWithPrices(sut, start, 2945.12m, 2945.34m, 2945.56m, 2945.78m, gapBuy: 5, gapSell: null, config, pointMultiplier: 100));
-        var open = ProcessWithPrices(sut, start.AddMilliseconds(100), 2945.12m, 2945.34m, 2945.56m, 2945.78m, gapBuy: 8, gapSell: null, config, pointMultiplier: 100);
-        Assert.NotNull(open);
-        Assert.Equal(TradingFlowPhase.WaitingCloseFromGapBuy, sut.CurrentPhase);
-
-        // Ask spike while waiting-close: abs(2945.42 - 2945.34) * 100 = 8 > close_gap_tick(2).
-        Assert.Null(ProcessWithPrices(sut, start.AddMilliseconds(200), 2945.12m, 2945.42m, 2945.56m, 2945.78m, gapBuy: 20, gapSell: -8, config, pointMultiplier: 100));
-        Assert.NotNull(sut.LastSkipDiagnostic);
-        Assert.Equal("GAP_COOLDOWN_ACTIVE", sut.LastSkipDiagnostic!.Reason);
-        Assert.Equal(TradingFlowPhase.WaitingCloseFromGapBuy, sut.LastSkipDiagnostic.Phase);
-        Assert.True(sut.LastSkipDiagnostic.CooldownLeftMs > 0);
-        Assert.Equal(2, sut.LastSkipDiagnostic.OpenGapTick);
-        Assert.Equal(2, sut.LastSkipDiagnostic.CloseGapTick);
-
-        // Close remains blocked within cooldown window.
-        Assert.Null(ProcessWithPrices(sut, start.AddMilliseconds(1500), 2945.12m, 2945.43m, 2945.56m, 2945.78m, gapBuy: 20, gapSell: -8, config, pointMultiplier: 100));
-        Assert.Equal(TradingFlowPhase.WaitingCloseFromGapBuy, sut.CurrentPhase);
-
-        // After cooldown elapsed, close can trigger.
-        var close = ProcessWithPrices(sut, start.AddMilliseconds(2300), 2945.12m, 2945.44m, 2945.56m, 2945.78m, gapBuy: 20, gapSell: -8, config, pointMultiplier: 100);
-        Assert.NotNull(close);
-        Assert.Equal(GapSignalAction.Close, close!.Action);
     }
 
     private static GapSignalTriggerResult? Process(

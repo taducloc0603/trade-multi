@@ -18,8 +18,6 @@ public interface IRuntimeConfigProvider
     int CurrentClosePriceFreezeMs { get; }
     int CurrentStartTimeHold { get; }
     int CurrentEndTimeHold { get; }
-    int CurrentStartWaitTime { get; }
-    int CurrentEndWaitTime { get; }
     int CurrentConfirmLatencyMs { get; }
     int CurrentMaxGap { get; }
     int CurrentLimitMaxGap { get; }
@@ -35,9 +33,6 @@ public interface IRuntimeConfigProvider
     int CurrentDelayCloseBMs { get; }
     int CurrentOpenNumberOfQualifyingTimes { get; }
     int CurrentCloseNumberOfQualifyingTimes { get; }
-    int CurrentOpenGapTick { get; }
-    int CurrentCloseGapTick { get; }
-    int CurrentCoolDownGapTick { get; }
     string CurrentMapName1 { get; }
     string CurrentMapName2 { get; }
     DashboardMetrics? CurrentDashboardMetrics { get; }
