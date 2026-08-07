@@ -46,6 +46,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentOpenNumberOfQualifyingTimes { get; private set; } = 1;
     public int CurrentCloseNumberOfQualifyingTimes { get; private set; } = 1;
     public int CurrentMaxLifeTimeBySecond { get; private set; }
+    public double CurrentMinProfitToClose { get; private set; }
 
     // Rule C — opposite-side OPEN lock (sau OPEN, chỉ chặn chiều ngược). Default 300 khi DB
     // chưa có cột, override từ DB column opposite_side_lock_seconds.
@@ -175,7 +176,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int rdStartPostCloseLockSeconds = -1,
         int rdEndPostCloseLockSeconds = -1,
         int rdStartPostOpenLockSeconds = -1,
-        int rdEndPostOpenLockSeconds = -1)
+        int rdEndPostOpenLockSeconds = -1,
+        double minProfitToClose = 0)
         => Update(
             machineHostName,
             mapName1,
@@ -224,7 +226,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             rdStartPostCloseLockSeconds,
             rdEndPostCloseLockSeconds,
             rdStartPostOpenLockSeconds,
-            rdEndPostOpenLockSeconds);
+            rdEndPostOpenLockSeconds,
+            minProfitToClose);
 
     public void Update(
         string machineHostName,
@@ -274,7 +277,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int rdStartPostCloseLockSeconds = -1,
         int rdEndPostCloseLockSeconds = -1,
         int rdStartPostOpenLockSeconds = -1,
-        int rdEndPostOpenLockSeconds = -1)
+        int rdEndPostOpenLockSeconds = -1,
+        double minProfitToClose = 0)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
         var oldCloseN = CurrentCloseNumberOfQualifyingTimes;
@@ -346,6 +350,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         {
             CurrentMaxLifeTimeBySecond = Math.Max(0, maxLifeTimeBySecond);
         }
+        CurrentMinProfitToClose = Math.Max(0d, minProfitToClose);
         if (oppositeSideLockSeconds >= 0)
         {
             // 0 = tắt lock nguy hiểm → giữ default 300 khi <= 0.

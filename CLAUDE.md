@@ -86,6 +86,9 @@ runtime fallback hiện tại là tổng `5`, Buy `3`, Sell `3`. `PortfolioState
   nếu không có overtime, chọn `LastProfitSnapshot` cao nhất.
 - Slot losers giữ nguyên close window — sẽ trigger lại tick sau nếu vẫn đủ điều kiện.
 - Implementation: `coordinator.ProcessSnapshot` close path: `OrderByDescending(LastProfitSnapshot ?? double.MinValue)`.
+- `min_profit_to_close > 0` lọc Auto Close trước khi vào `eligibleCloses`: khi
+  `age < max_life_time_by_second` cần tổng profit hai chân đạt ngưỡng; tại `age >=` thì bỏ qua gate.
+  Nếu max lifetime bằng `0`, gate không hết hạn. Manual/recovery không đi qua gate này.
 
 ### Rule E — Signal-only mandate (HIGHEST — đứng trên tất cả)
 - **Quy tắc cao nhất**: MỌI điều kiện OPEN/CLOSE một vị thế cân bằng PHẢI bắt nguồn từ signal engine.

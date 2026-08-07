@@ -3290,7 +3290,7 @@ public sealed class DashboardViewModel : ObservableObject
             : $"Sàn B ({_runtimeConfigState.MapName2})";
 
         RuntimeSummary =
-            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  SOS A Distance: {_runtimeConfigState.CurrentSosTriggerAOpenDistancePts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
+            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  MinProfitToClose: {_runtimeConfigState.CurrentMinProfitToClose}  |  MaxLifeTime: {_runtimeConfigState.CurrentMaxLifeTimeBySecond}s  |  SOS A Distance: {_runtimeConfigState.CurrentSosTriggerAOpenDistancePts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
 
         HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsComplete);
         RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict()));
@@ -3319,6 +3319,8 @@ public sealed class DashboardViewModel : ObservableObject
 
         _portfolioCoordinator.UpdateMaxLifeTimeConfig(
             _runtimeConfigState.CurrentMaxLifeTimeBySecond);
+        _portfolioCoordinator.UpdateMinProfitToCloseConfig(
+            _runtimeConfigState.CurrentMinProfitToClose);
 
         // Rule C — 2 lock độc lập từ DB, thay hardcode 300 cũ:
         // opposite_side_lock_seconds → lock sau OPEN (chỉ chặn chiều ngược).
@@ -6503,7 +6505,8 @@ public sealed class DashboardViewModel : ObservableObject
                     rdStartPostCloseLockSeconds: result.RdStartPostCloseLockSeconds,
                     rdEndPostCloseLockSeconds: result.RdEndPostCloseLockSeconds,
                     rdStartPostOpenLockSeconds: result.RdStartPostOpenLockSeconds,
-                    rdEndPostOpenLockSeconds: result.RdEndPostOpenLockSeconds);
+                    rdEndPostOpenLockSeconds: result.RdEndPostOpenLockSeconds,
+                    minProfitToClose: result.MinProfitToClose);
                 _runtimeConfigState.UpdateScheduleSleeping(result.ScheduleSleepingJson);
                 _runtimeConfigState.UpdateQuota(
                     result.MaxTotalOpens,

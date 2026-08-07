@@ -89,6 +89,7 @@ public sealed class ConfigService(
             record.CurrentTickB,
             record.CurrentSlots,
             record.MaxLifeTimeBySecond,
+            minProfitToClose: record.MinProfitToClose,
             limitMaxTp: record.LimitMaxTp,
             maxBuyOpens: record.MaxBuyOpens,
             maxSellOpens: record.MaxSellOpens,
@@ -236,7 +237,8 @@ public sealed record ConfigLoadResult(
     int RdEndPostCloseLockSeconds = 300,
     int RdStartPostOpenLockSeconds = 0,
     int RdEndPostOpenLockSeconds = 0,
-    string ScheduleSleepingJson = "")
+    string ScheduleSleepingJson = "",
+    double MinProfitToClose = 0)
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -297,7 +299,8 @@ public sealed record ConfigLoadResult(
         int rdEndPostCloseLockSeconds = 300,
         int rdStartPostOpenLockSeconds = 0,
         int rdEndPostOpenLockSeconds = 0,
-        string scheduleSleepingJson = "") =>
+        string scheduleSleepingJson = "",
+        double minProfitToClose = 0) =>
         new(
             true,
             true,
@@ -360,7 +363,8 @@ public sealed record ConfigLoadResult(
             Math.Max(0, rdEndPostCloseLockSeconds),
             Math.Max(0, rdStartPostOpenLockSeconds),
             Math.Max(0, rdEndPostOpenLockSeconds),
-            scheduleSleepingJson ?? string.Empty);
+            scheduleSleepingJson ?? string.Empty,
+            Math.Max(0d, minProfitToClose));
 
     public static ConfigLoadResult NotFound(string machineHostName) =>
         new(

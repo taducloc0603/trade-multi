@@ -139,4 +139,21 @@ public sealed class ConfigQuotaMappingTests
         Assert.Equal(6, result.RdStartSameActionLockSeconds);
         Assert.Equal(12, result.RdEndSameActionLockSeconds);
     }
+
+    [Theory]
+    [InlineData(2.5, 2.5)]
+    [InlineData(-1.0, 0.0)]
+    public void Success_NormalizesMinProfitToClose(double configured, double expected)
+    {
+        var result = ConfigLoadResult.Success(
+            machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
+            platformA: "mt5", platformB: "mt5", point: 100, openPts: 1,
+            confirmGapPts: 0, holdConfirmMs: 650, openPriceFreezeMs: 2000,
+            closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
+            closeConfirmTpProfit: 0, closeMaxTpProfit: 35, closeHoldConfirmMs: 650,
+            closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
+            configId: "id", sansJson: "{}", minProfitToClose: configured);
+
+        Assert.Equal(expected, result.MinProfitToClose);
+    }
 }

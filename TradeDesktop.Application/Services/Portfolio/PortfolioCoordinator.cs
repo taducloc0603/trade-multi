@@ -56,6 +56,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     // Log throttle: TP_CHECK heartbeat — mỗi slot tối đa 1 dòng / TpCheckLogMinIntervalSeconds
     // (profit dao động quanh ngưỡng confirm/TP nên KHÔNG trigger theo band-change, chỉ theo interval).
     private readonly Dictionary<int, DateTime> _lastTpCheckLogAtUtc = new();
+    private readonly Dictionary<int, string> _lastMinProfitStatusBySlot = [];
     private const int TpCheckLogMinIntervalSeconds = 60;
 
     // Log throttle: [SLOT][SKIP] Open blocked — log khi (side|reason) đổi HOẶC quá interval (tránh spam mỗi tick).
@@ -246,6 +247,38 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             if (closeTrigger is null || !closeTrigger.Triggered || closeTrigger.Action != GapSignalAction.Close)
             {
                 continue;
+            }
+
+            var ageSeconds = GetSlotAgeSeconds(slot, effectiveNow);
+            var minProfitGuardActive = _state.MinProfitToClose > 0d
+                && (maxLifeTimeSec <= 0 || ageSeconds < maxLifeTimeSec);
+            if (minProfitGuardActive &&
+                (!slot.HasCompleteProfitSnapshot || slot.LastProfitSnapshot < _state.MinProfitToClose))
+            {
+                if (!_lastMinProfitStatusBySlot.TryGetValue(slot.SlotId, out var lastStatus) || lastStatus != "BLOCK")
+                {
+                    _logger?.Log(
+                        $"[MIN_PROFIT][BLOCK] slot={slot.SlotId} pairId={slot.PairId} " +
+                        $"profit={(slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot?.ToString("0.##", CultureInfo.InvariantCulture) : "unavailable")} " +
+                        $"required={_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)} " +
+                        $"ageSeconds={ageSeconds:0.##} maxLifeTimeSeconds={maxLifeTimeSec}");
+                    _lastMinProfitStatusBySlot[slot.SlotId] = "BLOCK";
+                }
+                continue;
+            }
+
+            if (_state.MinProfitToClose > 0d)
+            {
+                var status = maxLifeTimeSec > 0 && ageSeconds >= maxLifeTimeSec ? "EXPIRED" : "PASS";
+                if (!_lastMinProfitStatusBySlot.TryGetValue(slot.SlotId, out var lastStatus) || lastStatus != status)
+                {
+                    _logger?.Log(
+                        $"[MIN_PROFIT][{status}] slot={slot.SlotId} pairId={slot.PairId} " +
+                        $"profit={(slot.LastProfitSnapshot?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unavailable")} " +
+                        $"required={_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)} " +
+                        $"ageSeconds={ageSeconds:0.##} maxLifeTimeSeconds={maxLifeTimeSec}");
+                    _lastMinProfitStatusBySlot[slot.SlotId] = status;
+                }
             }
 
             eligibleCloses.Add((slot, closeTrigger));
@@ -876,6 +909,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _state.MaxLifeTimeBySecond = Math.Max(0, maxLifeTimeSec);
     }
 
+    public void UpdateMinProfitToCloseConfig(double minProfitToClose)
+    {
+        _state.MinProfitToClose = Math.Max(0d, minProfitToClose);
+    }
+
     public void UpdateOppositeSideLockConfig(int seconds)
     {
         // <= 0 = tắt lock nguy hiểm → giữ default thay vì disable.
@@ -969,6 +1007,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     {
         _state.Clear();
         _openSignalEngine.Reset();
+        _lastMinProfitStatusBySlot.Clear();
         _wasBlockedByCooldownLastTick = false;
         lock (_tradeActionGateLock)
         {
@@ -979,6 +1018,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public void ClearAllSlots()
     {
         _state.Clear();
+        _lastMinProfitStatusBySlot.Clear();
         lock (_tradeActionGateLock)
         {
             _nonAutoCloseOperations.Clear();

@@ -95,6 +95,7 @@
 | `max_buy_opens` | Tối đa bao nhiêu lệnh **Mua** cùng lúc. |
 | `max_sell_opens` | Tối đa bao nhiêu lệnh **Bán** cùng lúc. |
 | `max_life_time_by_second` | Khi nhiều lệnh cùng đủ điều kiện đóng, app **ưu tiên đóng lệnh đã sống lâu hơn**. (Chỉ để chọn thứ tự ưu tiên — **không** tự ép đóng lệnh khi chưa có tín hiệu.) |
+| `min_profit_to_close` | Tổng lợi nhuận tối thiểu của hai chân để Auto Close khi tuổi lệnh còn dưới `max_life_time_by_second`. `0` là tắt; khi đạt max lifetime thì bỏ qua ngưỡng nhưng vẫn cần close signal. |
 
 > Nếu để quota = 0, app tự hiểu là **1** (không bao giờ về 0).
 

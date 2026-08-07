@@ -239,6 +239,7 @@ những limit còn lại dùng `0` để disable):
 | `max_gap` | `CurrentMaxGap` | `int` | Chặn open/close tại trigger nếu `|gap| > max_gap` (post-trigger guard) |
 | `limit_max_gap` | `CurrentLimitMaxGap` | `int` | Reset confirm window ngay nếu `|gap| > limit_max_gap` trong mỗi tick |
 | `limit_max_tp` | `CurrentLimitMaxTp` | `double` | Reset TP window ngay nếu `profit > limit_max_tp` trong mỗi tick |
+| `min_profit_to_close` | `CurrentMinProfitToClose` | `double` | Trước `max_life_time_by_second`, chỉ cho Auto Close khi tổng profit hai chân đạt ngưỡng; `0` là tắt |
 | `sos_trigger_a_open_distance_pts` | `CurrentSosTriggerAOpenDistancePts` | `double` | Khoảng cách tuyệt đối giữa giá hiện tại và giá mở chân A, tính theo point; `0` là tắt |
 | `sos_trigger_after_seconds` | `CurrentSosTriggerAfterSeconds` | `int` | Tuổi lệnh để kích hoạt SOS; `0` tắt điều kiện thời gian |
 | `sos_close_confirm_gap_pts` | `CurrentSosCloseConfirmGapPts` | `int` | Ngưỡng bắt đầu xác nhận Gap Close khi SOS bật; được phép là số âm |
@@ -432,6 +433,7 @@ Fields chính:
 | **B — Auto transition gate** | Gate atomic theo action trước/action kế tiếp. Open cùng chiều và Close→Close random theo same-action range DB; Close→Open random theo post-close range; Open→Close dùng giá trị random post-open riêng của slot (phương án B). Manual/recovery không mutate state Auto. |
 | **C — Opposite-side lock** | `opposite_side_lock_seconds` (default 300s): sau OPEN block OPEN opposite-side; same-side OPEN refresh timer. Đây là lớp bổ sung ngoài Auto transition gate. |
 | **D — Priority close (extended)** | Khi nhiều slot trigger close cùng tick: (1) nếu `max_life_time_by_second > 0`, lọc ra các slot có tuổi `(now - OpenConfirmedAtUtc) > max_life_time_by_second` (overtime tier) → chọn profit cao nhất trong tier đó; (2) nếu không có slot nào overtime, chọn profit cao nhất trong tất cả eligible (Rule D gốc). Losers giữ window. `max_life_time_by_second = 0` (default) = disable tier, hành vi giống Rule D gốc. |
+| **E — Minimum profit close gate** | Nếu `min_profit_to_close > 0` và tuổi slot còn dưới `max_life_time_by_second`, Auto Close chỉ được vào danh sách eligible khi tổng profit hai chân `>= min_profit_to_close`. Tại `age >= max_life_time_by_second`, gate hết hiệu lực. Nếu max lifetime bằng `0`, gate không hết hạn. Manual/recovery không đi qua gate này. |
 
 Rule A + C check trong `CanOpenNewSlot(side, out reason)`. Rule B được pre-check trong
 `ProcessSnapshot`/`CanCloseNow`, nhưng lớp bảo vệ cuối và atomic nằm trong

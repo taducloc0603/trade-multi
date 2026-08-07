@@ -245,4 +245,105 @@ public sealed class MaxLifeTimeRuleTests
         // p2 is overtime → p2 wins despite lower profit
         Assert.Equal("p2", result.CloseTargetSlot!.PairId);
     }
+
+    [Fact]
+    public void MinProfit_WithinMaxLifeTime_BlocksCloseBelowThreshold()
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory);
+        coordinator.UpdateMaxLifeTimeConfig(300);
+        coordinator.UpdateMinProfitToCloseConfig(2.5);
+        var now = new DateTime(2026, 5, 21, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-120));
+        coordinator.UpdateProfit(100, 0.75);
+        coordinator.UpdateProfit(200, 0.75);
+        factory.Created[0].NextResult = CloseTrigger();
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        Assert.Null(result.CloseTargetSlot);
+        Assert.Equal(PositionSlotStatus.Live, coordinator.GetSlotByPairId("p1")!.Status);
+    }
+
+    [Fact]
+    public void MinProfit_WithinMaxLifeTime_AllowsCloseAtThreshold()
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory);
+        coordinator.UpdateMaxLifeTimeConfig(300);
+        coordinator.UpdateMinProfitToCloseConfig(2.5);
+        var now = new DateTime(2026, 5, 21, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-120));
+        coordinator.UpdateProfit(100, 1.25);
+        coordinator.UpdateProfit(200, 1.25);
+        factory.Created[0].NextResult = CloseTrigger();
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        Assert.Equal("p1", result.CloseTargetSlot!.PairId);
+    }
+
+    [Fact]
+    public void MinProfit_AtMaxLifeTime_BypassesThreshold()
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory);
+        coordinator.UpdateMaxLifeTimeConfig(300);
+        coordinator.UpdateMinProfitToCloseConfig(2.5);
+        var now = new DateTime(2026, 5, 21, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-300));
+        coordinator.UpdateProfit(100, -1.0);
+        coordinator.UpdateProfit(200, -1.0);
+        factory.Created[0].NextResult = CloseTrigger();
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        Assert.Equal("p1", result.CloseTargetSlot!.PairId);
+    }
+
+    [Fact]
+    public void MinProfit_WithMaxLifeTimeZero_DoesNotExpire()
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory);
+        coordinator.UpdateMaxLifeTimeConfig(0);
+        coordinator.UpdateMinProfitToCloseConfig(2.5);
+        var now = new DateTime(2026, 5, 21, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-10_000));
+        coordinator.UpdateProfit(100, 1.0);
+        coordinator.UpdateProfit(200, 1.0);
+        factory.Created[0].NextResult = CloseTrigger();
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        Assert.Null(result.CloseTargetSlot);
+    }
+
+    [Fact]
+    public void MinProfit_Zero_DisablesGuard()
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory);
+        coordinator.UpdateMaxLifeTimeConfig(300);
+        coordinator.UpdateMinProfitToCloseConfig(0);
+        var now = new DateTime(2026, 5, 21, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-120));
+        coordinator.UpdateProfit(100, -5.0);
+        coordinator.UpdateProfit(200, -5.0);
+        factory.Created[0].NextResult = CloseTrigger();
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        Assert.Equal("p1", result.CloseTargetSlot!.PairId);
+    }
 }

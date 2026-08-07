@@ -25,6 +25,7 @@ public sealed class PortfolioState
     // Rule C — anchor cho post-close all-open lock (khoá mọi OPEN sau CLOSE confirm).
     public DateTime? LastCloseConfirmedAtUtc { get; set; }
     public int MaxLifeTimeBySecond { get; set; } = 0;
+    public double MinProfitToClose { get; set; } = 0d;
     // Rule C — opposite-side OPEN lock (sau OPEN, chỉ chặn chiều ngược). Config từ DB.
     public int OppositeSideLockSeconds { get; set; } = 300;
     // Config ranges are normalized before use. Selected durations are stable per transition/slot.

@@ -90,6 +90,7 @@ public interface IPortfolioCoordinator
     void UpdateQuotaConfig(int maxTotal, int maxBuy, int maxSell);
     void UpdateCooldownConfig(int minSec, int maxSec);
     void UpdateMaxLifeTimeConfig(int maxLifeTimeSec);
+    void UpdateMinProfitToCloseConfig(double minProfitToClose);
     void UpdateOppositeSideLockConfig(int seconds);
     void UpdatePostCloseLockConfig(int startSeconds, int endSeconds);
     void UpdatePostOpenLockConfig(int startSeconds, int endSeconds);
