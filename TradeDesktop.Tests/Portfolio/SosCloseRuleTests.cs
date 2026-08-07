@@ -45,7 +45,7 @@ public sealed class SosCloseRuleTests
         ClosePts: 40,
         CloseConfirmTpProfit: 5,
         CloseTpProfit: 10,
-        SosTriggerProfitPts: 100,
+        SosTriggerAOpenDistancePts: 20,
         SosTriggerAfterSeconds: 60,
         SosCloseConfirmGapPts: -12,
         SosCloseGapPts: -8);
@@ -60,16 +60,15 @@ public sealed class SosCloseRuleTests
     }
 
     [Fact]
-    public void ProfitReached_UsesSosGapThresholds_ButKeepsTpThresholds()
+    public void PositiveAOpenDistanceReached_UsesSosGapThresholds_ButKeepsTpThresholds()
     {
         var (coordinator, engine, slot) = Setup();
-        coordinator.UpdateProfit(101, 60);
-        coordinator.UpdateProfit(201, 40);
+        coordinator.UpdateProfit(101, 20);
 
         coordinator.ProcessSnapshot(Snapshot(10), Config());
 
         Assert.True(slot.IsSosActive);
-        Assert.Equal("PROFIT", slot.SosActivationSource);
+        Assert.Equal("A_OPEN_DISTANCE", slot.SosActivationSource);
         Assert.Equal(-12, engine.LastConfig!.SosCloseConfirmGapPts);
         Assert.Equal(-12, engine.LastConfig.CloseConfirmGapPts);
         Assert.Equal(-8, engine.LastConfig.ClosePts);
@@ -79,20 +78,45 @@ public sealed class SosCloseRuleTests
     }
 
     [Fact]
-    public void ProfitDropsBeforeTimeTrigger_ReturnsToNormalAndResetsGapAgain()
+    public void AOpenDistanceDropsBeforeTimeTrigger_ReturnsToNormalAndResetsGapAgain()
     {
         var (coordinator, engine, slot) = Setup();
-        coordinator.UpdateProfit(101, 100);
-        coordinator.UpdateProfit(201, 0);
+        coordinator.UpdateProfit(101, -20);
         coordinator.ProcessSnapshot(Snapshot(10), Config());
 
-        coordinator.UpdateProfit(101, 99);
+        coordinator.UpdateProfit(101, -15);
         coordinator.ProcessSnapshot(Snapshot(20), Config());
 
         Assert.False(slot.IsSosActive);
         Assert.Equal(30, engine.LastConfig!.CloseConfirmGapPts);
         Assert.Equal(40, engine.LastConfig.ClosePts);
         Assert.Equal(2, engine.GapResetCount);
+    }
+
+    [Fact]
+    public void NegativeAOpenDistanceReached_ActivatesSosWithoutLegBProfit()
+    {
+        var (coordinator, engine, slot) = Setup();
+        coordinator.UpdateProfit(101, -20);
+
+        coordinator.ProcessSnapshot(Snapshot(10), Config());
+
+        Assert.True(slot.IsSosActive);
+        Assert.Equal("A_OPEN_DISTANCE", slot.SosActivationSource);
+        Assert.Equal(-12, engine.LastConfig!.CloseConfirmGapPts);
+    }
+
+    [Fact]
+    public void LargeLegBProfit_DoesNotActivateWhenAOpenDistanceIsBelowThreshold()
+    {
+        var (coordinator, engine, slot) = Setup();
+        coordinator.UpdateProfit(101, 15);
+        coordinator.UpdateProfit(201, 100);
+
+        coordinator.ProcessSnapshot(Snapshot(10), Config());
+
+        Assert.False(slot.IsSosActive);
+        Assert.Equal(30, engine.LastConfig!.CloseConfirmGapPts);
     }
 
     [Fact]

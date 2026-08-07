@@ -56,7 +56,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CloseConfirmTpProfit: row.CloseConfirmTpProfit,
             CloseMaxTpProfit: row.CloseMaxTpProfit,
             LimitMaxTp: row.LimitMaxTp,
-            SosTriggerProfitPts: row.SosTriggerProfitPts,
+            SosTriggerAOpenDistancePts: row.SosTriggerAOpenDistancePts,
             SosTriggerAfterSeconds: row.SosTriggerAfterSeconds,
             SosCloseConfirmGapPts: row.SosCloseConfirmGapPts,
             SosCloseGapPts: row.SosCloseGapPts,
@@ -289,7 +289,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("close_confirm_tp_profit", out var closeConfirmTpProfitElement);
         first.TryGetProperty("close_max_tp_profit", out var closeMaxTpProfitElement);
         first.TryGetProperty("limit_max_tp", out var limitMaxTpElement);
-        first.TryGetProperty("sos_trigger_profit_pts", out var sosTriggerProfitPtsElement);
+        first.TryGetProperty("sos_trigger_a_open_distance_pts", out var sosTriggerAOpenDistancePtsElement);
         first.TryGetProperty("sos_trigger_after_seconds", out var sosTriggerAfterSecondsElement);
         first.TryGetProperty("sos_close_confirm_gap_pts", out var sosCloseConfirmGapPtsElement);
         first.TryGetProperty("sos_close_gap_pts", out var sosCloseGapPtsElement);
@@ -358,7 +358,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CloseConfirmTpProfit = closeConfirmTpProfitElement.ValueKind == JsonValueKind.Number && closeConfirmTpProfitElement.TryGetDouble(out var closeConfirmTpProfit) ? closeConfirmTpProfit : 0d,
             CloseMaxTpProfit = closeMaxTpProfitElement.ValueKind == JsonValueKind.Number && closeMaxTpProfitElement.TryGetDouble(out var closeMaxTpProfit) ? closeMaxTpProfit : 0d,
             LimitMaxTp = limitMaxTpElement.ValueKind == JsonValueKind.Number && limitMaxTpElement.TryGetDouble(out var limitMaxTp) ? limitMaxTp : 0d,
-            SosTriggerProfitPts = sosTriggerProfitPtsElement.ValueKind == JsonValueKind.Number && sosTriggerProfitPtsElement.TryGetDouble(out var sosTriggerProfitPts) ? sosTriggerProfitPts : 0d,
+            SosTriggerAOpenDistancePts = sosTriggerAOpenDistancePtsElement.ValueKind == JsonValueKind.Number && sosTriggerAOpenDistancePtsElement.TryGetDouble(out var sosTriggerAOpenDistancePts) ? sosTriggerAOpenDistancePts : 0d,
             SosTriggerAfterSeconds = sosTriggerAfterSecondsElement.ValueKind == JsonValueKind.Number && sosTriggerAfterSecondsElement.TryGetInt32(out var sosTriggerAfterSeconds) ? sosTriggerAfterSeconds : 0,
             SosCloseConfirmGapPts = sosCloseConfirmGapPtsElement.ValueKind == JsonValueKind.Number && sosCloseConfirmGapPtsElement.TryGetInt32(out var sosCloseConfirmGapPts) ? sosCloseConfirmGapPts : 0,
             SosCloseGapPts = sosCloseGapPtsElement.ValueKind == JsonValueKind.Number && sosCloseGapPtsElement.TryGetInt32(out var sosCloseGapPts) ? sosCloseGapPts : 0,
@@ -449,7 +449,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("close_confirm_tp_profit", out var closeConfirmTpProfitElement);
         first.TryGetProperty("close_max_tp_profit", out var closeMaxTpProfitElement);
         first.TryGetProperty("limit_max_tp", out var limitMaxTpElement);
-        first.TryGetProperty("sos_trigger_profit_pts", out var sosTriggerProfitPtsElement);
+        first.TryGetProperty("sos_trigger_a_open_distance_pts", out var sosTriggerAOpenDistancePtsElement);
         first.TryGetProperty("sos_trigger_after_seconds", out var sosTriggerAfterSecondsElement);
         first.TryGetProperty("sos_close_confirm_gap_pts", out var sosCloseConfirmGapPtsElement);
         first.TryGetProperty("sos_close_gap_pts", out var sosCloseGapPtsElement);
@@ -516,7 +516,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CloseConfirmTpProfit = closeConfirmTpProfitElement.ValueKind == JsonValueKind.Number && closeConfirmTpProfitElement.TryGetDouble(out var closeConfirmTpProfit) ? closeConfirmTpProfit : 0d,
             CloseMaxTpProfit = closeMaxTpProfitElement.ValueKind == JsonValueKind.Number && closeMaxTpProfitElement.TryGetDouble(out var closeMaxTpProfit) ? closeMaxTpProfit : 0d,
             LimitMaxTp = limitMaxTpElement.ValueKind == JsonValueKind.Number && limitMaxTpElement.TryGetDouble(out var limitMaxTp) ? limitMaxTp : 0d,
-            SosTriggerProfitPts = sosTriggerProfitPtsElement.ValueKind == JsonValueKind.Number && sosTriggerProfitPtsElement.TryGetDouble(out var sosTriggerProfitPts) ? sosTriggerProfitPts : 0d,
+            SosTriggerAOpenDistancePts = sosTriggerAOpenDistancePtsElement.ValueKind == JsonValueKind.Number && sosTriggerAOpenDistancePtsElement.TryGetDouble(out var sosTriggerAOpenDistancePts) ? sosTriggerAOpenDistancePts : 0d,
             SosTriggerAfterSeconds = sosTriggerAfterSecondsElement.ValueKind == JsonValueKind.Number && sosTriggerAfterSecondsElement.TryGetInt32(out var sosTriggerAfterSeconds) ? sosTriggerAfterSeconds : 0,
             SosCloseConfirmGapPts = sosCloseConfirmGapPtsElement.ValueKind == JsonValueKind.Number && sosCloseConfirmGapPtsElement.TryGetInt32(out var sosCloseConfirmGapPts) ? sosCloseConfirmGapPts : 0,
             SosCloseGapPts = sosCloseGapPtsElement.ValueKind == JsonValueKind.Number && sosCloseGapPtsElement.TryGetInt32(out var sosCloseGapPts) ? sosCloseGapPts : 0,
@@ -656,8 +656,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         [JsonPropertyName("limit_max_tp")]
         public double LimitMaxTp { get; set; }
 
-        [JsonPropertyName("sos_trigger_profit_pts")]
-        public double SosTriggerProfitPts { get; set; }
+        [JsonPropertyName("sos_trigger_a_open_distance_pts")]
+        public double SosTriggerAOpenDistancePts { get; set; }
 
         [JsonPropertyName("sos_trigger_after_seconds")]
         public int SosTriggerAfterSeconds { get; set; }

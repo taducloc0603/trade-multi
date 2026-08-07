@@ -17,7 +17,7 @@ public sealed record ConfigRecord(
     double CloseConfirmTpProfit,
     double CloseMaxTpProfit,
     double LimitMaxTp,
-    double SosTriggerProfitPts,
+    double SosTriggerAOpenDistancePts,
     int SosTriggerAfterSeconds,
     int SosCloseConfirmGapPts,
     int SosCloseGapPts,

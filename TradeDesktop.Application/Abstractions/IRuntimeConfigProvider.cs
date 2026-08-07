@@ -22,7 +22,7 @@ public interface IRuntimeConfigProvider
     int CurrentMaxGap { get; }
     int CurrentLimitMaxGap { get; }
     double CurrentLimitMaxTp { get; }
-    double CurrentSosTriggerProfitPts { get; }
+    double CurrentSosTriggerAOpenDistancePts { get; }
     int CurrentSosTriggerAfterSeconds { get; }
     int CurrentSosCloseConfirmGapPts { get; }
     int CurrentSosCloseGapPts { get; }

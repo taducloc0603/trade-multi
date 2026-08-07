@@ -3230,7 +3230,7 @@ public sealed class DashboardViewModel : ObservableObject
             : $"Sàn B ({_runtimeConfigState.MapName2})";
 
         RuntimeSummary =
-            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  SOS Profit: {_runtimeConfigState.CurrentSosTriggerProfitPts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
+            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  SOS A Distance: {_runtimeConfigState.CurrentSosTriggerAOpenDistancePts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
 
         HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsComplete);
         RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict()));
@@ -6427,7 +6427,7 @@ public sealed class DashboardViewModel : ObservableObject
                     closeMaxTpProfit: result.CloseMaxTpProfit,
                     limitMaxTp: result.LimitMaxTp,
                     freezeLastN: result.FreezeLastN,
-                    sosTriggerProfitPts: result.SosTriggerProfitPts,
+                    sosTriggerAOpenDistancePts: result.SosTriggerAOpenDistancePts,
                     sosTriggerAfterSeconds: result.SosTriggerAfterSeconds,
                     sosCloseConfirmGapPts: result.SosCloseConfirmGapPts,
                     sosCloseGapPts: result.SosCloseGapPts,
@@ -6458,7 +6458,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
                     DbInlineData =
-                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={result.RdStartSameActionLockSeconds}..{result.RdEndSameActionLockSeconds}s | open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | freeze_last_n={result.FreezeLastN} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={result.SansJson}";
+                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={result.RdStartSameActionLockSeconds}..{result.RdEndSameActionLockSeconds}s | open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | sos_trigger_a_open_distance_pts={result.SosTriggerAOpenDistancePts} | sos_trigger_after_seconds={result.SosTriggerAfterSeconds} | sos_close_confirm_gap_pts={result.SosCloseConfirmGapPts} | sos_close_gap_pts={result.SosCloseGapPts} | freeze_last_n={result.FreezeLastN} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={result.SansJson}";
                     IsDbInlineDataVisible = true;
                 }
                 else
@@ -6592,7 +6592,7 @@ public sealed class DashboardViewModel : ObservableObject
                     CloseMaxTimesTick: _runtimeConfigState.CurrentCloseMaxTimesTick,
                     LimitMaxGap: _runtimeConfigState.CurrentLimitMaxGap,
                     LimitMaxTp: _runtimeConfigState.CurrentLimitMaxTp,
-                    SosTriggerProfitPts: _runtimeConfigState.CurrentSosTriggerProfitPts,
+                    SosTriggerAOpenDistancePts: _runtimeConfigState.CurrentSosTriggerAOpenDistancePts,
                     SosTriggerAfterSeconds: _runtimeConfigState.CurrentSosTriggerAfterSeconds,
                     SosCloseConfirmGapPts: _runtimeConfigState.CurrentSosCloseConfirmGapPts,
                     SosCloseGapPts: _runtimeConfigState.CurrentSosCloseGapPts));

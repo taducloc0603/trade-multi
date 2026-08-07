@@ -22,7 +22,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public double CurrentCloseConfirmTpProfit { get; private set; }
     public double CurrentCloseMaxTpProfit { get; private set; }
     public double CurrentLimitMaxTp { get; private set; }
-    public double CurrentSosTriggerProfitPts { get; private set; }
+    public double CurrentSosTriggerAOpenDistancePts { get; private set; }
     public int CurrentSosTriggerAfterSeconds { get; private set; }
     public int CurrentSosCloseConfirmGapPts { get; private set; }
     public int CurrentSosCloseGapPts { get; private set; }
@@ -164,7 +164,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         double closeMaxTpProfit = 0,
         double limitMaxTp = 0,
         int freezeLastN = 0,
-        double sosTriggerProfitPts = 0,
+        double sosTriggerAOpenDistancePts = 0,
         int sosTriggerAfterSeconds = 0,
         int sosCloseConfirmGapPts = 0,
         int sosCloseGapPts = 0,
@@ -213,7 +213,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             closeMaxTpProfit,
             limitMaxTp,
             freezeLastN,
-            sosTriggerProfitPts,
+            sosTriggerAOpenDistancePts,
             sosTriggerAfterSeconds,
             sosCloseConfirmGapPts,
             sosCloseGapPts,
@@ -263,7 +263,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         double closeMaxTpProfit = 0,
         double limitMaxTp = 0,
         int freezeLastN = 0,
-        double sosTriggerProfitPts = 0,
+        double sosTriggerAOpenDistancePts = 0,
         int sosTriggerAfterSeconds = 0,
         int sosCloseConfirmGapPts = 0,
         int sosCloseGapPts = 0,
@@ -293,7 +293,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentCloseConfirmTpProfit = Math.Abs(closeConfirmTpProfit);
         CurrentCloseMaxTpProfit = Math.Abs(closeMaxTpProfit);
         CurrentLimitMaxTp = Math.Abs(limitMaxTp);
-        CurrentSosTriggerProfitPts = Math.Max(0d, sosTriggerProfitPts);
+        CurrentSosTriggerAOpenDistancePts = Math.Max(0d, sosTriggerAOpenDistancePts);
         CurrentSosTriggerAfterSeconds = Math.Max(0, sosTriggerAfterSeconds);
         CurrentSosCloseConfirmGapPts = sosCloseConfirmGapPts;
         CurrentSosCloseGapPts = sosCloseGapPts;
@@ -433,7 +433,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             closeMaxTpProfit: CurrentCloseMaxTpProfit,
             limitMaxTp: CurrentLimitMaxTp,
             freezeLastN: CurrentFreezeLastN,
-            sosTriggerProfitPts: CurrentSosTriggerProfitPts,
+            sosTriggerAOpenDistancePts: CurrentSosTriggerAOpenDistancePts,
             sosTriggerAfterSeconds: CurrentSosTriggerAfterSeconds,
             sosCloseConfirmGapPts: CurrentSosCloseConfirmGapPts,
             sosCloseGapPts: CurrentSosCloseGapPts);
@@ -475,7 +475,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             closeMaxTpProfit: CurrentCloseMaxTpProfit,
             limitMaxTp: CurrentLimitMaxTp,
             freezeLastN: CurrentFreezeLastN,
-            sosTriggerProfitPts: CurrentSosTriggerProfitPts,
+            sosTriggerAOpenDistancePts: CurrentSosTriggerAOpenDistancePts,
             sosTriggerAfterSeconds: CurrentSosTriggerAfterSeconds,
             sosCloseConfirmGapPts: CurrentSosCloseConfirmGapPts,
             sosCloseGapPts: CurrentSosCloseGapPts);

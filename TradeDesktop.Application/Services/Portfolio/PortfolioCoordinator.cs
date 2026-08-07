@@ -199,22 +199,25 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             if (!IsHoldingElapsedOrFloorReached(slot, effectiveNow)) continue;
             if (!IsPostOpenCloseLockElapsed(slot, effectiveNow)) continue;
 
-            var profitSos = config.SosTriggerProfitPts > 0d
-                && slot.HasCompleteProfitSnapshot
-                && slot.LastProfitSnapshot >= config.SosTriggerProfitPts;
+            var aOpenDistanceSos = config.SosTriggerAOpenDistancePts > 0d
+                && slot.LastProfitA.HasValue
+                && Math.Abs(slot.LastProfitA.Value) >= config.SosTriggerAOpenDistancePts;
             var timeSos = config.SosTriggerAfterSeconds > 0
                 && slot.OpenConfirmedAtUtc.HasValue
                 && (effectiveNow - slot.OpenConfirmedAtUtc.Value).TotalSeconds >= config.SosTriggerAfterSeconds;
-            var sosActive = profitSos || timeSos;
-            var sosSource = profitSos && timeSos ? "PROFIT_AND_TIME" : profitSos ? "PROFIT" : timeSos ? "TIME" : "NONE";
+            var sosActive = aOpenDistanceSos || timeSos;
+            var sosSource = aOpenDistanceSos && timeSos
+                ? "A_OPEN_DISTANCE_AND_TIME"
+                : aOpenDistanceSos ? "A_OPEN_DISTANCE" : timeSos ? "TIME" : "NONE";
             if (slot.UpdateSosMode(sosActive, sosSource))
             {
                 slot.CloseSignalEngine.ResetGapState();
                 _logger?.Log(
                     $"[SOS][{(sosActive ? "ACTIVATED" : "DEACTIVATED")}] slot={slot.SlotId} pairId={slot.PairId} " +
-                    $"reason={(sosActive ? SosReasonVietnamese(sosSource) : "Profit đã xuống dưới ngưỡng và chưa quá thời gian kích hoạt")} " +
-                    $"profit={(slot.LastProfitSnapshot.HasValue ? slot.LastProfitSnapshot.Value.ToString("0.##") : "null")} " +
-                    $"profitThreshold={config.SosTriggerProfitPts:0.##} ageSeconds={GetSlotAgeSeconds(slot, effectiveNow):0.##} " +
+                    $"reason={(sosActive ? SosReasonVietnamese(sosSource) : "Khoảng cách giá chân A đã xuống dưới ngưỡng và chưa quá thời gian kích hoạt")} " +
+                    $"aMovePts={(slot.LastProfitA.HasValue ? slot.LastProfitA.Value.ToString("0.##") : "null")} " +
+                    $"aDistancePts={(slot.LastProfitA.HasValue ? Math.Abs(slot.LastProfitA.Value).ToString("0.##") : "null")} " +
+                    $"aDistanceThreshold={config.SosTriggerAOpenDistancePts:0.##} ageSeconds={GetSlotAgeSeconds(slot, effectiveNow):0.##} " +
                     $"timeThreshold={config.SosTriggerAfterSeconds} " +
                     $"gapMode={(sosActive
                         ? SosCloseConfigResolver.HasUsableSosGapThresholds(config.SosCloseConfirmGapPts, config.SosCloseGapPts) ? "SOS" : "NORMAL_FALLBACK"
@@ -1061,9 +1064,9 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
     private static string SosReasonVietnamese(string source) => source switch
     {
-        "PROFIT" => "Profit hiện tại đã đạt ngưỡng kích hoạt SOS",
+        "A_OPEN_DISTANCE" => "Khoảng cách tuyệt đối giữa giá hiện tại và giá mở chân A đã đạt ngưỡng kích hoạt SOS",
         "TIME" => "Thời gian mở lệnh đã đạt ngưỡng kích hoạt SOS",
-        "PROFIT_AND_TIME" => "Profit và thời gian mở lệnh đều đã đạt ngưỡng kích hoạt SOS",
+        "A_OPEN_DISTANCE_AND_TIME" => "Khoảng cách giá chân A và thời gian mở lệnh đều đã đạt ngưỡng kích hoạt SOS",
         _ => "Không có điều kiện SOS"
     };
 
