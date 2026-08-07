@@ -3,6 +3,9 @@
 > Ngày: 2026-07-09
 > Dành cho người đọc **không chuyên kỹ thuật**. Mục tiêu: hiểu **mỗi thông số trong DB
 > dùng để làm gì**, và **thông số nào đang thực sự có tác dụng, thông số nào không**.
+>
+> Cập nhật trạng thái: 2026-08-07. Audit kỹ thuật đầy đủ và code findings nằm tại
+> `docs/audits/SYSTEM-AUDIT-2026-08-07.md`.
 
 ---
 
@@ -58,8 +61,11 @@
 | `close_number_of_qualifying_times` | Phải đủ điều kiện bao nhiêu lần rồi app mới bấm đóng. |
 | `close_tp_profit` | **Mức lời (take-profit)** để bắt đầu tính chuyện chốt. |
 | `close_confirm_tp_profit` | Mức lời cần **xác nhận** để chốt (tránh chốt hụt do lời chớp nhoáng). |
-| `close_max_tp_profit` | **Mức lời trần** — đạt tới là chốt cứng ngay. |
+| `close_max_tp_profit` | **Trần hợp lệ tại trigger TP** — nếu profit vượt trần thì TP bị suspend, không phải chốt cứng. `0` là tắt trần. |
 | `limit_max_tp` | Chặn số lời "ảo" bất thường (nếu nhảy vọt thì không tin, tránh chốt nhầm). |
+| `sos_trigger_a_open_distance_pts` | Bật SOS khi khoảng cách tuyệt đối giữa giá hiện tại và giá mở chân A đạt số point này; `0` tắt điều kiện khoảng cách. |
+| `sos_trigger_after_seconds` | Bật SOS khi tuổi slot đạt số giây này; `0` tắt điều kiện thời gian. |
+| `sos_close_confirm_gap_pts` / `sos_close_gap_pts` | Bộ Gap Close khi SOS bật; nếu một đầu bằng `0` thì fallback về bộ Gap thường. |
 
 ---
 
@@ -72,6 +78,12 @@
 | `close_pending_time_ms` | Thời gian chờ tối đa để **lệnh đóng khớp**. |
 | `delay_open_a_ms` / `delay_open_b_ms` | Độ trễ khi mở lệnh ở **sàn A** / **sàn B** (bấm 2 sàn hơi lệch nhau để khớp đều hơn). |
 | `delay_close_a_ms` / `delay_close_b_ms` | Tương tự, nhưng cho lúc **đóng** lệnh. |
+| `rd_start_same_action_lock_seconds` / `rd_end_same_action_lock_seconds` | Random chờ cho Open cùng chiều→Open cùng chiều và Close→Close. |
+| `rd_start_post_open_lock_seconds` / `rd_end_post_open_lock_seconds` | Random riêng cho từng slot từ Open confirm đến khi slot đó được Auto Close. `0..0` là tắt. |
+| `rd_start_post_close_lock_seconds` / `rd_end_post_close_lock_seconds` | Random sau Auto Close để chặn Auto Open; mỗi đầu không hợp lệ fallback 300 giây. |
+| `opposite_side_lock_seconds` | Chặn Auto Open ngược chiều sau Open confirm; `<=0` fallback 300 giây. |
+| `opposite_open_min_distance_pts` | Ngoài time lock, Open đảo chiều phải đạt khoảng cách giá tối thiểu trên chân A; `0` tắt price guard. |
+| `schedule_sleeping` | JSONB các khoảng giờ local chặn Auto Open; không chặn Close. |
 
 ---
 
@@ -122,13 +134,15 @@ Các cột legacy bên dưới đã được xóa khỏi DB và config pipeline 
 
 Các cột legacy không còn tồn tại. Thời gian chờ được xác định trực tiếp bởi transition matrix:
 
-| Việc | App đang chạy theo | Ghi đè lên thông số DB nào |
+| Transition | Config đang dùng | Phạm vi |
 |---|---|---|
-| Thời gian nghỉ giữa các transition được quy định random | **3–10 giây** | Không dùng cột legacy |
-| Khoá không cho mở lệnh **ngược chiều** sau khi vừa mở | **5 phút (300 giây)** (cố định) | (không có thông số DB tương ứng) |
+| Open cùng chiều → Open cùng chiều | `rd_start/end_same_action_lock_seconds` | Toàn Auto transition cùng loại; fallback 3..10 |
+| Close → Close | `rd_start/end_same_action_lock_seconds` | Không phụ thuộc side; target vẫn phải hết post-open riêng |
+| Open → Close | `rd_start/end_post_open_lock_seconds` | Riêng slot cần đóng, tính từ Open confirm |
+| Auto Close → Auto Open | `rd_start/end_post_close_lock_seconds` | Chặn cả Buy và Sell; confirm anchor thường chi phối |
+| Open → Open ngược chiều | `opposite_side_lock_seconds` + `opposite_open_min_distance_pts` | Phải hết time lock và pass price guard |
 
-Hai range random post-open/post-close và opposite-side lock vẫn được giữ riêng
-theo transition matrix trong README.
+Các lock không cộng duration; action được phép khi tất cả điều kiện áp dụng đều pass.
 
 ---
 

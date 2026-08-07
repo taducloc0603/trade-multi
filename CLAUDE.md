@@ -29,10 +29,10 @@ TradeDesktop là WPF (.NET 8) app điều phối auto-trading qua 2 sàn MT4/MT5
 Đọc giá realtime từ shared memory, tính gap (`B.Bid - A.Ask`), khi gap đủ
 mạnh trong cửa sổ confirm thì trigger open/close pair trên cả 2 sàn.
 
-**Đặc thù multi-slot (Phase 0-7 refactor):** hỗ trợ tối đa 7 lệnh đồng thời,
-mỗi lệnh là 1 `PositionSlot` độc lập với `CloseSignalEngine` riêng. Production
-hiện tại vẫn cap=1 (RuntimeConfigState defaults) — cap-up qua DB config (Phase 5
-DB integration deferred).
+**Đặc thù multi-slot:** mỗi pair là một `PositionSlot` độc lập với `CloseSignalEngine`
+riêng. Quota được load từ DB (`max_total_opens`, `max_buy_opens`, `max_sell_opens`);
+runtime fallback hiện tại là tổng `5`, Buy `3`, Sell `3`. `PortfolioState` khởi tạo
+`1/1/1` chỉ là trạng thái nội bộ trước lần `SyncPortfolioCoordinatorConfig` đầu tiên.
 
 Đọc `README.md` cho chi tiết signal logic, gap formula, state machine.
 Đọc `README.md` Section 13 cho multi-slot architecture.
@@ -42,9 +42,9 @@ DB integration deferred).
 ## 2. Critical business rules (DO NOT violate)
 
 ### Rule A — Quota
-- Max 7 lệnh tổng, max 4 Buy, max 4 Sell.
+- Quota cấu hình động; fallback runtime: tổng 5, Buy 3, Sell 3.
 - Đếm bao gồm `PendingOpen + Live + PendingClose`.
-- Config: `max_total_opens` / `max_buy_opens` / `max_sell_opens` (Phase 5 từ DB).
+- Config: `max_total_opens` / `max_buy_opens` / `max_sell_opens` từ DB; mỗi giá trị được normalize tối thiểu 1.
 - Implementation: `coordinator.CanOpenNewSlot(side, out reason)`.
 
 ### Rule B — Auto cooldown + non-auto close barrier
@@ -58,20 +58,32 @@ DB integration deferred).
 - Manual/recovery KHÔNG đọc/ghi Auto transition state và dùng non-auto close barrier.
 - Khi manual/recovery đang xử lý, `HasNonAutoCloseInFlight=true`: chặn auto dispatch và disable toàn bộ
   nút Close đến khi MMF xác nhận pair cân bằng/flat. Barrier không có thời gian chờ thêm sau confirm.
+- **Semantics khi nhiều guard cùng áp dụng:** tất cả điều kiện phải pass (AND), action được phép tại
+  deadline muộn nhất; KHÔNG cộng số giây của các lock. Ví dụ Close→Close còn phải chờ post-open riêng
+  của slot sắp đóng; Open đảo chiều phải vừa hết opposite-side lock vừa pass price guard.
+- Post-open chỉ chặn **Auto Close của chính slot**, không chặn Open slot khác. Nó được pre-check trong
+  close scan và re-check trong router/transition gate bằng cùng deadline
+  `slot.OpenConfirmedAtUtc + slot.SelectedPostOpenLockSeconds`; đây là defense-in-depth chống race,
+  không phải nhiều timer nối tiếp. Manual/Recovery/partial-open rollback bypass Auto post-open timer.
 
-### Rule C — Opposite-side OPEN lock + Post-close lock (2 giá trị ĐỘC LẬP)
-- **2 cột DB riêng, mỗi cái default 300s** (`<= 0` → giữ default):
+### Rule C — Opposite-side OPEN lock + Post-close range (2 nhóm ĐỘC LẬP)
+- **Hai nhóm config độc lập** (`<= 0` → giữ fallback an toàn):
   - `opposite_side_lock_seconds` → `RuntimeConfigState.CurrentOppositeSideLockSeconds` → `coordinator.UpdateOppositeSideLockConfig` (`DefaultOppositeSideLockSeconds`).
-  - post-close start/end → `RuntimeConfigState` → `coordinator.UpdatePostCloseLockConfig(start, end)` (`DefaultPostCloseLockSeconds`).
-  - Cả 2 push trong `SyncPortfolioCoordinatorConfig`.
+  - `rd_start_post_close_lock_seconds` / `rd_end_post_close_lock_seconds` → `RuntimeConfigState` → `coordinator.UpdatePostCloseLockConfig(start, end)` (`DefaultPostCloseLockSeconds` cho từng đầu không hợp lệ).
+  - Cả hai nhóm được push trong `SyncPortfolioCoordinatorConfig`.
 - **Lock 1 (sau OPEN)** — dùng `OppositeSideLockSeconds`: sau OPEN confirm → CHỈ block OPEN opposite-side. Same-side OPEN refresh timer. KHÔNG block CLOSE. State: `LastOpenConfirmedAtUtc`, `LastOpenConfirmedSide`.
 - **Lock 2 (post-close auto)** — random tại Auto Close dispatch và lưu theo slot; sau MMF confirm, cùng duration được neo lại tại `CloseConfirmedAtUtc` để block Auto Open/re-entry;
   Auto Close tiếp theo chỉ chờ random theo same-action range DB.
   Manual/recovery close không set `LastCloseConfirmedAtUtc` và không tạo/gia hạn auto cooldown.
-- Cả 2 check nằm trong `CanOpenNewSlot` (chỉ chặn, không tạo open/close → không vi phạm Rule E). Block reason: `OPPOSITE_SIDE_LOCK` / `POST_CLOSE_LOCK`.
+- Close→Open hiện có hai lần bảo vệ dùng cùng duration: transition gate tính từ Auto Close dispatch và
+  `CanOpenNewSlot` tính lại từ Close confirm. Hai khoảng không cộng nhau; deadline từ confirm thường muộn
+  hơn và quyết định thời điểm Auto Open thực tế.
+- Cả hai check nằm trong `CanOpenNewSlot` (chỉ chặn, không tạo open/close → không vi phạm Rule E). Block reason: `OPPOSITE_SIDE_LOCK` / `POST_CLOSE_LOCK`.
 
 ### Rule D — Priority close theo profit cao nhất
-- Nhiều slot trigger close cùng tick → chỉ close 1 slot có `LastProfitSnapshot` cao nhất.
+- Nhiều slot trigger close cùng tick → chỉ close 1 slot. Nếu có overtime slot
+  (`age > max_life_time_by_second`), chọn slot già nhất rồi profit cao nhất làm tie-break;
+  nếu không có overtime, chọn `LastProfitSnapshot` cao nhất.
 - Slot losers giữ nguyên close window — sẽ trigger lại tick sau nếu vẫn đủ điều kiện.
 - Implementation: `coordinator.ProcessSnapshot` close path: `OrderByDescending(LastProfitSnapshot ?? double.MinValue)`.
 
@@ -96,6 +108,7 @@ DB integration deferred).
      (confirm + remove slot). KHÔNG đụng `_activeAutoCycle` / `_activeAutoCloseRecoveryCycle` / `_autoSlot`,
      KHÔNG đăng ký isAutoFlow. Pending state dùng `PendingCloseOrigin.ManualPair` (không reset khi retry).
      Router chỉ cho phép reason `ManualPairClose` khi pair/slot/ticket và manual ownership khớp chính xác.
+
      Đây là user-override đóng tay, KHÔNG phải auto path bỏ qua signal.
   5. Watchdog self-heal resync — khi coordinator under-count drift (số tool-pair mở thật trên MMF >
      số slot coordinator giữ, nhưng trạng thái vật lý vẫn ≤ cap), `EvaluateAndApplyAutoOpenInvariantWatchdog`
@@ -135,6 +148,18 @@ DB integration deferred).
 - Khi sửa logic này, bắt buộc giữ/pass `ManualPairClosePolicyTests`, các test `TryClaimSlotClose*`,
   `ManualClaim_DoesNotPreventAutoFromClaimingAnotherPair` và
   `PartialOpenRecoverySlot_CannotBeClaimedByAutoClose`.
+
+### Rule G — HWND profile phải giữ nguyên theo slot
+
+- Mỗi dòng `manualHwndColumns` là một profile nguyên tử gồm `ChartHwndA`, `TradeHwndA`,
+  `ChartHwndB`, `TradeHwndB`.
+- Random một lần khi bắt đầu Open; lưu bản sao profile vào `PositionSlot` và mapping `pairId`.
+- Open dùng `slot.ChartHwndA/B`; Close/retry/rollback/recovery dùng `slot.TradeHwndA/B` hoặc bản sao
+  pending cùng nguồn. Không đọc `CurrentTradeHwndA/B` cho slot đã có profile.
+- Invariant: `cN -> tN`; cấm ghép chéo `cN -> tM` khi `N != M`.
+- Profile của slot đang chạy là immutable trước thay đổi config và được persist trong `current_slots`.
+- Snapshot legacy không có profile được phép fallback về config hiện tại để tương thích ngược; không
+  được mô tả fallback đó như một mapping lịch sử chính xác.
 
 ---
 
@@ -241,21 +266,20 @@ TradeDesktop.Tests/            # xUnit tests
   thừa, vô hại) — đừng coi nó là nguồn profit cho logic.
 
 ### Cooldown
-- Cooldown kick tại **DISPATCH time** (lúc tool gửi request — qua `AllocatePendingOpenSlot` / `MarkSlotCloseTriggered`), KHÔNG phải confirm time (Phase 8). MAX semantics: lock chỉ extend, confirm không reset.
-- App restart luôn kích cooldown mới (`coordinator.RecoverSlotsFromPersisted` kicks startup cooldown).
+- Auto action thường dùng transition matrix, không dùng global post-action cooldown. Same-action và
+  post-close duration được chọn tại dispatch; per-slot post-open được chọn tại Open confirm.
+- `GlobalActionLockUntilUtc` chỉ còn dành cho startup/recovery cooldown. Recovery chỉ tạo timer nếu
+  legacy `GlobalCooldownMinSec/MaxSec` lớn hơn 0; runtime hiện sync hai giá trị này về 0.
 - Manual buttons legacy hidden (Phase 6 `IsManualTradeButtonsVisible=false`). Manual per-pair là path riêng,
   bypass auto cooldown nhưng bắt buộc qua non-auto barrier và physical close mutex.
 
 ### Config & recovery
 - Config load theo `MachineHostName` (lowercase, normalize).
 - `SyncPortfolioCoordinatorConfig` push từ `RuntimeConfigState` → coordinator. Gọi mỗi `ApplyRuntimeConfig`.
-- Recovery slots verify với MMF → slot không match → discard (orphan handling chưa wire, Phase 5 deferred).
-- **Coordinator under-count drift → invariant watchdog pause vĩnh viễn**: `BeginWaitAfterClose`
-  (adapter) gỡ slot `PendingCloseSlots.First() ?? LiveSlots.First()` — KHÔNG khớp PairId pair vừa đóng;
-  với ≥2 pair mở có thể gỡ nhầm slot còn sống → `coordinatorActiveCount < toolRows` → `toolOverTrackingViolation`
-  latch mãi (không bao giờ đủ 10 clean polls). Watchdog có **self-heal**: khi drift mà rebuild từ MMF ≤ cap,
-  tự resync để nhả (xem Rule E exception #5). Log `[WATCHDOG][WARN]` đã in chi tiết `cond/coordSlots/toolTickets/rebuild`
-  để debug khi self-heal không nhả (vd vi phạm thật quotaSide).
+- `current_slots` đã được load/save. Recovery verify từng ticket với MMF, discard snapshot stale và persist
+  lại danh sách hợp lệ; fallback legacy `current_tick_a/current_tick_b` vẫn tồn tại.
+- Coordinator under-count drift được watchdog self-heal bằng rebuild từ MMF khi rebuild nằm trong quota
+  và không có open/close in-flight; over-count thật vẫn pause. Self-heal throttle 30 giây.
 - DB field `current_slots` là JSON list (Phase 5).
 
 ### Closing wrong trade (Phase 4)
@@ -320,7 +344,7 @@ New code MUST NOT introduce new failures.
 ### Checklist sau khi code
 1. README section 5/7/10/13 có cần update không?
 2. CLAUDE.md có cần thêm pitfall mới không?
-3. Test cover đủ chưa? (baseline ≤ 19 fails)
+3. Test cover đủ chưa? Audit 2026-08-07 ghi nhận 13 legacy/adapter failures do Gap Close chọn sai gap list; xem `docs/audits/SYSTEM-AUDIT-2026-08-07.md`.
 4. Log message rõ ràng (category, level, context)?
 
 ### Commit conventions
@@ -340,14 +364,14 @@ New code MUST NOT introduce new failures.
 - ❌ Đừng hardcode profit threshold cho Rule D — Rule D pick max, không filter.
 - ❌ Đừng remove logs `[CYCLE]` `[SLOT]` `[CLOSE_SELECT]` — cần cho debug production.
 - ❌ Đừng fallback close to row 0 nếu ticket missing trong MMF — skip + log warn.
-- ❌ Đừng change `RuntimeConfigState` defaults từ 1 → 7 cho cap → phải qua DB config (Phase 5).
+- ❌ Đừng hardcode quota; giữ fallback runtime `5/3/3` và để DB config quyết định production cap.
 - ❌ Đừng thêm bất kỳ path mở/đóng vị thế nào bỏ qua signal engine (Rule E) — trừ các recovery/integrity exception đã liệt kê ở Section 2.
 
 ---
 
 ## 9. Key external dependencies
 
-- **Supabase** (Postgres): config + persistence (Phase 5 deferred).
+- **Supabase** (Postgres): config + persistence `current_slots` và legacy current tickets.
 - **Shared memory (MMF)**: tick prices + open trades + history.
 - **MT4/MT5 native click**: via `NativeMethodsMt4/Mt5.cs` (P/Invoke, Windows-only).
 - **Telegram notifier**: critical event alerts.

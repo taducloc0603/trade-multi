@@ -160,7 +160,7 @@ File: `TradeDesktop.Application/Services/TradingFlowEngine.cs`
 => Mục tiêu nghiệp vụ: hạn chế spam lệnh, tránh vào/ra liên tục theo nhiễu ngắn hạn.
 
 > `start_wait_time`/`end_wait_time` đã được xóa khỏi DB và toàn bộ config pipeline.
-> Global action gate dùng các khoảng random `rd_start_post_open_lock_seconds` →
+> Auto transition gate dùng các khoảng random `rd_start_post_open_lock_seconds` →
 > `rd_end_post_open_lock_seconds`, `rd_start_post_close_lock_seconds` →
 > `rd_end_post_close_lock_seconds` và khoảng
 > random theo `rd_start_same_action_lock_seconds` → `rd_end_same_action_lock_seconds`
@@ -397,7 +397,7 @@ File chính: `TradeDesktop.Application/Services/Portfolio/PortfolioCoordinator.c
 
 ### 13.1 Khái niệm
 
-Phase 0-7 refactor: từ single-slot `TradingFlowEngine` (Section 5) → multi-slot
+Refactor từ single-slot `TradingFlowEngine` (Section 5) → multi-slot
 `PortfolioCoordinator`. Mỗi lệnh = 1 `PositionSlot` độc lập với `CloseSignalEngine` riêng,
 profit tracking riêng, lifecycle riêng.
 
@@ -463,6 +463,37 @@ Ma trận Auto transition:
 | 19 | Recovery Close | Auto Open Buy/Sell | Đến khi MMF xác nhận hoàn tất | Auto pause; không tạo cooldown |
 | 20 | Recovery Close | Auto Close Buy/Sell | Đến khi MMF xác nhận hoàn tất | Auto pause; không tạo cooldown |
 
+#### Phạm vi và cách kết hợp các lock
+
+Các lock không phải những khoảng thời gian nối tiếp để cộng tổng. Một action chỉ được dispatch khi
+**tất cả** guard áp dụng cho action đó đều pass; vì vậy thời điểm được phép là deadline muộn nhất
+(`max` các deadline), không phải tổng số giây.
+
+| Action đang xét | Guard có thể cùng áp dụng | Phạm vi/semantics thực tế |
+|---|---|---|
+| Open cùng chiều với Auto Open gần nhất | Same-action lock | Chỉ transition Open→Open cùng side; không chặn Close |
+| Open ngược chiều | Opposite-side lock + opposite-open price guard | Phải hết time lock **và** đạt khoảng cách giá; hai điều kiện độc lập |
+| Auto Close slot X | Holding floor + post-open riêng của X | Dùng deadline muộn hơn; Open slot Y không refresh timer của X |
+| Auto Close sau một Auto Close khác | Same-action lock + post-open riêng của slot sắp đóng | Phải pass cả hai; không cộng duration |
+| Auto Open sau Auto Close | Post-close từ dispatch + post-close từ confirm | Cùng một duration; confirm anchor thường muộn hơn nên chi phối |
+| Manual/Recovery Close | Non-auto barrier + physical dispatch mutex | Bypass Auto timers; tạm pause Auto đến khi MMF xác nhận hoàn tất |
+
+Post-open được kiểm tra ở nhiều lớp nhưng dùng đúng một deadline
+`slot.OpenConfirmedAtUtc + slot.SelectedPostOpenLockSeconds`:
+
+1. `IsHoldingElapsedOrFloorReached` dùng `max(HoldingSeconds, SelectedPostOpenLockSeconds)`.
+2. `IsPostOpenCloseLockElapsed` loại slot khỏi close scan khi chưa hết post-open.
+3. `EvaluateAutoTransition` re-check ngay trước dispatch sau physical mutex.
+
+Ba bước trên là defense-in-depth để tránh signal/race dispatch, không tạo ba khoảng chờ. Post-open chỉ
+chặn **Auto Close của chính slot**; không chặn Auto Open slot khác và không áp dụng cho Manual Close,
+Recovery Close hoặc rollback leg mở dở.
+
+Post-close được chọn một lần tại Auto Close dispatch. Transition gate bảo vệ Close→Open từ mốc dispatch;
+sau khi MMF confirm Close, `CanOpenNewSlot` dùng lại cùng duration từ `LastCloseConfirmedAtUtc`. Hai mốc
+không cộng nhau: Auto Open được phép khi cả hai đã hết, thông thường tương đương
+`LastCloseConfirmedAtUtc + selectedPostCloseLockSeconds`.
+
 ### Opposite-open price guard trên sàn A
 
 DB column `opposite_open_min_distance_pts` là khoảng cách tối thiểu để Auto Open đảo chiều;
@@ -516,11 +547,11 @@ Mô tả ngắn dùng cho comment cột DB:
 Transition gate được acquire sau physical mutex và policy revalidation, trước khi router gửi leg.
 Vì vậy hai thao tác trên hai slot khác nhau không thể cùng commit transition/native dispatch.
 
-### 13.4 Cap config
+### 13.4 Quota và config runtime
 
-Mặc định Phase 0: `MaxTotalOpens=1, MaxBuy=1, MaxSell=1` để giữ behavior production identical
-với single-slot. Phase 5 sẽ load từ DB column `current_slots` (đã có code-side
-`SlotPersistence.Serialize/Deserialize` ready, DB migration deferred).
+Fallback runtime hiện tại là `MaxTotalOpens=5, MaxBuy=3, MaxSell=3`. `PortfolioState` có giá trị
+khởi tạo nội bộ `1/1/1`, nhưng `DashboardViewModel.SyncPortfolioCoordinatorConfig()` đẩy runtime
+fallback/DB config xuống coordinator ngay khi khởi tạo và sau mỗi lần reload config.
 
 ViewModel push config xuống coordinator qua `SyncPortfolioCoordinatorConfig()`:
 - Gọi từ constructor + sau mỗi `ApplyRuntimeConfig()`.
@@ -545,7 +576,7 @@ ViewModel push config xuống coordinator qua `SyncPortfolioCoordinatorConfig()`
    - Loop Live slots, skip slot IsCloseExecutionPending hoặc holding chưa elapsed.
    - Per-slot slot.CloseSignalEngine.ProcessSnapshot → eligibleCloses.
    - Pick winner (Rule D extended):
-     - Nếu `MaxLifeTimeBySecond > 0`: lọc overtime slots (`now - OpenConfirmedAtUtc > maxLifeTimeSec`) → nếu có, chọn profit cao nhất trong overtime.
+     - Nếu `MaxLifeTimeBySecond > 0`: lọc overtime slots (`now - OpenConfirmedAtUtc > maxLifeTimeSec`) → nếu có, chọn slot già nhất; profit chỉ tie-break khi cùng tuổi.
      - Nếu không có overtime slot (hoặc `MaxLifeTimeBySecond = 0`): chọn profit cao nhất toàn bộ eligible (Rule D gốc).
    - MarkCloseTriggered, reset engines.
    - Return PortfolioSnapshotResult(CloseTarget: slot, CloseTrigger: trigger).
@@ -562,20 +593,20 @@ ViewModel push config xuống coordinator qua `SyncPortfolioCoordinatorConfig()`
   Interlocked, plus global `_autoOpenInFlight` để defend-in-depth.
 - **Layer 4 — Multi-slot watchdog**: `EvaluateAndApplyAutoOpenInvariantWatchdog` formula
   `toolCount > coordinator.LiveCount` hoặc `coordinator counts > cap`.
-- **Layer 5 — Global action gate**: mọi `OpenPairAsync`/`ClosePairAsync` phải acquire
-  `TryAcquireTradeAction` atomically tại router. Hai chân A/B trong một pair là một action.
+- **Layer 5 — Physical mutex + transition gate**: mọi `OpenPairAsync`/`ClosePairAsync` qua
+  `_physicalDispatchGate`, revalidate policy/MMF rồi acquire `TryAcquireTradeAction` atomically.
+  Hai chân A/B trong một pair là một action.
 
-### 13.7 Persistence (Phase 5)
+### 13.7 Persistence và recovery
 
-Code-side ready:
+Đã triển khai:
 - `SlotPersistence.Serialize(liveSlots) : string` — JSON cho DB JSONB column.
 - `SlotPersistence.Deserialize(json) : IReadOnlyList<RecoveredSlotData>`.
-- `coordinator.RecoverSlotsFromPersisted(slots)`: restore slots, set next SlotId, kick startup cooldown, restore LastOpenSide.
-
-Deferred (Infrastructure work):
-- DB schema `current_slots JSONB` migration.
-- `SupabaseConfigRepository.SaveCurrentSlotsAsync` + load.
-- ViewModel periodic save + recovery flow on startup.
+- `coordinator.RecoverSlotsFromPersisted(slots)`: restore slots, set next SlotId, restore LastOpenSide và áp startup cooldown nếu legacy global cooldown range > 0.
+- `SupabaseConfigRepository` load/save `current_slots`.
+- ViewModel persist khi Open confirm, Close finalize, manual resync và watchdog self-heal.
+- Startup recovery verify ticket A/B với MMF, loại snapshot stale và persist lại; fallback legacy
+  `current_tick_a/current_tick_b` vẫn được hỗ trợ.
 
 ### 13.8 Close routing (Phase 4)
 
@@ -584,8 +615,35 @@ RowIndex lookup. KHÔNG fallback row 0 nếu ticket missing. Đảm bảo close 
 multi-slot mode (cap>1). `AutoCloseOrderAsync(trigger, targetSlot)` nhận slot từ
 `DispatchCloseTriggerAsync` → ticket-precise selection.
 
-Legacy `SelectCloseCandidateForExchange` (first-tool-opened) còn `[Obsolete]` cho manual
-close + history paths (cap=1 không có vấn đề).
+Legacy `SelectCloseCandidateForExchange` (first-tool-opened) còn `[Obsolete]` cho một số fallback
+manual/recovery; strategic multi-slot close bắt buộc lookup đúng ticket và không fallback row 0.
+
+#### 13.8.1 HWND profile theo slot
+
+Mỗi phần tử trong `manualHwndColumns` là một profile nguyên tử:
+
+```text
+profile N = chartA(N) + chartB(N) + tradeA(N) + tradeB(N)
+```
+
+Khi Open, ứng dụng random đúng một profile và chụp toàn bộ bốn HWND vào `PositionSlot`/mapping
+`pairId`. Hai chart HWND của profile được dùng để Open; hai trade HWND của chính profile đó được
+dùng cho mọi đường Close của slot. Invariant bắt buộc:
+
+```text
+c1 -> t1
+c2 -> t2
+c3 -> t3
+```
+
+Không được ghép chéo như `c1 -> t2`. Auto Close, Manual Close theo pair, legacy Close đã resolve
+được ticket, pending-close retry, partial-open rollback và external-partial recovery đều phải resolve
+Trade HWND từ slot/profile mở. Việc reload hoặc sửa config không đổi profile của slot đang chạy.
+
+`current_slots` persist thêm `hwndProfileIndex`, `chartHwndA/B` và `tradeHwndA/B`; vì vậy slot mới
+giữ đúng mapping qua restart. Snapshot legacy tạo trước khi có các field này vẫn deserialize được,
+nhưng không thể suy ra profile từng dùng để Open. Với slot legacy, runtime fallback về Trade HWND
+config hiện tại. Nếu mọi dòng có cùng `tradeA/tradeB` thì fallback này tương đương cho tất cả profile.
 
 ### 13.9 Monitoring (Phase 7)
 
@@ -695,14 +753,11 @@ Hệ thống luôn phải thỏa các invariants (verified qua integration tests
 9. **Recovery authorization**: close không signal chỉ hợp lệ với recovery reason + evidence
    + đúng một ticket.
 
-### 13.12 Phase status
+### 13.12 Trạng thái hiện tại
 
-Phase 0-7 đã thực thi (code + tests). Phase 8 (docs) is this section.
+Multi-slot, DB quota, `current_slots` persistence/recovery, transition matrix, manual/recovery
+barrier, ticket-precise close và watchdog self-heal đều đã được triển khai. Fallback runtime là
+`5/3/3`; giá trị production thực tế do DB config quyết định.
 
-Code-side hoàn toàn ready cho cap=7 production. Activation phụ thuộc:
-- DB schema migration (Phase 5 deferred).
-- `SupabaseConfigRepository.LoadAsync` thêm fields `max_total_opens`, `current_slots`, etc.
-- ViewModel recovery flow on startup + periodic save 5s.
-- XAML UI updates: status bar wider, manual button hide, Active Slots panel, OrderInfoPanel group.
-
-Production behavior vẫn cap=1 (RuntimeConfigState defaults = 1) cho tới khi DB load.
+Audit 2026-08-07 phát hiện Gap Close đang chọn nhầm collection khi `gapBuy` và `gapSell` khác nhau;
+đây là finding code chưa sửa. Xem `docs/audits/SYSTEM-AUDIT-2026-08-07.md`.
