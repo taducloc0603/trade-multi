@@ -70,6 +70,34 @@ public sealed class OppositeOpenPriceGuardTests
         Assert.Equal("ASK", result.CurrentPriceType);
     }
 
+    [Theory]
+    [InlineData(98.50, 1, true, -150)]
+    [InlineData(98.40, 1, true, -160)]
+    [InlineData(98.501, 1, false, -150)]
+    [InlineData(101.50, 0, true, -150)]
+    [InlineData(101.60, 0, true, -160)]
+    [InlineData(101.499, 0, false, -150)]
+    public void OppositeDirectionDistance_UsesAbsolutePointDistance(
+        double currentPrice,
+        int requestedTradeType,
+        bool allowed,
+        int expectedDistance)
+    {
+        var existingTradeType = requestedTradeType == 1 ? 0 : 1;
+        var trades = new[] { Trade(1, existingTradeType, 100, 10) };
+        var result = OppositeOpenPriceGuard.Evaluate(
+            trades,
+            new HashSet<ulong> { 1 },
+            requestedTradeType,
+            currentBidA: requestedTradeType == 1 ? (decimal)currentPrice : 999,
+            currentAskA: requestedTradeType == 0 ? (decimal)currentPrice : 999,
+            pointMultiplier: 100,
+            requiredDistancePts: 150);
+
+        Assert.Equal(allowed, result.Allowed);
+        Assert.Equal(expectedDistance, result.DistancePts);
+    }
+
     [Fact]
     public void MixedBook_UsesSideOfLatestTradeOnly()
     {

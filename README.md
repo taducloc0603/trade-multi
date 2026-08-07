@@ -503,11 +503,13 @@ DB column `opposite_open_min_distance_pts` là khoảng cách tối thiểu đ�
 `PendingClose`, không tính external/manual trade và không tính `PendingOpen` chưa có giá MMF.
 
 - Lệnh A gần nhất Buy, chuẩn bị Open Sell:
-  `(Current A.Bid - Average Buy Open Price A) × Point >= configured points`.
+  `Abs((Current A.Bid - Average Buy Open Price A) × Point) >= configured points`.
 - Lệnh A gần nhất Sell, chuẩn bị Open Buy:
-  `(Average Sell Open Price A - Current A.Ask) × Point >= configured points`.
+  `Abs((Average Sell Open Price A - Current A.Ask) × Point) >= configured points`.
 - Giá trung bình là trung bình cộng giá mở MMF của các lệnh A còn hoạt động cùng chiều với
-  lệnh gần nhất. Không dùng `Abs`: giá phải di chuyển đúng hướng.
+  lệnh gần nhất. Guard dùng trị tuyệt đối nên giá di chuyển đủ khoảng cách theo một trong hai
+  hướng đều đạt điều kiện; `distancePts` trong log vẫn dùng giá trị có dấu và cách làm tròn gốc
+  để thể hiện hướng biến động.
 - Lệnh đầu tiên và Open cùng chiều bỏ qua guard. Thiếu giá MMF/Bid/Ask thì block fail-safe.
 - Kiểm tra lần đầu tại ViewModel và re-check sau physical dispatch mutex trong router. Nếu
   re-check fail, pending request và `PendingOpen` slot được rollback, không giữ quota.

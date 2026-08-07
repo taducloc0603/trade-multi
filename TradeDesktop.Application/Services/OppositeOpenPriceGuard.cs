@@ -61,7 +61,8 @@ public static class OppositeOpenPriceGuard
             ? (currentPrice.Value - average) * point
             : (average - currentPrice.Value) * point;
         var distancePts = (int)Math.Floor(distance);
-        var allowed = distancePts >= requiredDistancePts;
+        var absoluteDistancePts = (int)Math.Floor(Math.Abs(distance));
+        var allowed = absoluteDistancePts >= requiredDistancePts;
         return new OppositeOpenPriceGuardResult(
             allowed,
             false,
