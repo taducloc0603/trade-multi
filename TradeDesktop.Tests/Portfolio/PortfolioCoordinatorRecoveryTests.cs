@@ -175,6 +175,34 @@ public sealed class SlotPersistenceTests
     }
 
     [Fact]
+    public void Deserialize_RoundTripsHwndProfileWithSlot()
+    {
+        var slot = CreateSlot(2, "AUTO-0002-5678", PositionSlotStatus.Live, ticketA: 777, ticketB: 888);
+        slot.SetHwndProfile(2, new ManualHwndColumnConfig(
+            "chart-a3", "trade-a3", "chart-b3", "trade-b3"));
+
+        var recovered = Assert.Single(SlotPersistence.Deserialize(SlotPersistence.Serialize(new[] { slot })));
+
+        Assert.Equal(2, recovered.HwndProfileIndex);
+        Assert.Equal("chart-a3", recovered.ChartHwndA);
+        Assert.Equal("chart-b3", recovered.ChartHwndB);
+        Assert.Equal("trade-a3", recovered.TradeHwndA);
+        Assert.Equal("trade-b3", recovered.TradeHwndB);
+    }
+
+    [Fact]
+    public void Deserialize_LegacySnapshotWithoutHwndProfile_RemainsCompatible()
+    {
+        const string json = "[{\"slotId\":1,\"pairId\":\"old\",\"side\":\"Buy\",\"openMode\":\"GapBuy\",\"ticketA\":1,\"ticketB\":2,\"openConfirmedAtUtc\":\"2026-01-01T00:00:00Z\",\"holdingSeconds\":3}]";
+
+        var recovered = Assert.Single(SlotPersistence.Deserialize(json));
+
+        Assert.Null(recovered.HwndProfileIndex);
+        Assert.Equal(string.Empty, recovered.TradeHwndA);
+        Assert.Equal(string.Empty, recovered.TradeHwndB);
+    }
+
+    [Fact]
     public void Deserialize_MalformedJson_ReturnsEmpty()
     {
         var result = SlotPersistence.Deserialize("not-json{");

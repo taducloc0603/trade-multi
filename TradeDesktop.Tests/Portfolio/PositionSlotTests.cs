@@ -56,6 +56,24 @@ public sealed class PositionSlotTests
     }
 
     [Fact]
+    public void SetHwndProfile_KeepsChartAndTradeHandlesTogetherForSlotLifetime()
+    {
+        var slot = CreateSlot();
+        var profile = new ManualHwndColumnConfig(" chart-a2 ", " trade-a2 ", " chart-b2 ", " trade-b2 ");
+
+        slot.SetHwndProfile(1, profile);
+        slot.MarkOpenTriggered(TradingPositionSide.Buy, TradingOpenMode.GapBuy, DateTime.UtcNow, 3);
+        slot.MarkOpenConfirmed(10, 20, DateTime.UtcNow);
+        slot.MarkCloseTriggered(DateTime.UtcNow);
+
+        Assert.Equal(1, slot.HwndProfileIndex);
+        Assert.Equal("chart-a2", slot.ChartHwndA);
+        Assert.Equal("chart-b2", slot.ChartHwndB);
+        Assert.Equal("trade-a2", slot.TradeHwndA);
+        Assert.Equal("trade-b2", slot.TradeHwndB);
+    }
+
+    [Fact]
     public void MarkCloseTriggered_SetsIsCloseExecutionPending()
     {
         var slot = CreateSlot();

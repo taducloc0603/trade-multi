@@ -160,4 +160,9 @@ public sealed record RecoveredSlotData(
     ulong TicketA,
     ulong TicketB,
     DateTime OpenConfirmedAtUtc,
-    int HoldingSeconds);
+    int HoldingSeconds,
+    int? HwndProfileIndex = null,
+    string ChartHwndA = "",
+    string TradeHwndA = "",
+    string ChartHwndB = "",
+    string TradeHwndB = "");

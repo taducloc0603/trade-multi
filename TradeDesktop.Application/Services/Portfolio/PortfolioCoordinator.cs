@@ -1008,6 +1008,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 ticketB: data.TicketB,
                 openConfirmedAtUtc: data.OpenConfirmedAtUtc,
                 holdingSeconds: data.HoldingSeconds);
+            slot.SetHwndProfile(data.HwndProfileIndex, new ManualHwndColumnConfig(
+                data.ChartHwndA, data.TradeHwndA, data.ChartHwndB, data.TradeHwndB));
             slot.SetSelectedPostOpenLockSeconds(NextSecondsInRange(
                 _state.RdStartPostOpenLockSeconds,
                 _state.RdEndPostOpenLockSeconds));

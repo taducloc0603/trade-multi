@@ -55,6 +55,7 @@ public sealed class DashboardViewModel : ObservableObject
     private readonly Dictionary<ulong, PendingOpenRequest> _openRequestByTicket = [];
     private readonly Dictionary<ulong, PendingCloseRequest> _closeRequestByTicket = [];
     private readonly Dictionary<ulong, string> _pairIdByTicket = [];
+    private readonly Dictionary<string, (int Index, ManualHwndColumnConfig Profile)> _hwndProfileByPairId = new(StringComparer.Ordinal);
     private readonly Dictionary<int, OpenConfirmCycleState> _openConfirmBySlot = [];
     private readonly Dictionary<int, CloseConfirmCycleState> _closeConfirmBySlot = [];
     private readonly Dictionary<ulong, double> _openSlippageByTicket = [];
@@ -149,6 +150,7 @@ public sealed class DashboardViewModel : ObservableObject
     private sealed record PendingCloseRequest(
         string PairId,
         string TradeMapName,
+        string TradeHwnd,
         ulong? Ticket,
         string? Symbol,
         int TradeType,
@@ -1055,11 +1057,13 @@ public sealed class DashboardViewModel : ObservableObject
 
         try
         {
-            var (_, hwndColumn) = _runtimeConfigState.GetRandomManualHwndColumn();
+            var (hwndIndex, hwndColumn) = _runtimeConfigState.GetRandomManualHwndColumn();
             var snapshot = _runtimeConfigState.CurrentDashboardMetrics;
             var appOpenRequestTimeLocal = DateTimeOffset.Now;
             var appOpenRequestRawMs = Environment.TickCount64;
             var slot = _manualSlot;
+            var pairId = BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: false);
+            RememberHwndProfile(pairId, hwndIndex, hwndColumn);
 
             // Capture pending request BEFORE executing click to avoid race with shared-memory polling.
             CapturePendingOpenRequest(TradeTab.LeftPanel.TargetMapName, snapshot, isExchangeA: true, tradeType: 0, appOpenRequestTimeLocal, appOpenRequestRawMs, slot);
@@ -1134,11 +1138,13 @@ public sealed class DashboardViewModel : ObservableObject
 
         try
         {
-            var (_, hwndColumn) = _runtimeConfigState.GetRandomManualHwndColumn();
+            var (hwndIndex, hwndColumn) = _runtimeConfigState.GetRandomManualHwndColumn();
             var snapshot = _runtimeConfigState.CurrentDashboardMetrics;
             var appOpenRequestTimeLocal = DateTimeOffset.Now;
             var appOpenRequestRawMs = Environment.TickCount64;
             var slot = _manualSlot;
+            var pairId = BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: false);
+            RememberHwndProfile(pairId, hwndIndex, hwndColumn);
 
             // Capture pending request BEFORE executing click to avoid race with shared-memory polling.
             CapturePendingOpenRequest(TradeTab.LeftPanel.TargetMapName, snapshot, isExchangeA: true, tradeType: 1, appOpenRequestTimeLocal, appOpenRequestRawMs, slot);
@@ -1218,6 +1224,8 @@ public sealed class DashboardViewModel : ObservableObject
             exchangeLabel: "B",
             tradeMapName: TradeTab.RightPanel.TargetMapName,
             tradeHwnd: _runtimeConfigState.CurrentTradeHwndB);
+        selectA = BindSelectionToOpeningProfile(selectA, isExchangeA: true);
+        selectB = BindSelectionToOpeningProfile(selectB, isExchangeA: false);
 
         var appCloseRequestTimeLocal = DateTimeOffset.Now;
         var appCloseRequestRawMs = Environment.TickCount64;
@@ -1350,12 +1358,12 @@ public sealed class DashboardViewModel : ObservableObject
                 targetTicket: ticketA,
                 exchangeLabel: "A",
                 tradeMapName: TradeTab.LeftPanel.TargetMapName,
-                tradeHwnd: _runtimeConfigState.CurrentTradeHwndA);
+                tradeHwnd: ResolveSlotTradeHwnd(slot, slot.PairId, isExchangeA: true));
             var selectB = SelectCloseCandidateForTicket(
                 targetTicket: ticketB,
                 exchangeLabel: "B",
                 tradeMapName: TradeTab.RightPanel.TargetMapName,
-                tradeHwnd: _runtimeConfigState.CurrentTradeHwndB);
+                tradeHwnd: ResolveSlotTradeHwnd(slot, slot.PairId, isExchangeA: false));
 
             if (selectA.Request is null || selectB.Request is null)
             {
@@ -1603,8 +1611,9 @@ public sealed class DashboardViewModel : ObservableObject
 
         try
         {
-            var (_, hwndColumn) = _runtimeConfigState.GetRandomManualHwndColumn();
+            var (hwndIndex, hwndColumn) = _runtimeConfigState.GetRandomManualHwndColumn();
             var appOpenRequestTimeLocal = DateTimeOffset.Now;
+            RememberHwndProfile(pairId, hwndIndex, hwndColumn);
 
             if (HasUnresolvedAutoPendingOpenCycle(out var blockingPairId))
             {
@@ -1651,6 +1660,7 @@ public sealed class DashboardViewModel : ObservableObject
                 });
                 return;
             }
+            coordinatorSlot.SetHwndProfile(hwndIndex, hwndColumn);
             SafeVmLog($"[SLOT][INFO] Slot {coordinatorSlot.SlotId} allocated: pairId={pairId} side=Buy mode=GapBuy");
 
             _lastAutoOpenClickAtLocal = DateTimeOffset.Now;
@@ -1784,8 +1794,9 @@ public sealed class DashboardViewModel : ObservableObject
 
         try
         {
-            var (_, hwndColumn) = _runtimeConfigState.GetRandomManualHwndColumn();
+            var (hwndIndex, hwndColumn) = _runtimeConfigState.GetRandomManualHwndColumn();
             var appOpenRequestTimeLocal = DateTimeOffset.Now;
+            RememberHwndProfile(pairId, hwndIndex, hwndColumn);
 
             if (HasUnresolvedAutoPendingOpenCycle(out var blockingPairId))
             {
@@ -1832,6 +1843,7 @@ public sealed class DashboardViewModel : ObservableObject
                 });
                 return;
             }
+            coordinatorSlot.SetHwndProfile(hwndIndex, hwndColumn);
             SafeVmLog($"[SLOT][INFO] Slot {coordinatorSlot.SlotId} allocated: pairId={pairId} side=Sell mode=GapSell");
 
             _lastAutoOpenClickAtLocal = DateTimeOffset.Now;
@@ -1961,12 +1973,12 @@ public sealed class DashboardViewModel : ObservableObject
                     targetTicket: ticketA,
                     exchangeLabel: "A",
                     tradeMapName: TradeTab.LeftPanel.TargetMapName,
-                    tradeHwnd: _runtimeConfigState.CurrentTradeHwndA);
+                    tradeHwnd: ResolveSlotTradeHwnd(targetSlot, targetSlot.PairId, isExchangeA: true));
                 selectB = SelectCloseCandidateForTicket(
                     targetTicket: ticketB,
                     exchangeLabel: "B",
                     tradeMapName: TradeTab.RightPanel.TargetMapName,
-                    tradeHwnd: _runtimeConfigState.CurrentTradeHwndB);
+                    tradeHwnd: ResolveSlotTradeHwnd(targetSlot, targetSlot.PairId, isExchangeA: false));
                 SafeVmLog(
                     $"[CLOSE_SELECT][INFO] Slot {targetSlot!.SlotId} resolved: " +
                     $"A.row={selectA.Request?.RowIndex} ticket={ticketA}, " +
@@ -1982,6 +1994,8 @@ public sealed class DashboardViewModel : ObservableObject
                     exchangeLabel: "B",
                     tradeMapName: TradeTab.RightPanel.TargetMapName,
                     tradeHwnd: _runtimeConfigState.CurrentTradeHwndB);
+                selectA = BindSelectionToOpeningProfile(selectA, isExchangeA: true);
+                selectB = BindSelectionToOpeningProfile(selectB, isExchangeA: false);
             }
 
             var appCloseRequestTimeLocal = DateTimeOffset.Now;
@@ -2213,6 +2227,7 @@ public sealed class DashboardViewModel : ObservableObject
         var expectedPrice = ResolveExpectedPriceFromTrigger(trigger, isExchangeA, closeTradeType);
         RegisterPendingCloseRequest(
             tradeMapName: ResolveTradeMapNameFromCloseSelection(selection),
+            tradeHwnd: selection.Request.TradeHwnd,
             ticket: selection.Request.Ticket,
             tradeType: originalTradeType,
             expectedPrice: expectedPrice,
@@ -2451,6 +2466,19 @@ public sealed class DashboardViewModel : ObservableObject
         double? Volume,
         string? DiagnosticMessage);
 
+    private CloseSelectionResult BindSelectionToOpeningProfile(CloseSelectionResult selection, bool isExchangeA)
+    {
+        if (selection.Request is null ||
+            !_pairIdByTicket.TryGetValue(selection.Request.Ticket, out var pairId))
+        {
+            return selection;
+        }
+
+        var slot = _portfolioCoordinator.GetSlotByPairId(pairId);
+        var tradeHwnd = ResolveSlotTradeHwnd(slot, pairId, isExchangeA);
+        return selection with { Request = selection.Request with { TradeHwnd = tradeHwnd } };
+    }
+
     private void CapturePendingOpenRequest(
         string tradeMapName,
         DashboardMetrics? snapshot,
@@ -2519,6 +2547,7 @@ public sealed class DashboardViewModel : ObservableObject
 
         RegisterPendingCloseRequest(
             tradeMapName: ResolveTradeMapNameFromCloseSelection(selection),
+            tradeHwnd: selection.Request.TradeHwnd,
             ticket: selection.Request.Ticket,
             tradeType: selection.TradeType.Value,
             expectedPrice: expectedPrice,
@@ -2611,6 +2640,7 @@ public sealed class DashboardViewModel : ObservableObject
 
     private void RegisterPendingCloseRequest(
         string tradeMapName,
+        string tradeHwnd,
         ulong? ticket,
         int tradeType,
         double? expectedPrice,
@@ -2635,6 +2665,7 @@ public sealed class DashboardViewModel : ObservableObject
                 ? ResolvePairIdForClose(ticket, slotNumber, appCloseRequestRawMs, isAutoFlow)
                 : pairIdOverride,
             TradeMapName: key,
+            TradeHwnd: tradeHwnd,
             Ticket: ticket,
             Symbol: symbol,
             TradeType: tradeType,
@@ -2685,7 +2716,7 @@ public sealed class DashboardViewModel : ObservableObject
         {
             state.TradeMapNameA = pending.TradeMapName;
             state.PlatformA = ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformA);
-            state.TradeHwndA = _runtimeConfigState.CurrentTradeHwndA;
+            state.TradeHwndA = pending.TradeHwnd;
             state.TicketA = pending.Ticket;
             state.TradeTypeA = pending.TradeType;
             state.SymbolA = pending.Symbol;
@@ -2696,7 +2727,7 @@ public sealed class DashboardViewModel : ObservableObject
         {
             state.TradeMapNameB = pending.TradeMapName;
             state.PlatformB = ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB);
-            state.TradeHwndB = _runtimeConfigState.CurrentTradeHwndB;
+            state.TradeHwndB = pending.TradeHwnd;
             state.TicketB = pending.Ticket;
             state.TradeTypeB = pending.TradeType;
             state.SymbolB = pending.Symbol;
@@ -2710,6 +2741,35 @@ public sealed class DashboardViewModel : ObservableObject
 
     private static string BuildPairId(int slotNumber, long requestRawMs, bool isAutoFlow)
         => $"{(isAutoFlow ? "AUTO" : "MANUAL")}-{slotNumber:D4}-{requestRawMs}";
+
+    private void RememberHwndProfile(string pairId, int index, ManualHwndColumnConfig profile)
+    {
+        var normalized = profile.Normalize();
+        _hwndProfileByPairId[pairId] = (index, normalized);
+        SafeVmLog($"[HWND_PROFILE][OPEN] pairId={pairId} profile={index + 1} " +
+                  $"chartA={normalized.ChartHwndA} chartB={normalized.ChartHwndB} " +
+                  $"tradeA={normalized.TradeHwndA} tradeB={normalized.TradeHwndB}");
+    }
+
+    private string ResolveSlotTradeHwnd(PositionSlot? slot, string? pairId, bool isExchangeA)
+    {
+        var fromSlot = isExchangeA ? slot?.TradeHwndA : slot?.TradeHwndB;
+        if (!string.IsNullOrWhiteSpace(fromSlot))
+        {
+            return fromSlot;
+        }
+
+        if (!string.IsNullOrWhiteSpace(pairId) &&
+            _hwndProfileByPairId.TryGetValue(pairId, out var entry))
+        {
+            return isExchangeA ? entry.Profile.TradeHwndA : entry.Profile.TradeHwndB;
+        }
+
+        // Backward compatibility for slots persisted before HWND profiles existed.
+        return isExchangeA
+            ? _runtimeConfigState.CurrentTradeHwndA
+            : _runtimeConfigState.CurrentTradeHwndB;
+    }
 
     private string ResolvePairIdForClose(ulong? ticket, int slotNumber, long requestRawMs, bool isAutoFlow)
     {
@@ -4012,7 +4072,8 @@ public sealed class DashboardViewModel : ObservableObject
 
         var isExchangeA = string.Equals(action.OpenedExchange, "A", StringComparison.OrdinalIgnoreCase);
         var platform = ResolveTradeLegPlatform(isExchangeA ? _runtimeConfigState.CurrentPlatformA : _runtimeConfigState.CurrentPlatformB);
-        var tradeHwnd = isExchangeA ? _runtimeConfigState.CurrentTradeHwndA : _runtimeConfigState.CurrentTradeHwndB;
+        var sourceSlot = _portfolioCoordinator.GetSlotByPairId(action.PairId);
+        var tradeHwnd = ResolveSlotTradeHwnd(sourceSlot, action.PairId, isExchangeA);
         var rowIndex = FindRowIndexForTicket(action.TradeMapName, action.Ticket);
 
         var appCloseRequestTimeLocal = DateTimeOffset.Now;
@@ -4026,6 +4087,7 @@ public sealed class DashboardViewModel : ObservableObject
             var expectedClose = ResolveExpectedClosePrice(_runtimeConfigState.CurrentDashboardMetrics, isExchangeA, action.TradeType.Value);
             RegisterPendingCloseRequest(
                 tradeMapName: action.TradeMapName,
+                tradeHwnd: tradeHwnd,
                 ticket: action.Ticket,
                 tradeType: action.TradeType.Value,
                 expectedPrice: expectedClose,
@@ -4988,6 +5050,7 @@ public sealed class DashboardViewModel : ObservableObject
                 exchangeLabel: remainingExchange,
                 tradeMapName: tradeMapName,
                 tradeHwnd: tradeHwnd);
+            selection = BindSelectionToOpeningProfile(selection, isExchangeA);
 
             if (selection.Request is null)
             {
@@ -5055,6 +5118,7 @@ public sealed class DashboardViewModel : ObservableObject
 
                 RegisterPendingCloseRequest(
                     tradeMapName: tradeMapName,
+                    tradeHwnd: selection.Request.TradeHwnd,
                     ticket: selection.Request.Ticket,
                     tradeType: selection.TradeType ?? 0,
                     expectedPrice: null,
@@ -5239,6 +5303,7 @@ public sealed class DashboardViewModel : ObservableObject
             var expectedClose = ResolveExpectedClosePrice(_runtimeConfigState.CurrentDashboardMetrics, isExchangeA, action.TradeType.Value);
             RegisterPendingCloseRequest(
                 tradeMapName: action.TradeMapName,
+                tradeHwnd: action.TradeHwnd,
                 ticket: action.Ticket,
                 tradeType: action.TradeType.Value,
                 expectedPrice: expectedClose,
@@ -7447,7 +7512,41 @@ public sealed class DashboardViewModel : ObservableObject
             OpenConfirmedAtUtc: DateTime.UtcNow,
             HoldingSeconds: Math.Max(0, _tradingFlowEngine.CurrentHoldingSeconds))).ToList();
 
+        for (var i = 0; i < recovered.Count; i++)
+        {
+            var existing = _portfolioCoordinator.GetSlotByPairId(recovered[i].PairId);
+            if (existing is not null && !string.IsNullOrWhiteSpace(existing.TradeHwndA) && !string.IsNullOrWhiteSpace(existing.TradeHwndB))
+            {
+                recovered[i] = recovered[i] with
+                {
+                    HwndProfileIndex = existing.HwndProfileIndex,
+                    ChartHwndA = existing.ChartHwndA,
+                    TradeHwndA = existing.TradeHwndA,
+                    ChartHwndB = existing.ChartHwndB,
+                    TradeHwndB = existing.TradeHwndB
+                };
+            }
+            else if (_hwndProfileByPairId.TryGetValue(recovered[i].PairId, out var entry))
+            {
+                recovered[i] = recovered[i] with
+                {
+                    HwndProfileIndex = entry.Index,
+                    ChartHwndA = entry.Profile.ChartHwndA,
+                    TradeHwndA = entry.Profile.TradeHwndA,
+                    ChartHwndB = entry.Profile.ChartHwndB,
+                    TradeHwndB = entry.Profile.TradeHwndB
+                };
+            }
+        }
+
         _portfolioCoordinator.RecoverSlotsFromPersisted(recovered);
+        foreach (var recoveredSlot in recovered)
+        {
+            if (_hwndProfileByPairId.TryGetValue(recoveredSlot.PairId, out var entry))
+            {
+                _portfolioCoordinator.GetSlotByPairId(recoveredSlot.PairId)?.SetHwndProfile(entry.Index, entry.Profile);
+            }
+        }
         RegisterRecoveredSlotMappings(recovered, slots.Select(s => s.RecordA).ToList(), slots.Select(s => s.RecordB).ToList(), tradeMapNameA, tradeMapNameB);
         SetActiveAutoCycleFromRecoveredSlots(recovered);
         _autoSlot = Math.Max(_autoSlot, recovered.Max(s => s.SlotId) + 1);

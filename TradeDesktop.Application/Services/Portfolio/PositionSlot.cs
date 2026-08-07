@@ -25,6 +25,11 @@ public sealed class PositionSlot
     public PositionSlotStatus Status { get; internal set; }
     public ulong? TicketA { get; private set; }
     public ulong? TicketB { get; private set; }
+    public int? HwndProfileIndex { get; private set; }
+    public string ChartHwndA { get; private set; } = string.Empty;
+    public string ChartHwndB { get; private set; } = string.Empty;
+    public string TradeHwndA { get; private set; } = string.Empty;
+    public string TradeHwndB { get; private set; } = string.Empty;
     public DateTime? OpenedAtUtc { get; private set; }
     public DateTime? OpenConfirmedAtUtc { get; private set; }
     public DateTime? ClosedAtUtc { get; private set; }
@@ -153,6 +158,16 @@ public sealed class PositionSlot
 
     public void SetSelectedPostCloseLockSeconds(int seconds)
         => SelectedPostCloseLockSeconds = Math.Max(0, seconds);
+
+    public void SetHwndProfile(int? profileIndex, ManualHwndColumnConfig profile)
+    {
+        HwndProfileIndex = profileIndex;
+        var normalized = (profile ?? ManualHwndColumnConfig.Empty).Normalize();
+        ChartHwndA = normalized.ChartHwndA;
+        ChartHwndB = normalized.ChartHwndB;
+        TradeHwndA = normalized.TradeHwndA;
+        TradeHwndB = normalized.TradeHwndB;
+    }
 
     public void UpdateProfit(ulong ticket, double profit)
     {

@@ -34,6 +34,11 @@ public static class SlotPersistence
                 TicketB = s.TicketB!.Value,
                 OpenConfirmedAtUtc = s.OpenConfirmedAtUtc!.Value,
                 HoldingSeconds = s.HoldingSeconds,
+                HwndProfileIndex = s.HwndProfileIndex,
+                ChartHwndA = s.ChartHwndA,
+                TradeHwndA = s.TradeHwndA,
+                ChartHwndB = s.ChartHwndB,
+                TradeHwndB = s.TradeHwndB,
             })
             .ToList();
 
@@ -63,7 +68,12 @@ public static class SlotPersistence
                     TicketA: d.TicketA,
                     TicketB: d.TicketB,
                     OpenConfirmedAtUtc: d.OpenConfirmedAtUtc,
-                    HoldingSeconds: d.HoldingSeconds))
+                    HoldingSeconds: d.HoldingSeconds,
+                    HwndProfileIndex: d.HwndProfileIndex,
+                    ChartHwndA: d.ChartHwndA,
+                    TradeHwndA: d.TradeHwndA,
+                    ChartHwndB: d.ChartHwndB,
+                    TradeHwndB: d.TradeHwndB))
                 .Where(r => r.Side != TradingPositionSide.None && r.OpenMode != TradingOpenMode.None)
                 .ToList();
         }
@@ -99,4 +109,19 @@ internal sealed class SlotPersistenceDto
 
     [JsonPropertyName("holdingSeconds")]
     public int HoldingSeconds { get; set; }
+
+    [JsonPropertyName("hwndProfileIndex")]
+    public int? HwndProfileIndex { get; set; }
+
+    [JsonPropertyName("chartHwndA")]
+    public string ChartHwndA { get; set; } = string.Empty;
+
+    [JsonPropertyName("tradeHwndA")]
+    public string TradeHwndA { get; set; } = string.Empty;
+
+    [JsonPropertyName("chartHwndB")]
+    public string ChartHwndB { get; set; } = string.Empty;
+
+    [JsonPropertyName("tradeHwndB")]
+    public string TradeHwndB { get; set; } = string.Empty;
 }
