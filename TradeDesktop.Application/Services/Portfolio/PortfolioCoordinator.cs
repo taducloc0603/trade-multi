@@ -250,9 +250,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                     uiNotices.Add(new PortfolioUiNotice(
                         "MIN_PROFIT_WAITING",
                         slot.SlotId,
-                        $"[CHẶN CLOSE][{closeMode}] Slot {slot.SlotId} | {GapWindowDisplay(closeTrigger)} | " +
-                        $"abs(A)={absoluteAMovePts?.ToString("0.##", CultureInfo.InvariantCulture) ?? "N/A"}pt < " +
-                        $"min_profit_to_close={_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)}pt"));
+                        BuildMinProfitUiNotice(
+                            slot,
+                            closeTrigger,
+                            absoluteAMovePts,
+                            _state.MinProfitToClose,
+                            ageSeconds,
+                            maxLifeTimeSec)));
                     _lastMinProfitStatusBySlot[slot.SlotId] = "BLOCK";
                 }
                 continue;
@@ -811,6 +815,32 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             ? string.Join("|", gaps.Select(value => value.ToString(CultureInfo.InvariantCulture)))
             : "unavailable";
         return $"{gapName}=({values})";
+    }
+
+    private static string BuildMinProfitUiNotice(
+        PositionSlot slot,
+        GapSignalTriggerResult trigger,
+        double? absoluteAMovePts,
+        double minProfitToClose,
+        double ageSeconds,
+        int maxLifeTimeSeconds)
+    {
+        if (trigger.CloseReason != CloseSignalReason.Tp)
+        {
+            return $"[CHẶN CLOSE][{CloseModeLabel(trigger)}] Slot {slot.SlotId} | {GapWindowDisplay(trigger)} | " +
+                   $"abs(A)={absoluteAMovePts?.ToString("0.##", CultureInfo.InvariantCulture) ?? "N/A"}pt < " +
+                   $"min_profit_to_close={minProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)}pt";
+        }
+
+        var tpCycle = trigger.CloseTpProfits is { Count: > 0 }
+            ? string.Join(", ", trigger.CloseTpProfits.Select(
+                value => value.ToString("0.00", CultureInfo.InvariantCulture)))
+            : "N/A";
+        return $"[CHẶN CLOSE][TP][MIN PROFIT] Slot {slot.SlotId} | " +
+               $"abs(A)={absoluteAMovePts?.ToString("0.00", CultureInfo.InvariantCulture) ?? "N/A"}pt < " +
+               $"MinProfit={minProfitToClose.ToString("0.00", CultureInfo.InvariantCulture)}pt | " +
+               $"Tuổi lệnh={ageSeconds.ToString("0.##", CultureInfo.InvariantCulture)}s/{maxLifeTimeSeconds}s | " +
+               $"Chu kỳ TP=[{tpCycle}]pt";
     }
 
     private static string CloseGapSummary(GapSignalTriggerResult trigger)

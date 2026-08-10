@@ -422,6 +422,34 @@ public sealed class MaxLifeTimeRuleTests
     }
 
     [Fact]
+    public void MinProfit_BlockedTp_EmitsDetailedTpCycleUiNotice()
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory);
+        coordinator.UpdateMaxLifeTimeConfig(300);
+        coordinator.UpdateMinProfitToCloseConfig(5);
+        var now = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-125));
+        coordinator.UpdateProfit(100, -4.2);
+        coordinator.UpdateProfit(200, 16.7);
+        factory.Created[0].NextResult = CloseTrigger(closeReason: CloseSignalReason.Tp) with
+        {
+            CloseTpProfits = new[] { 10.2, 11.4, 12.5 }
+        };
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        var notice = Assert.Single(result.UiNotices!);
+        Assert.Equal("MIN_PROFIT_WAITING", notice.Code);
+        Assert.Equal(
+            "[CHẶN CLOSE][TP][MIN PROFIT] Slot 1 | abs(A)=4.20pt < MinProfit=5.00pt | " +
+            "Tuổi lệnh=125s/300s | Chu kỳ TP=[10.20, 11.40, 12.50]pt",
+            notice.Message);
+    }
+
+    [Fact]
     public void MinProfit_AtMaxLifeTime_BypassesThreshold()
     {
         var factory = new ScriptedFactory();
