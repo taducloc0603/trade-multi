@@ -332,6 +332,8 @@ public sealed class DashboardViewModel : ObservableObject
     private bool _isOpenGapBuyEnabled = true;
     private bool _isOpenGapSellEnabled = true;
     private string _lastSignalText = "-";
+    private string _lastSignalSummary = string.Empty;
+    private string? _lastSignalPairId;
     private bool _isLoading = true;
     private string _loadingMessage = "Đang chờ dữ liệu shared memory...";
     private string _machineHostName = string.Empty;
@@ -547,6 +549,20 @@ public sealed class DashboardViewModel : ObservableObject
         private set => SetProperty(ref _lastSignalText, value);
     }
 
+    private void SetLastSignalStatus(string status, string? summary = null, string? pairId = null)
+    {
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            _lastSignalSummary = summary;
+            _lastSignalPairId = null;
+        }
+        if (!string.IsNullOrWhiteSpace(pairId)) _lastSignalPairId = pairId;
+
+        LastSignalText = string.IsNullOrWhiteSpace(_lastSignalSummary)
+            ? $"— [{status}]"
+            : $"{_lastSignalSummary} — [{status}]";
+    }
+
     private const int MaxSignalLogItems = 500;
     public ObservableCollection<string> SignalLogItems { get; } = new CappedObservableCollection<string>(MaxSignalLogItems);
     public ObservableCollection<TradePairRealtimeProfitRowViewModel> TradeRealtimeProfitRows { get; } = [];
@@ -635,6 +651,9 @@ public sealed class DashboardViewModel : ObservableObject
     public string TradeOperationsStatusText => AllowTradeOperations ? "Cho phép lệnh" : "Đã chặn lệnh";
     public string CurrentPositionTextA => ResolveCurrentPositionText(isExchangeA: true);
     public string CurrentPositionTextB => ResolveCurrentPositionText(isExchangeA: false);
+    public string ManagedPairsText => ResolveManagedPairsText();
+    public string CloseMonitoringText => ResolveCloseMonitoringText();
+    public string PositionSyncText => ResolvePositionSyncText();
     public string CurrentPhaseText => ResolveCurrentPhaseText();
     public bool IsOpenGapBuyEnabled
     {
@@ -967,6 +986,8 @@ public sealed class DashboardViewModel : ObservableObject
         HistoryRealtimeProfitSummary = "0.00 | 0.00 $";
         HistoryTab.LeftPanel.SetEmpty();
         HistoryTab.RightPanel.SetEmpty();
+        _lastSignalSummary = string.Empty;
+        _lastSignalPairId = null;
         LastSignalText = "-";
         SignalLogItems.Clear();
 
@@ -1003,6 +1024,8 @@ public sealed class DashboardViewModel : ObservableObject
 
         IsTradingLogicEnabled = false;
         ResetTradingLogicState();
+        _lastSignalSummary = string.Empty;
+        _lastSignalPairId = null;
         LastSignalText = "-";
         _tradeSessionFileLogger.StopSession(DateTimeOffset.Now);
         return Task.CompletedTask;
@@ -1503,6 +1526,7 @@ public sealed class DashboardViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            SetLastSignalStatus("FAILED");
             SafeVmLog($"[VM][ERROR] Auto trade error: {ex}");
             if (trigger.Action == GapSignalAction.Close)
             {
@@ -1537,6 +1561,7 @@ public sealed class DashboardViewModel : ObservableObject
     {
         if (ShouldSkipTradeOp("auto-open"))
         {
+            SetLastSignalStatus("REJECTED: TRADE OPS DISABLED");
             return Task.CompletedTask;
         }
 
@@ -1551,15 +1576,18 @@ public sealed class DashboardViewModel : ObservableObject
     {
         if (ShouldSkipTradeOp("auto-close"))
         {
+            SetLastSignalStatus("REJECTED: TRADE OPS DISABLED");
             return;
         }
 
+        SetLastSignalStatus("DISPATCHING", pairId: targetSlot.PairId);
         try
         {
             await AutoCloseOrderAsync(trigger, targetSlot);
         }
         catch (Exception ex)
         {
+            SetLastSignalStatus("FAILED");
             SafeVmLog($"[VM][ERROR] Auto close error: {ex}");
             _tradingFlowEngine.AbortPendingCloseExecution();
             LogFlowTransitionIfChanged("close-aborted-by-exception");
@@ -1608,6 +1636,7 @@ public sealed class DashboardViewModel : ObservableObject
         var slot = _autoSlot;
         var appOpenRequestRawMs = Environment.TickCount64;
         var pairId = BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: true);
+        SetLastSignalStatus("DISPATCHING", pairId: pairId);
 
         try
         {
@@ -1701,6 +1730,7 @@ public sealed class DashboardViewModel : ObservableObject
 
             if (!openResult.Success && openResult.Legs.All(x => !x.Success))
             {
+                SetLastSignalStatus("FAILED");
                 _lastAutoOpenClickAtLocal = null;
                 if (_pendingOpenPairById.TryGetValue(pairId, out var state))
                 {
@@ -1710,6 +1740,7 @@ public sealed class DashboardViewModel : ObservableObject
             }
             if (openResult.IsDispatchBlocked)
             {
+                SetLastSignalStatus("REJECTED: TRADE GATE");
                 RemovePendingOpenRequests(appOpenRequestRawMs);
                 if (_pendingOpenPairById.TryGetValue(pairId, out var blockedState))
                 {
@@ -1791,6 +1822,7 @@ public sealed class DashboardViewModel : ObservableObject
         var slot = _autoSlot;
         var appOpenRequestRawMs = Environment.TickCount64;
         var pairId = BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: true);
+        SetLastSignalStatus("DISPATCHING", pairId: pairId);
 
         try
         {
@@ -1884,6 +1916,7 @@ public sealed class DashboardViewModel : ObservableObject
 
             if (!openResult.Success && openResult.Legs.All(x => !x.Success))
             {
+                SetLastSignalStatus("FAILED");
                 _lastAutoOpenClickAtLocal = null;
                 if (_pendingOpenPairById.TryGetValue(pairId, out var state))
                 {
@@ -1893,6 +1926,7 @@ public sealed class DashboardViewModel : ObservableObject
             }
             if (openResult.IsDispatchBlocked)
             {
+                SetLastSignalStatus("REJECTED: TRADE GATE");
                 RemovePendingOpenRequests(appOpenRequestRawMs);
                 if (_pendingOpenPairById.TryGetValue(pairId, out var blockedState))
                 {
@@ -2054,6 +2088,7 @@ public sealed class DashboardViewModel : ObservableObject
 
             if (closeResult.IsDispatchBlocked)
             {
+                SetLastSignalStatus("REJECTED: TRADE GATE");
                 RemovePendingCloseRequests(appCloseRequestRawMs);
                 if (targetSlot is not null)
                 {
@@ -2083,6 +2118,10 @@ public sealed class DashboardViewModel : ObservableObject
             var closeSuccessB = !hadCloseCandidateB
                 || (successByExchange.TryGetValue("B", out var successB) && successB);
             var hasCloseSuccessBoth = hadCloseCandidateBoth && closeSuccessA && closeSuccessB;
+            if (hadCloseCandidateBoth && !closeSuccessA && !closeSuccessB)
+            {
+                SetLastSignalStatus("FAILED");
+            }
 
             var reconcileTradeLeft = ReadTradesWithMmfLog(TradeTab.LeftPanel.TargetMapName);
             var reconcileTradeRight = ReadTradesWithMmfLog(TradeTab.RightPanel.TargetMapName);
@@ -5839,6 +5878,10 @@ public sealed class DashboardViewModel : ObservableObject
         if (state.OpenConfirmedA && state.OpenConfirmedB)
         {
             state.IsResolved = true;
+            if (string.Equals(_lastSignalPairId, pendingRequest.PairId, StringComparison.Ordinal))
+            {
+                SetLastSignalStatus("CONFIRMED");
+            }
             SafeVmLog($"[CYCLE][INFO] Pending open resolved: pairId={pendingRequest.PairId} ticketA={state.OpenedTicketA} ticketB={state.OpenedTicketB}");
 
             // Phase 1: notify coordinator so slot transitions PendingOpen → Live and tickets are stored.
@@ -5962,6 +6005,10 @@ public sealed class DashboardViewModel : ObservableObject
                 if (closeCycle.HasA && closeCycle.HasB && !closeCycle.WaitingStarted)
                 {
                     closeCycle.WaitingStarted = true;
+                    if (string.Equals(_lastSignalPairId, pendingRequest.PairId, StringComparison.Ordinal))
+                    {
+                        SetLastSignalStatus("CONFIRMED");
+                    }
                     var closeCompletedAtUtc = DateTime.UtcNow;
                     var closeCompletedAtLocal = closeCompletedAtUtc.ToLocalTime();
                     _tradingFlowEngine.BeginWaitAfterClose(
@@ -6711,8 +6758,11 @@ public sealed class DashboardViewModel : ObservableObject
             var guardResult = SignalEntryGuard.Check(
                 trigger, metrics, guardConfig, _priceHistory, holdMs,
                 _runtimeConfigState.CurrentCloseHoldConfirmMs);
+            var signalSummary = BuildAutoSignalSummary(trigger);
+            SetLastSignalStatus("DETECTED", signalSummary);
             if (!guardResult.CanTrade)
             {
+                SetLastSignalStatus("REJECTED: GUARD");
                 SafeVmLog(
                     "[GUARD][WARN] Auto trade rejected: " +
                     $"trigger={trigger.TriggerType} side={trigger.PrimarySide} action={trigger.Action} " +
@@ -6738,12 +6788,10 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
-            // Keep latest signal summary, but do not append legacy multiline signal format into SignalLogItems.
-            LastSignalText = BuildAutoSignalSummary(trigger);
-
             if (trigger.Action == GapSignalAction.Open
                 && !TryAllowAutoOpenByToggle(trigger, out var blockedReason))
             {
+                SetLastSignalStatus("REJECTED: TOGGLE");
                 // Open trigger already moved flow to WaitingClose inside engine.
                 // Rollback to WaitingOpen when user toggle disables this open side.
                 _tradingFlowEngine.AbortPendingOpenExecution();
@@ -6763,6 +6811,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (!canExecute)
                 {
                     var current = _tradingFlowEngine.CurrentOpenQualifyingCount;
+                    SetLastSignalStatus($"WAITING QUALIFY {current}/{requiredN}");
                     SignalLogItems.Insert(0,
                         $"[{DateTime.Now:HH:mm:ss.fff}] [SKIP OPEN] qualifying {current}/{requiredN} - side={trigger.PrimarySide}");
 
@@ -6783,6 +6832,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (!canExecute)
                 {
                     var current = _tradingFlowEngine.CurrentCloseQualifyingCount;
+                    SetLastSignalStatus($"WAITING QUALIFY {current}/{requiredN}");
                     SignalLogItems.Insert(0,
                         $"[{DateTime.Now:HH:mm:ss.fff}] [SKIP CLOSE] qualifying {current}/{requiredN} - mode={_tradingFlowEngine.CurrentOpenMode}");
 
@@ -6798,6 +6848,7 @@ public sealed class DashboardViewModel : ObservableObject
             }
 
             // Auto-execute trade from signal trigger
+            SetLastSignalStatus("DISPATCHING");
             if (trigger.Action == GapSignalAction.Open)
             {
                 _ = DispatchOpenTriggerAsync(trigger);
@@ -7009,34 +7060,79 @@ public sealed class DashboardViewModel : ObservableObject
             : _latestTradeRightResult?.Records;
         var buy = records?.Count(r => r.TradeType == 0) ?? 0;
         var sell = records?.Count(r => r.TradeType == 1) ?? 0;
-        var total = buy + sell;
+        return $"Buy {buy} | Sell {sell} | Total {buy + sell}";
+    }
+
+    private string ResolveManagedPairsText()
+    {
+        var active = _portfolioCoordinator.LiveSlots
+            .Concat(_portfolioCoordinator.PendingOpenSlots)
+            .Concat(_portfolioCoordinator.PendingCloseSlots)
+            .GroupBy(slot => slot.PairId, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToList();
+        var gapBuy = active.Count(slot => slot.Side == TradingPositionSide.Buy);
+        var gapSell = active.Count(slot => slot.Side == TradingPositionSide.Sell);
         var maxBuy = _runtimeConfigState.CurrentMaxBuyOpens;
         var maxSell = _runtimeConfigState.CurrentMaxSellOpens;
         var maxTotal = _runtimeConfigState.CurrentMaxTotalOpens;
+        var full = new List<string>(3);
+        if (active.Count >= maxTotal) full.Add("Total");
+        if (gapBuy >= maxBuy) full.Add("GapBuy");
+        if (gapSell >= maxSell) full.Add("GapSell");
+        var suffix = full.Count > 0 ? $" — FULL: {string.Join(", ", full)}" : string.Empty;
+        return $"GapBuy {gapBuy}/{maxBuy} | GapSell {gapSell}/{maxSell} | Total {active.Count}/{maxTotal}{suffix}";
+    }
 
-        var text = $"Buy {buy}/{maxBuy} | Sell {sell}/{maxSell} | Total {total}/{maxTotal}";
+    private string ResolveCloseMonitoringText()
+    {
+        var positions = _portfolioCoordinator.LiveSlots
+            .Concat(_portfolioCoordinator.PendingCloseSlots)
+            .GroupBy(slot => slot.PairId, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToList();
+        if (positions.Count == 0)
+        {
+            return "NONE";
+        }
 
-        // Quota Rule A vẫn áp dụng global (coordinator-slot based). Phần FULL ở đây
-        // là UI hint dựa trên MMF physical count theo sàn, không can thiệp block logic.
-        if (total >= maxTotal)
+        var parts = new List<string>(3);
+        var gapBuy = positions.Count(slot => slot.Side == TradingPositionSide.Buy);
+        var gapSell = positions.Count(slot => slot.Side == TradingPositionSide.Sell);
+        if (gapBuy > 0) parts.Add($"{gapBuy} GapBuy → Close by GapSell");
+        if (gapSell > 0) parts.Add($"{gapSell} GapSell → Close by GapBuy");
+        var pendingClose = _portfolioCoordinator.PendingCloseSlots.Count;
+        if (pendingClose > 0) parts.Add($"Pending Close {pendingClose}");
+        return string.Join(" | ", parts);
+    }
+
+    private string ResolvePositionSyncText()
+    {
+        if (_latestTradeLeftResult is not { IsMapAvailable: true, IsParseSuccess: true }
+            || _latestTradeRightResult is not { IsMapAvailable: true, IsParseSuccess: true })
         {
-            text += $" — FULL (Total {total}/{maxTotal})";
+            return "UNAVAILABLE";
         }
-        else if (buy >= maxBuy)
-        {
-            text += $" — FULL (Buy {buy}/{maxBuy})";
-        }
-        else if (sell >= maxSell)
-        {
-            text += $" — FULL (Sell {sell}/{maxSell})";
-        }
-        return text;
+
+        var physicalA = _latestTradeLeftResult.Records.Count;
+        var physicalB = _latestTradeRightResult.Records.Count;
+        var managed = _portfolioCoordinator.LiveSlots
+            .Concat(_portfolioCoordinator.PendingCloseSlots)
+            .Select(slot => slot.PairId)
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+        return physicalA == managed && physicalB == managed
+            ? $"OK — Pairs {managed} | A {physicalA} | B {physicalB}"
+            : $"WARNING — Pairs {managed} | A {physicalA} | B {physicalB}";
     }
 
     private void RaiseCurrentPositionTextChanged()
     {
         OnPropertyChanged(nameof(CurrentPositionTextA));
         OnPropertyChanged(nameof(CurrentPositionTextB));
+        OnPropertyChanged(nameof(ManagedPairsText));
+        OnPropertyChanged(nameof(CloseMonitoringText));
+        OnPropertyChanged(nameof(PositionSyncText));
     }
 
     private string ResolveCurrentPhaseText()
@@ -7089,12 +7185,12 @@ public sealed class DashboardViewModel : ObservableObject
             return "QUOTA FULL";
         }
 
-        // Priority 5: legacy engine state (fallback for single-slot semantics).
+        // Priority 6: legacy engine state (fallback for single-slot semantics).
         var phase = _tradingFlowEngine.CurrentPhase;
         return phase switch
         {
-            TradingFlowPhase.WaitingCloseFromGapBuy => "WAITING CLOSE (GAP_SELL)",
-            TradingFlowPhase.WaitingCloseFromGapSell => "WAITING CLOSE (GAP_BUY)",
+            TradingFlowPhase.WaitingCloseFromGapBuy => "WAITING CLOSE BY GAP_SELL",
+            TradingFlowPhase.WaitingCloseFromGapSell => "WAITING CLOSE BY GAP_BUY",
             _ => "READY"
         };
     }

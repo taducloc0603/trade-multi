@@ -230,25 +230,29 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             var minProfitGuardActive = _state.MinProfitToClose > 0d
                 && (maxLifeTimeSec <= 0 || ageSeconds < maxLifeTimeSec);
             if (minProfitGuardActive &&
-                (!slot.HasCompleteProfitSnapshot || slot.LastProfitSnapshot < _state.MinProfitToClose))
+                (!slot.LastProfitA.HasValue || Math.Abs(slot.LastProfitA.Value) < _state.MinProfitToClose))
             {
                 if (!_lastMinProfitStatusBySlot.TryGetValue(slot.SlotId, out var lastStatus) || lastStatus != "BLOCK")
                 {
                     var closeMode = CloseModeLabel(closeTrigger);
                     var gapSummary = CloseGapSummary(closeTrigger);
+                    var absoluteAMovePts = slot.LastProfitA.HasValue ? Math.Abs(slot.LastProfitA.Value) : (double?)null;
                     _logger?.Log(
                         $"[MIN_PROFIT][WAITING][{closeMode}] slot={slot.SlotId} pairId={slot.PairId} " +
-                        $"description=\"Đã đạt điều kiện đóng {closeMode} nhưng lợi nhuận chưa đủ\" " +
+                        $"description=\"Đã đạt điều kiện đóng {closeMode} nhưng chân A chưa dịch chuyển đủ từ Open Price\" " +
                         $"{gapSummary} " +
-                        $"profit={(slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot?.ToString("0.##", CultureInfo.InvariantCulture) : "unavailable")} " +
-                        $"required={_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)} " +
+                        $"profitA={slot.LastProfitA?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unavailable"} " +
+                        $"absoluteAMovePts={absoluteAMovePts?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unavailable"} " +
+                        $"requiredAMovePts={_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)} " +
+                        $"profitB={slot.LastProfitB?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unavailable"} " +
+                        $"combinedProfit={slot.LastProfitSnapshot?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unavailable"} " +
                         $"ageSeconds={ageSeconds:0.##} maxLifeTimeSeconds={maxLifeTimeSec}");
                     uiNotices.Add(new PortfolioUiNotice(
                         "MIN_PROFIT_WAITING",
                         slot.SlotId,
-                        $"[ĐANG CHỜ PROFIT][{closeMode}] Slot {slot.SlotId}: {GapDisplay(closeTrigger)} đã đạt điều kiện Close, " +
-                        $"profit={(slot.LastProfitSnapshot?.ToString("0.##", CultureInfo.InvariantCulture) ?? "chưa đủ dữ liệu")}/" +
-                        $"{_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)} chưa đủ."));
+                        $"[CHẶN CLOSE][{closeMode}] Slot {slot.SlotId} | {GapWindowDisplay(closeTrigger)} | " +
+                        $"abs(A)={absoluteAMovePts?.ToString("0.##", CultureInfo.InvariantCulture) ?? "N/A"}pt < " +
+                        $"min_profit_to_close={_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)}pt"));
                     _lastMinProfitStatusBySlot[slot.SlotId] = "BLOCK";
                 }
                 continue;
@@ -264,10 +268,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                         var closeMode = CloseModeLabel(closeTrigger);
                         _logger?.Log(
                             $"[MIN_PROFIT][EXPIRED][{closeMode}] slot={slot.SlotId} pairId={slot.PairId} " +
-                            $"description=\"Slot đã đạt Max Lifetime; Min Profit không còn chặn\" " +
+                            $"description=\"Slot đã đạt Max Lifetime; điều kiện dịch chuyển tuyệt đối chân A không còn chặn\" " +
                             $"{CloseGapSummary(closeTrigger)} " +
-                            $"profit={(slot.LastProfitSnapshot?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unavailable")} " +
-                            $"required={_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)} " +
+                            $"profitA={slot.LastProfitA?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unavailable"} " +
+                            $"absoluteAMovePts={(slot.LastProfitA.HasValue ? Math.Abs(slot.LastProfitA.Value).ToString("0.##", CultureInfo.InvariantCulture) : "unavailable")} " +
+                            $"requiredAMovePts={_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)} " +
+                            $"profitB={slot.LastProfitB?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unavailable"} " +
+                            $"combinedProfit={slot.LastProfitSnapshot?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unavailable"} " +
                             $"ageSeconds={ageSeconds:0.##} maxLifeTimeSeconds={maxLifeTimeSec}");
                         uiNotices.Add(new PortfolioUiNotice(
                             "MIN_PROFIT_EXPIRED",
@@ -793,6 +800,17 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var gapName = closesByGapSell ? "GapSell" : "GapBuy";
         var gapValue = closesByGapSell ? trigger.LastSellGap : trigger.LastBuyGap;
         return $"{gapName}={gapValue?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"}";
+    }
+
+    private static string GapWindowDisplay(GapSignalTriggerResult trigger)
+    {
+        var closesByGapSell = trigger.TriggerType == GapSignalTriggerType.CloseByGapSell;
+        var gapName = closesByGapSell ? "GapSell" : "GapBuy";
+        var gaps = closesByGapSell ? trigger.SellGaps : trigger.BuyGaps;
+        var values = gaps.Count > 0
+            ? string.Join("|", gaps.Select(value => value.ToString(CultureInfo.InvariantCulture)))
+            : "unavailable";
+        return $"{gapName}=({values})";
     }
 
     private static string CloseGapSummary(GapSignalTriggerResult trigger)

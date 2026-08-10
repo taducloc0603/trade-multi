@@ -338,6 +338,12 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="4" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="4" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="4" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="4" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <TextBlock FontWeight="SemiBold" Foreground="#344054">
@@ -346,23 +352,38 @@
                             </TextBlock>
 
                             <StackPanel Grid.Row="2" Orientation="Horizontal">
-                                <TextBlock Text="Last Signal: " FontWeight="SemiBold" Foreground="#344054" />
+                                <TextBlock Text="Last Detected Signal: " FontWeight="SemiBold" Foreground="#344054" />
                                 <TextBlock Text="{Binding LastSignalText, Mode=OneWay}" Foreground="#101828" TextWrapping="Wrap" />
                             </StackPanel>
 
                             <StackPanel Grid.Row="4" Orientation="Horizontal">
-                                <TextBlock Text="Current Position A: " FontWeight="SemiBold" Foreground="#344054" />
+                                <TextBlock Text="Physical A: " FontWeight="SemiBold" Foreground="#344054" />
                                 <TextBlock Text="{Binding CurrentPositionTextA, Mode=OneWay}" Foreground="#101828" />
                             </StackPanel>
 
                             <StackPanel Grid.Row="6" Orientation="Horizontal">
-                                <TextBlock Text="Current Position B: " FontWeight="SemiBold" Foreground="#344054" />
+                                <TextBlock Text="Physical B: " FontWeight="SemiBold" Foreground="#344054" />
                                 <TextBlock Text="{Binding CurrentPositionTextB, Mode=OneWay}" Foreground="#101828" />
                             </StackPanel>
 
                             <StackPanel Grid.Row="8" Orientation="Horizontal">
-                                <TextBlock Text="Current Phase: " FontWeight="SemiBold" Foreground="#344054" />
+                                <TextBlock Text="Managed Pairs: " FontWeight="SemiBold" Foreground="#344054" />
+                                <TextBlock Text="{Binding ManagedPairsText, Mode=OneWay}" Foreground="#101828" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="10" Orientation="Horizontal">
+                                <TextBlock Text="Close Monitoring: " FontWeight="SemiBold" Foreground="#344054" />
+                                <TextBlock Text="{Binding CloseMonitoringText, Mode=OneWay}" Foreground="#101828" TextWrapping="Wrap" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="12" Orientation="Horizontal">
+                                <TextBlock Text="System State: " FontWeight="SemiBold" Foreground="#344054" />
                                 <TextBlock Text="{Binding CurrentPhaseText, Mode=OneWay}" Foreground="#101828" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="14" Orientation="Horizontal">
+                                <TextBlock Text="Position Sync: " FontWeight="SemiBold" Foreground="#344054" />
+                                <TextBlock Text="{Binding PositionSyncText, Mode=OneWay}" Foreground="#101828" />
                             </StackPanel>
                         </Grid>
                     </Border>

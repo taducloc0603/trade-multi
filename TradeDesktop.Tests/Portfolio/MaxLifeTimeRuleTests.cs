@@ -53,11 +53,13 @@ public sealed class MaxLifeTimeRuleTests
         CloseGapMode closeGapMode = CloseGapMode.Normal,
         int? confirmGapPts = null,
         int? closeGapPts = null,
-        int? holdMs = null)
+        int? holdMs = null,
+        CloseSignalReason closeReason = CloseSignalReason.Gap)
         => new(true, GapSignalAction.Close, GapSignalTriggerType.CloseByGapSell, GapSignalSide.Buy,
-            Array.Empty<int>(), [7], null, 7,
+            Array.Empty<int>(), [15, 12, 7], null, 7,
             new DateTime(2026, 5, 21, 11, 0, 0, DateTimeKind.Utc),
             null, null, null, null, null, null, null, null, 1,
+            CloseReason: closeReason,
             CloseGapMode: closeGapMode,
             EffectiveCloseConfirmGapPts: confirmGapPts,
             EffectiveCloseGapPts: closeGapPts,
@@ -294,13 +296,129 @@ public sealed class MaxLifeTimeRuleTests
 
         coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
         coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-120));
-        coordinator.UpdateProfit(100, 1.25);
-        coordinator.UpdateProfit(200, 1.25);
+        coordinator.UpdateProfit(100, 2.5);
+        coordinator.UpdateProfit(200, -100);
         factory.Created[0].NextResult = CloseTrigger();
 
         var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
 
         Assert.Equal("p1", result.CloseTargetSlot!.PairId);
+    }
+
+    [Theory]
+    [InlineData(2.49)]
+    [InlineData(-2.49)]
+    public void MinProfit_AbsoluteAMoveBelowThreshold_BlocksClose(double profitA)
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory);
+        coordinator.UpdateMaxLifeTimeConfig(300);
+        coordinator.UpdateMinProfitToCloseConfig(2.5);
+        var now = new DateTime(2026, 5, 21, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-120));
+        coordinator.UpdateProfit(100, profitA);
+        coordinator.UpdateProfit(200, 100);
+        factory.Created[0].NextResult = CloseTrigger();
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        Assert.Null(result.CloseTargetSlot);
+    }
+
+    [Theory]
+    [InlineData(2.5)]
+    [InlineData(-2.5)]
+    [InlineData(3.0)]
+    [InlineData(-3.0)]
+    public void MinProfit_AbsoluteAMoveAtOrAboveThreshold_AllowsGapClose(double profitA)
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory);
+        coordinator.UpdateMaxLifeTimeConfig(300);
+        coordinator.UpdateMinProfitToCloseConfig(2.5);
+        var now = new DateTime(2026, 5, 21, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-120));
+        coordinator.UpdateProfit(100, profitA);
+        coordinator.UpdateProfit(200, -100);
+        factory.Created[0].NextResult = CloseTrigger();
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        Assert.Equal("p1", result.CloseTargetSlot!.PairId);
+    }
+
+    [Fact]
+    public void MinProfit_AbsoluteAMoveAtThreshold_AllowsTpClose()
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory);
+        coordinator.UpdateMaxLifeTimeConfig(300);
+        coordinator.UpdateMinProfitToCloseConfig(200);
+        var now = new DateTime(2026, 5, 21, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-120));
+        coordinator.UpdateProfit(100, -200);
+        coordinator.UpdateProfit(200, 202);
+        factory.Created[0].NextResult = CloseTrigger(closeReason: CloseSignalReason.Tp);
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        Assert.Equal(CloseSignalReason.Tp, result.CloseTrigger!.CloseReason);
+    }
+
+    [Fact]
+    public void MinProfit_MissingAProfit_BlocksEvenWhenBMoveIsLarge()
+    {
+        var factory = new ScriptedFactory();
+        var coordinator = BuildCoordinator(factory);
+        coordinator.UpdateMaxLifeTimeConfig(300);
+        coordinator.UpdateMinProfitToCloseConfig(200);
+        var now = new DateTime(2026, 5, 21, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-120));
+        coordinator.UpdateProfit(200, 500);
+        factory.Created[0].NextResult = CloseTrigger();
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        Assert.Null(result.CloseTargetSlot);
+    }
+
+    [Fact]
+    public void MinProfit_WaitingAudit_ReportsAbsoluteAMoveAndCombinedProfit()
+    {
+        var factory = new ScriptedFactory();
+        var logger = new CaptureLogger();
+        var coordinator = BuildCoordinator(factory, logger);
+        coordinator.UpdateMaxLifeTimeConfig(300);
+        coordinator.UpdateMinProfitToCloseConfig(200);
+        var now = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-120));
+        coordinator.UpdateProfit(100, -150);
+        coordinator.UpdateProfit(200, 400);
+        factory.Created[0].NextResult = CloseTrigger();
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        Assert.Null(result.CloseTargetSlot);
+        var notice = Assert.Single(result.UiNotices!).Message;
+        Assert.Equal(
+            "[CHẶN CLOSE][NORMAL] Slot 1 | GapSell=(15|12|7) | abs(A)=150pt < min_profit_to_close=200pt",
+            notice);
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("profitA=-150")
+            && message.Contains("absoluteAMovePts=150")
+            && message.Contains("requiredAMovePts=200")
+            && message.Contains("profitB=400")
+            && message.Contains("combinedProfit=250"));
     }
 
     [Fact]
