@@ -582,13 +582,26 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
                 _runtimeConfig.CurrentClosePts,
                 _runtimeConfig.CurrentSosCloseConfirmGapPts,
                 _runtimeConfig.CurrentSosCloseGapPts);
-            var gapError = SosCloseConfigResolver.ValidateLatestGap(
-                signal.TriggerType,
-                latestMetrics.GapBuy,
-                latestMetrics.GapSell,
-                resolvedGap.ConfirmGapPts,
-                resolvedGap.CloseGapPts,
-                _runtimeConfig.CurrentLimitMaxGap);
+            var signalUsesSos = signal.CloseGapMode == CloseGapMode.Sos;
+            if (signalUsesSos != resolvedGap.UsesSos)
+            {
+                return (false, "LATEST_CLOSE_GAP_MODE_CHANGED");
+            }
+
+            var gapError = signalUsesSos
+                ? SosCloseConfigResolver.ValidateLatestSosGap(
+                    signal.TriggerType,
+                    latestMetrics.GapBuy,
+                    latestMetrics.GapSell,
+                    resolvedGap.CloseGapPts,
+                    _runtimeConfig.CurrentLimitMaxGap)
+                : SosCloseConfigResolver.ValidateLatestGap(
+                    signal.TriggerType,
+                    latestMetrics.GapBuy,
+                    latestMetrics.GapSell,
+                    resolvedGap.ConfirmGapPts,
+                    resolvedGap.CloseGapPts,
+                    _runtimeConfig.CurrentLimitMaxGap);
             if (gapError is not null)
             {
                 return (false, gapError);

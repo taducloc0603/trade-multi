@@ -2134,7 +2134,11 @@ public sealed class DashboardViewModel : ObservableObject
                         trigger.CloseReason,
                         trigger.CloseTpProfit,
                         trigger.CloseTpTarget,
-                        trigger.CloseTpProfits));
+                        trigger.CloseTpProfits,
+                        trigger.CloseGapMode,
+                        trigger.EffectiveCloseConfirmGapPts,
+                        trigger.EffectiveCloseGapPts,
+                        trigger.EffectiveCloseHoldMs));
                 }
 
                 if (selectB.TradeType.HasValue
@@ -2160,7 +2164,11 @@ public sealed class DashboardViewModel : ObservableObject
                         trigger.CloseReason,
                         trigger.CloseTpProfit,
                         trigger.CloseTpTarget,
-                        trigger.CloseTpProfits));
+                        trigger.CloseTpProfits,
+                        trigger.CloseGapMode,
+                        trigger.EffectiveCloseConfirmGapPts,
+                        trigger.EffectiveCloseGapPts,
+                        trigger.EffectiveCloseHoldMs));
                 }
 
                 AppendCloseSelectionDiagnostics(selectA, selectB);
@@ -6665,7 +6673,15 @@ public sealed class DashboardViewModel : ObservableObject
                     SosCloseConfirmGapPts: _runtimeConfigState.CurrentSosCloseConfirmGapPts,
                     SosCloseGapPts: _runtimeConfigState.CurrentSosCloseGapPts));
 
-            // Reduce 3-field result to single trigger for legacy guard code path below.
+            if (portfolioResult.UiNotices is { Count: > 0 })
+            {
+                foreach (var notice in portfolioResult.UiNotices)
+                {
+                    SignalLogItems.Insert(0, $"[{DateTime.Now:HH:mm:ss.fff}] {notice.Message}");
+                }
+            }
+
+            // Reduce the snapshot result to a single trigger for the legacy guard code path below.
             // For close trigger, also capture the target slot (Phase 1 cap=1: at most 1 slot).
             var trigger = portfolioResult.OpenTrigger ?? portfolioResult.CloseTrigger;
             var closeTargetSlot = portfolioResult.CloseTargetSlot;
@@ -7162,7 +7178,11 @@ public sealed class DashboardViewModel : ObservableObject
             trigger.CloseReason,
             trigger.CloseTpProfit,
             trigger.CloseTpTarget,
-            trigger.CloseTpProfits);
+            trigger.CloseTpProfits,
+            trigger.CloseGapMode,
+            trigger.EffectiveCloseConfirmGapPts,
+            trigger.EffectiveCloseGapPts,
+            trigger.EffectiveCloseHoldMs);
     }
 
     private static string FormatNumberOrDash(decimal? value, int decimalPlaces = 5)
@@ -7682,6 +7702,7 @@ public sealed class DashboardViewModel : ObservableObject
             trigger.LastBuyGap?.ToString(CultureInfo.InvariantCulture) ?? "-",
             trigger.LastSellGap?.ToString(CultureInfo.InvariantCulture) ?? "-",
             trigger.PointMultiplier.ToString(CultureInfo.InvariantCulture),
+            trigger.CloseGapMode,
             createdAtUtc.Ticks.ToString(CultureInfo.InvariantCulture));
         var signal = new SignalAuthorization(
             SignalId: Guid.NewGuid(),
@@ -7693,7 +7714,8 @@ public sealed class DashboardViewModel : ObservableObject
             SnapshotFingerprint: fingerprint,
             PairId: pairId,
             SlotId: slotId,
-            CloseReason: trigger.CloseReason);
+            CloseReason: trigger.CloseReason,
+            CloseGapMode: trigger.CloseGapMode);
         return new TradeExecutionContext(
             RequestId: Guid.NewGuid(),
             Reason: reason,

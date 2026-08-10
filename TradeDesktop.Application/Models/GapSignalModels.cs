@@ -18,6 +18,12 @@ public enum CloseSignalReason
     Tp = 1
 }
 
+public enum CloseGapMode
+{
+    Normal = 0,
+    Sos = 1
+}
+
 public enum TradingFlowPhase
 {
     WaitingOpen = 0,
@@ -68,7 +74,8 @@ public sealed record GapSignalConfirmationConfig(
     double SosTriggerAOpenDistancePts = 0,
     int SosTriggerAfterSeconds = 0,
     int SosCloseConfirmGapPts = 0,
-    int SosCloseGapPts = 0);
+    int SosCloseGapPts = 0,
+    CloseGapMode CloseGapMode = CloseGapMode.Normal);
 
 public sealed record GapSignalTriggerResult(
     bool Triggered,
@@ -92,7 +99,11 @@ public sealed record GapSignalTriggerResult(
     CloseSignalReason CloseReason = CloseSignalReason.Gap,
     double? CloseTpProfit = null,
     double? CloseTpTarget = null,
-    IReadOnlyList<double>? CloseTpProfits = null);
+    IReadOnlyList<double>? CloseTpProfits = null,
+    CloseGapMode CloseGapMode = CloseGapMode.Normal,
+    int? EffectiveCloseConfirmGapPts = null,
+    int? EffectiveCloseGapPts = null,
+    int? EffectiveCloseHoldMs = null);
 
 public enum GapSignalTriggerType
 {

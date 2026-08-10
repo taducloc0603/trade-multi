@@ -62,7 +62,11 @@ public static class SignalLogFormatter
         CloseSignalReason closeReason = CloseSignalReason.Gap,
         double? tpProfit = null,
         double? tpTarget = null,
-        IReadOnlyList<double>? tpProfits = null)
+        IReadOnlyList<double>? tpProfits = null,
+        CloseGapMode closeGapMode = CloseGapMode.Normal,
+        int? closeConfirmGapPts = null,
+        int? closeGapPts = null,
+        int? closeHoldMs = null)
     {
         var ts = localTime.ToString(TimestampFormat, CultureInfo.InvariantCulture);
         if (closeReason == CloseSignalReason.Tp)
@@ -71,7 +75,11 @@ public static class SignalLogFormatter
         }
 
         var lastGapText = lastGap.HasValue ? lastGap.Value.ToString(CultureInfo.InvariantCulture) : "0";
-        return $"{ts}> [{slot}:{exchangeLabel}]. CLOSE {tradeType.ToUpperInvariant()} {symbol} at {Fp(price)}. Reason: Close by {gapLabel} = {lastGapText} ({Fg(allGaps)})";
+        var mode = closeGapMode == CloseGapMode.Sos ? "SOS" : "NORMAL";
+        var closeConfig = closeConfirmGapPts.HasValue && closeGapPts.HasValue
+            ? $", Mode={mode}, Confirm={closeConfirmGapPts.Value.ToString(CultureInfo.InvariantCulture)}, Close={closeGapPts.Value.ToString(CultureInfo.InvariantCulture)}, Hold={Math.Max(0, closeHoldMs ?? 0)}ms"
+            : string.Empty;
+        return $"{ts}> [{slot}:{exchangeLabel}]. CLOSE {tradeType.ToUpperInvariant()} {symbol} at {Fp(price)}. Reason: Close by {gapLabel} = {lastGapText} ({Fg(allGaps)}){closeConfig}";
     }
 
     /// <summary>

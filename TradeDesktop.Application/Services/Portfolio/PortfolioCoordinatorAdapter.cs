@@ -78,9 +78,11 @@ public sealed class PortfolioCoordinatorAdapter : ITradingFlowEngine
             // Auto-allocate synthetic slot so adapter scalar mapping reflects WaitingClose phase.
             var pairId = $"ADAPTER-{Environment.TickCount64}-{Guid.NewGuid():N}";
             var slot = _coordinator.AllocatePendingOpenSlot(pairId, result.OpenTrigger);
-            // Slot may be null only if rule check fails — but ProcessSnapshot already checked it.
-            // Defensive: if null, just return trigger anyway.
-            _ = slot;
+            // The legacy engine has no separate execution-confirm callback. Its synthetic slot
+            // must therefore become Live immediately, otherwise PortfolioCoordinator never
+            // evaluates it on the close path. Tickets are intentionally not registered here;
+            // the adapter only mirrors the legacy state-machine contract.
+            slot?.MarkOpenConfirmed(0, 0, result.OpenTrigger.TriggeredAtUtc);
 
             _adapterClosedAtUtc = null;
             _adapterClosedAtRuntimeUtc = null;
@@ -115,6 +117,7 @@ public sealed class PortfolioCoordinatorAdapter : ITradingFlowEngine
             {
                 // Mark close confirmed in coordinator (also kicks cooldown if configured).
                 _coordinator.MarkSlotCloseConfirmed(keyed.PairId, closeCompletedAtUtc);
+                ClearCoordinatorPostCloseAnchorForLegacyWait();
 
                 // Remove the slot so adapter's CurrentPhase maps back to WaitingOpen.
                 _coordinator.State.RemoveSlot(keyed);
@@ -141,6 +144,7 @@ public sealed class PortfolioCoordinatorAdapter : ITradingFlowEngine
 
         // Mark close confirmed in coordinator (also kicks cooldown if configured).
         _coordinator.MarkSlotCloseConfirmed(slot.PairId, closeCompletedAtUtc);
+        ClearCoordinatorPostCloseAnchorForLegacyWait();
 
         // Remove the slot so adapter's CurrentPhase maps back to WaitingOpen.
         _coordinator.State.RemoveSlot(slot);
@@ -271,6 +275,14 @@ public sealed class PortfolioCoordinatorAdapter : ITradingFlowEngine
         return _coordinator.LiveSlots.FirstOrDefault()
             ?? _coordinator.PendingCloseSlots.FirstOrDefault()
             ?? _coordinator.PendingOpenSlots.FirstOrDefault();
+    }
+
+    private void ClearCoordinatorPostCloseAnchorForLegacyWait()
+    {
+        // The adapter owns CurrentWaitSeconds/ClosedAtUtc and implements the legacy
+        // post-close gate itself. Keeping the coordinator anchor would apply a second,
+        // unrelated 300-second lock and break the legacy ITradingFlowEngine contract.
+        _coordinator.State.LastCloseConfirmedAtUtc = null;
     }
 
     private int FallbackHoldingSeconds()

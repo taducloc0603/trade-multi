@@ -27,7 +27,7 @@ public sealed class TradingFlowEngineTests
     public void ProcessSnapshot_RunsSequentialFlow_OpenBuyThenCloseBuy()
     {
         var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var start = new DateTime(2026, 3, 18, 15, 20, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         Assert.Equal(TradingFlowPhase.WaitingOpen, sut.CurrentPhase);
         Assert.Equal(TradingPositionSide.None, sut.CurrentPositionSide);
@@ -77,7 +77,7 @@ public sealed class TradingFlowEngineTests
     public void ProcessSnapshot_RunsSequentialFlow_OpenSellThenCloseSell()
     {
         var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var start = new DateTime(2026, 3, 18, 15, 25, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: null, gapSell: -5));
         Assert.Null(Process(sut, start.AddMilliseconds(200), gapBuy: null, gapSell: -6));
@@ -120,7 +120,7 @@ public sealed class TradingFlowEngineTests
     public void Reset_ClearsPhaseAndPosition()
     {
         var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var start = new DateTime(2026, 3, 18, 15, 30, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null);
@@ -141,7 +141,7 @@ public sealed class TradingFlowEngineTests
     public void ProcessSnapshot_WhenHoldingTimeNotReached_DoesNotCheckCloseUntilElapsed()
     {
         var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var start = new DateTime(2026, 3, 18, 16, 0, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, ConfigWithTimeGuards);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null, ConfigWithTimeGuards);
@@ -174,7 +174,7 @@ public sealed class TradingFlowEngineTests
     public void ProcessSnapshot_WhenWaitingTimeNotReached_DoesNotCheckOpenUntilElapsed()
     {
         var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var start = new DateTime(2026, 3, 18, 16, 10, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, ConfigWithTimeGuards);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null, ConfigWithTimeGuards);
@@ -227,7 +227,7 @@ public sealed class TradingFlowEngineTests
             StartTimeHold: 9,
             EndTimeHold: 4);
 
-        var start = new DateTime(2026, 3, 18, 16, 20, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, config);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null, config);
@@ -241,7 +241,7 @@ public sealed class TradingFlowEngineTests
     public void BeginWaitAfterClose_WhenPendingWasClearedButStillWaitingClose_CanStillTransitionToWaitingOpen()
     {
         var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var start = new DateTime(2026, 3, 18, 16, 25, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null);
@@ -285,16 +285,18 @@ public sealed class TradingFlowEngineTests
         Assert.NotNull(close);
         sut.BeginWaitAfterClose(DateTime.UtcNow, startWaitSeconds: 1, endWaitSeconds: 1);
 
-        // Feed a stale snapshot timestamp (frozen around "now").
+        // Feed a stale snapshot timestamp while the wait gate is still active.
         var staleSnapshotTs = nowUtc;
         Assert.Null(Process(sut, staleSnapshotTs, gapBuy: 10, gapSell: null, ConfigWithTimeGuards));
 
         Thread.Sleep(1200);
 
-        // With wall-clock fallback, open checks should proceed even when snapshot timestamp is stale.
-        Assert.Null(Process(sut, staleSnapshotTs, gapBuy: 5, gapSell: null, ConfigWithTimeGuards));
-        Assert.Null(Process(sut, staleSnapshotTs, gapBuy: 6, gapSell: null, ConfigWithTimeGuards));
-        var nextOpen = Process(sut, staleSnapshotTs, gapBuy: 8, gapSell: null, ConfigWithTimeGuards);
+        // Wall-clock fallback opens the gate. Once fresh ticks resume, their relative
+        // timestamps still drive the independent 500 ms gap confirmation window.
+        var resumedAtUtc = DateTime.UtcNow;
+        Assert.Null(Process(sut, resumedAtUtc, gapBuy: 5, gapSell: null, ConfigWithTimeGuards));
+        Assert.Null(Process(sut, resumedAtUtc.AddMilliseconds(200), gapBuy: 6, gapSell: null, ConfigWithTimeGuards));
+        var nextOpen = Process(sut, resumedAtUtc.AddMilliseconds(550), gapBuy: 8, gapSell: null, ConfigWithTimeGuards);
         Assert.NotNull(nextOpen);
         Assert.Equal(GapSignalAction.Open, nextOpen!.Action);
     }
@@ -350,7 +352,7 @@ public sealed class TradingFlowEngineTests
         // Fix: giữ nguyên giá trị đã random lúc open trigger.
 
         var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var start = new DateTime(2026, 3, 18, 17, 0, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         // Happy-path open → CurrentHoldingSeconds = 2 (vì Start=End=2 trong ConfigWithTimeGuards)
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, ConfigWithTimeGuards);
@@ -375,7 +377,7 @@ public sealed class TradingFlowEngineTests
         // Fix: phải random lại hold từ config đã thấy gần nhất, không để = 0.
 
         var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var start = new DateTime(2026, 3, 18, 17, 5, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         // Chỉ feed 1 snapshot để engine cache _lastSeenStartTimeHold/_lastSeenEndTimeHold = 2
         _ = Process(sut, start, gapBuy: null, gapSell: null, ConfigWithTimeGuards);
@@ -394,7 +396,7 @@ public sealed class TradingFlowEngineTests
         // signal close nếu chưa đủ holding seconds.
 
         var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var start = new DateTime(2026, 3, 18, 17, 10, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         // Open bình thường
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, ConfigWithTimeGuards);
@@ -428,7 +430,7 @@ public sealed class TradingFlowEngineTests
         // close-gate phải dùng _lastSeenStartTimeHold làm floor.
 
         var sut = new TradingFlowEngine(new GapSignalConfirmationEngine(), new CloseSignalEngine());
-        var start = new DateTime(2026, 3, 18, 17, 20, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         // Feed 1 tick để engine cache config hold range = [2..2]
         _ = Process(sut, start, gapBuy: null, gapSell: null, ConfigWithTimeGuards);

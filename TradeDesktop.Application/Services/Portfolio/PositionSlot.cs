@@ -45,6 +45,10 @@ public sealed class PositionSlot
     public double? LastProfitB { get; private set; }
     public bool HasCompleteProfitSnapshot => LastProfitA.HasValue && LastProfitB.HasValue;
     public CloseSignalReason? LastCloseReason { get; private set; }
+    public CloseGapMode LastCloseGapMode { get; private set; } = CloseGapMode.Normal;
+    public int? LastCloseConfirmGapPts { get; private set; }
+    public int? LastCloseGapPts { get; private set; }
+    public int? LastCloseHoldMs { get; private set; }
     public bool IsSosActive { get; private set; }
     public string SosActivationSource { get; private set; } = "NONE";
     public ICloseSignalEngine CloseSignalEngine { get; private set; }
@@ -62,6 +66,7 @@ public sealed class PositionSlot
         Status = PositionSlotStatus.PendingOpen;
         ClearProfitSnapshot();
         LastCloseReason = null;
+        ClearCloseSignalMetadata();
         IsSosActive = false;
         SosActivationSource = "NONE";
     }
@@ -78,7 +83,11 @@ public sealed class PositionSlot
     public bool TryMarkCloseTriggered(
         DateTime triggerAtUtc,
         CloseExecutionOwner owner,
-        CloseSignalReason closeReason = CloseSignalReason.Gap)
+        CloseSignalReason closeReason = CloseSignalReason.Gap,
+        CloseGapMode closeGapMode = CloseGapMode.Normal,
+        int? closeConfirmGapPts = null,
+        int? closeGapPts = null,
+        int? closeHoldMs = null)
     {
         if (owner == CloseExecutionOwner.None
             || (IsCloseExecutionPending && CloseOwner != owner))
@@ -88,6 +97,10 @@ public sealed class PositionSlot
 
         ClosedAtUtc = triggerAtUtc;
         LastCloseReason = closeReason;
+        LastCloseGapMode = closeGapMode;
+        LastCloseConfirmGapPts = closeConfirmGapPts;
+        LastCloseGapPts = closeGapPts;
+        LastCloseHoldMs = closeHoldMs;
         IsCloseExecutionPending = true;
         CloseOwner = owner;
         Status = PositionSlotStatus.PendingClose;
@@ -149,6 +162,7 @@ public sealed class PositionSlot
         CloseOwner = CloseExecutionOwner.None;
         ClearProfitSnapshot();
         LastCloseReason = null;
+        ClearCloseSignalMetadata();
         IsSosActive = false;
         SosActivationSource = "NONE";
     }
@@ -210,6 +224,14 @@ public sealed class PositionSlot
         LastProfitA = null;
         LastProfitB = null;
         LastProfitSnapshot = null;
+    }
+
+    private void ClearCloseSignalMetadata()
+    {
+        LastCloseGapMode = CloseGapMode.Normal;
+        LastCloseConfirmGapPts = null;
+        LastCloseGapPts = null;
+        LastCloseHoldMs = null;
     }
 }
 

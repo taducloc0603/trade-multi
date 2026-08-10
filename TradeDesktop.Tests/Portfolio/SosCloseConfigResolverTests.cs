@@ -69,4 +69,34 @@ public sealed class SosCloseConfigResolverTests
 
         Assert.Equal("LATEST_CLOSE_CONDITION_INVALID", error);
     }
+
+    [Theory]
+    [InlineData(GapSignalTriggerType.CloseByGapSell, null, 8)]
+    [InlineData(GapSignalTriggerType.CloseByGapSell, null, 7)]
+    [InlineData(GapSignalTriggerType.CloseByGapBuy, -8, null)]
+    [InlineData(GapSignalTriggerType.CloseByGapBuy, -7, null)]
+    public void LatestSosGap_InwardCloseCondition_IsAllowed(
+        GapSignalTriggerType triggerType,
+        int? gapBuy,
+        int? gapSell)
+    {
+        var error = SosCloseConfigResolver.ValidateLatestSosGap(
+            triggerType, gapBuy, gapSell, closeGapPts: -8, limitMaxGap: 30);
+
+        Assert.Null(error);
+    }
+
+    [Theory]
+    [InlineData(GapSignalTriggerType.CloseByGapSell, null, 9)]
+    [InlineData(GapSignalTriggerType.CloseByGapBuy, -9, null)]
+    public void LatestSosGap_BeforeCloseThreshold_IsRejected(
+        GapSignalTriggerType triggerType,
+        int? gapBuy,
+        int? gapSell)
+    {
+        var error = SosCloseConfigResolver.ValidateLatestSosGap(
+            triggerType, gapBuy, gapSell, closeGapPts: -8, limitMaxGap: 30);
+
+        Assert.Equal("LATEST_SOS_CLOSE_CONDITION_INVALID", error);
+    }
 }

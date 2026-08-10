@@ -43,7 +43,8 @@ public sealed record SignalAuthorization(
     string SnapshotFingerprint,
     string? PairId,
     int? SlotId,
-    CloseSignalReason CloseReason);
+    CloseSignalReason CloseReason,
+    CloseGapMode CloseGapMode = CloseGapMode.Normal);
 
 public sealed record TradeRecoveryEvidence(
     string PairId,

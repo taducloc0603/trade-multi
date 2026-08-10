@@ -72,6 +72,7 @@ public sealed class SosCloseRuleTests
         Assert.Equal(-12, engine.LastConfig!.SosCloseConfirmGapPts);
         Assert.Equal(-12, engine.LastConfig.CloseConfirmGapPts);
         Assert.Equal(-8, engine.LastConfig.ClosePts);
+        Assert.Equal(CloseGapMode.Sos, engine.LastConfig.CloseGapMode);
         Assert.Equal(5, engine.LastConfig.CloseConfirmTpProfit);
         Assert.Equal(10, engine.LastConfig.CloseTpProfit);
         Assert.Equal(1, engine.GapResetCount);
@@ -90,6 +91,7 @@ public sealed class SosCloseRuleTests
         Assert.False(slot.IsSosActive);
         Assert.Equal(30, engine.LastConfig!.CloseConfirmGapPts);
         Assert.Equal(40, engine.LastConfig.ClosePts);
+        Assert.Equal(CloseGapMode.Normal, engine.LastConfig.CloseGapMode);
         Assert.Equal(2, engine.GapResetCount);
     }
 

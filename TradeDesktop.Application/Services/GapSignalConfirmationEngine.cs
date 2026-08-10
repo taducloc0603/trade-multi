@@ -127,7 +127,12 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             return null;
         }
 
-        var primaryGaps = side == GapSignalSide.Buy ? state.BuyGaps : state.SellGaps;
+        var primaryGaps = triggerType switch
+        {
+            GapSignalTriggerType.OpenByGapBuy or GapSignalTriggerType.CloseByGapBuy => state.BuyGaps,
+            GapSignalTriggerType.OpenByGapSell or GapSignalTriggerType.CloseByGapSell => state.SellGaps,
+            _ => side == GapSignalSide.Buy ? state.BuyGaps : state.SellGaps
+        };
         if (primaryGaps.Count == 0 || primaryGaps.Any(v => !isConfirmSatisfied(v)))
         {
             state.Reset();

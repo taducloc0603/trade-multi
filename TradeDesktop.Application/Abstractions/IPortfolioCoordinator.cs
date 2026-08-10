@@ -132,10 +132,16 @@ public enum AutoTradeActionType
 public sealed record PortfolioSnapshotResult(
     GapSignalTriggerResult? OpenTrigger,
     PositionSlot? CloseTargetSlot,
-    GapSignalTriggerResult? CloseTrigger)
+    GapSignalTriggerResult? CloseTrigger,
+    IReadOnlyList<PortfolioUiNotice>? UiNotices = null)
 {
     public static PortfolioSnapshotResult Empty { get; } = new(null, null, null);
 }
+
+public sealed record PortfolioUiNotice(
+    string Code,
+    int SlotId,
+    string Message);
 
 /// <summary>
 /// Phase 7: monitoring snapshot. Caller logs periodically to track health + skip

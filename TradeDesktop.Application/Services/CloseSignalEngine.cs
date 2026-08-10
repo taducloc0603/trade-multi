@@ -22,6 +22,7 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         var normalizedCloseConfirm = Math.Abs(config.CloseConfirmGapPts);
         var normalizedClose = Math.Abs(config.ClosePts);
         var normalizedHoldMs = Math.Max(0, config.CloseHoldConfirmMs);
+        var usesSos = config.CloseGapMode == CloseGapMode.Sos;
 
         var gapResult = openMode switch
         {
@@ -41,8 +42,12 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
                 state: _buyState,
                 holdConfirmMs: normalizedHoldMs,
                 maxTimesTick: config.CloseMaxTimesTick,
-                isConfirmSatisfied: value => value <= -normalizedCloseConfirm,
-                isOpenSatisfied: value => value <= -normalizedClose,
+                isConfirmSatisfied: value => usesSos
+                    ? value <= normalizedCloseConfirm
+                    : value <= -normalizedCloseConfirm,
+                isOpenSatisfied: value => usesSos
+                    ? value <= normalizedClose
+                    : value <= -normalizedClose,
                 limitMaxGap: config.LimitMaxGap),
 
             TradingOpenMode.GapSell => GapSignalConfirmationEngine.ProcessSide(
@@ -61,8 +66,12 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
                 state: _sellState,
                 holdConfirmMs: normalizedHoldMs,
                 maxTimesTick: config.CloseMaxTimesTick,
-                isConfirmSatisfied: value => value >= normalizedCloseConfirm,
-                isOpenSatisfied: value => value >= normalizedClose,
+                isConfirmSatisfied: value => usesSos
+                    ? value >= -normalizedCloseConfirm
+                    : value >= normalizedCloseConfirm,
+                isOpenSatisfied: value => usesSos
+                    ? value >= -normalizedClose
+                    : value >= normalizedClose,
                 limitMaxGap: config.LimitMaxGap),
 
             _ => null
@@ -70,7 +79,31 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
 
         var tpResult = ProcessTp(snapshot, config, openMode, slotProfit);
 
-        return tpResult ?? gapResult;
+        if (tpResult is not null)
+        {
+            return tpResult;
+        }
+
+        if (gapResult is null)
+        {
+            return null;
+        }
+
+        var closesByGapSell = gapResult.TriggerType == GapSignalTriggerType.CloseByGapSell;
+        var effectiveConfirm = closesByGapSell
+            ? usesSos ? normalizedCloseConfirm : -normalizedCloseConfirm
+            : usesSos ? -normalizedCloseConfirm : normalizedCloseConfirm;
+        var effectiveClose = closesByGapSell
+            ? usesSos ? normalizedClose : -normalizedClose
+            : usesSos ? -normalizedClose : normalizedClose;
+
+        return gapResult with
+        {
+            CloseGapMode = config.CloseGapMode,
+            EffectiveCloseConfirmGapPts = effectiveConfirm,
+            EffectiveCloseGapPts = effectiveClose,
+            EffectiveCloseHoldMs = normalizedHoldMs
+        };
     }
 
     public void Reset()

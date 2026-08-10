@@ -13,9 +13,9 @@ namespace TradeDesktop.Application.Services.Portfolio;
 ///
 /// ProcessSnapshot loop:
 ///   1. Check startup cooldown + non-auto barrier.
-///   2. OPEN path: if quota allows, ask shared _openSignalEngine for trigger.
-///   3. CLOSE path: iterate Live slots, ask each slot's own CloseSignalEngine.
+///   2. CLOSE path: iterate Live slots, ask each slot's own CloseSignalEngine.
 ///      Pick winner by LastProfitSnapshot (Rule D framework, trivial at cap=1).
+///   3. OPEN path: only when no close is eligible and quota allows.
 /// </summary>
 public sealed class PortfolioCoordinator : IPortfolioCoordinator
 {
@@ -166,34 +166,10 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             _wasBlockedByCooldownLastTick = false;
         }
 
-        // 3. OPEN path: only if quota allows.
-        if (_state.CountLiveAndPendingTotal() < _state.MaxTotalOpens)
-        {
-            var triggers = _openSignalEngine.ProcessSnapshot(snapshot, config);
-            foreach (var trigger in triggers)
-            {
-                if (!trigger.Triggered || trigger.Action != GapSignalAction.Open) continue;
-
-                // Rule A + C check (Phase 2 enable; Phase 0 cap=1 makes this trivial).
-                var side = trigger.PrimarySide == GapSignalSide.Buy
-                    ? TradingPositionSide.Buy
-                    : TradingPositionSide.Sell;
-                if (!CanOpenNewSlot(side, out var blockReason))
-                {
-                    LogOpenSkipThrottled(side, blockReason, effectiveNow);
-                    continue;
-                }
-
-                return new PortfolioSnapshotResult(
-                    OpenTrigger: trigger,
-                    CloseTargetSlot: null,
-                    CloseTrigger: null);
-            }
-        }
-
-        // 4. CLOSE path: iterate each Live slot's own CloseSignalEngine.
+        // 3. CLOSE path: iterate each Live slot's own CloseSignalEngine.
         var maxLifeTimeSec = _state.MaxLifeTimeBySecond;
         var eligibleCloses = new List<(PositionSlot slot, GapSignalTriggerResult trigger)>();
+        var uiNotices = new List<PortfolioUiNotice>();
         foreach (var slot in _state.GetLiveSlots())
         {
             if (slot.IsCloseExecutionPending) continue;
@@ -234,7 +210,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             var effectiveCloseConfig = config with
             {
                 CloseConfirmGapPts = resolvedGap.ConfirmGapPts,
-                ClosePts = resolvedGap.CloseGapPts
+                ClosePts = resolvedGap.CloseGapPts,
+                CloseGapMode = resolvedGap.UsesSos ? CloseGapMode.Sos : CloseGapMode.Normal
             };
 
             LogTpCheck(slot, effectiveCloseConfig, effectiveNow);
@@ -257,11 +234,21 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             {
                 if (!_lastMinProfitStatusBySlot.TryGetValue(slot.SlotId, out var lastStatus) || lastStatus != "BLOCK")
                 {
+                    var closeMode = CloseModeLabel(closeTrigger);
+                    var gapSummary = CloseGapSummary(closeTrigger);
                     _logger?.Log(
-                        $"[MIN_PROFIT][BLOCK] slot={slot.SlotId} pairId={slot.PairId} " +
+                        $"[MIN_PROFIT][WAITING][{closeMode}] slot={slot.SlotId} pairId={slot.PairId} " +
+                        $"description=\"Đã đạt điều kiện đóng {closeMode} nhưng lợi nhuận chưa đủ\" " +
+                        $"{gapSummary} " +
                         $"profit={(slot.HasCompleteProfitSnapshot ? slot.LastProfitSnapshot?.ToString("0.##", CultureInfo.InvariantCulture) : "unavailable")} " +
                         $"required={_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)} " +
                         $"ageSeconds={ageSeconds:0.##} maxLifeTimeSeconds={maxLifeTimeSec}");
+                    uiNotices.Add(new PortfolioUiNotice(
+                        "MIN_PROFIT_WAITING",
+                        slot.SlotId,
+                        $"[ĐANG CHỜ PROFIT][{closeMode}] Slot {slot.SlotId}: {GapDisplay(closeTrigger)} đã đạt điều kiện Close, " +
+                        $"profit={(slot.LastProfitSnapshot?.ToString("0.##", CultureInfo.InvariantCulture) ?? "chưa đủ dữ liệu")}/" +
+                        $"{_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)} chưa đủ."));
                     _lastMinProfitStatusBySlot[slot.SlotId] = "BLOCK";
                 }
                 continue;
@@ -272,11 +259,21 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 var status = maxLifeTimeSec > 0 && ageSeconds >= maxLifeTimeSec ? "EXPIRED" : "PASS";
                 if (!_lastMinProfitStatusBySlot.TryGetValue(slot.SlotId, out var lastStatus) || lastStatus != status)
                 {
-                    _logger?.Log(
-                        $"[MIN_PROFIT][{status}] slot={slot.SlotId} pairId={slot.PairId} " +
-                        $"profit={(slot.LastProfitSnapshot?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unavailable")} " +
-                        $"required={_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)} " +
-                        $"ageSeconds={ageSeconds:0.##} maxLifeTimeSeconds={maxLifeTimeSec}");
+                    if (status == "EXPIRED")
+                    {
+                        var closeMode = CloseModeLabel(closeTrigger);
+                        _logger?.Log(
+                            $"[MIN_PROFIT][EXPIRED][{closeMode}] slot={slot.SlotId} pairId={slot.PairId} " +
+                            $"description=\"Slot đã đạt Max Lifetime; Min Profit không còn chặn\" " +
+                            $"{CloseGapSummary(closeTrigger)} " +
+                            $"profit={(slot.LastProfitSnapshot?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unavailable")} " +
+                            $"required={_state.MinProfitToClose.ToString("0.##", CultureInfo.InvariantCulture)} " +
+                            $"ageSeconds={ageSeconds:0.##} maxLifeTimeSeconds={maxLifeTimeSec}");
+                        uiNotices.Add(new PortfolioUiNotice(
+                            "MIN_PROFIT_EXPIRED",
+                            slot.SlotId,
+                            $"[MAX LIFETIME][{closeMode}] Slot {slot.SlotId} đã đạt {maxLifeTimeSec} giây. Min Profit không còn chặn;"));
+                    }
                     _lastMinProfitStatusBySlot[slot.SlotId] = status;
                 }
             }
@@ -324,7 +321,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                     && winner.slot.TryMarkCloseTriggered(
                         winner.trigger.TriggeredAtUtc,
                         CloseExecutionOwner.Auto,
-                        winner.trigger.CloseReason);
+                        winner.trigger.CloseReason,
+                        winner.trigger.CloseGapMode,
+                        winner.trigger.EffectiveCloseConfirmGapPts,
+                        winner.trigger.EffectiveCloseGapPts,
+                        winner.trigger.EffectiveCloseHoldMs);
             }
             if (!claimed)
             {
@@ -338,10 +339,39 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             return new PortfolioSnapshotResult(
                 OpenTrigger: null,
                 CloseTargetSlot: winner.slot,
-                CloseTrigger: winner.trigger);
+                CloseTrigger: winner.trigger,
+                UiNotices: uiNotices);
         }
 
-        return PortfolioSnapshotResult.Empty;
+        // 4. OPEN path: only when no close is eligible and quota allows.
+        if (_state.CountLiveAndPendingTotal() < _state.MaxTotalOpens)
+        {
+            var triggers = _openSignalEngine.ProcessSnapshot(snapshot, config);
+            foreach (var trigger in triggers)
+            {
+                if (!trigger.Triggered || trigger.Action != GapSignalAction.Open) continue;
+
+                // Rule A + C check (Phase 2 enable; Phase 0 cap=1 makes this trivial).
+                var side = trigger.PrimarySide == GapSignalSide.Buy
+                    ? TradingPositionSide.Buy
+                    : TradingPositionSide.Sell;
+                if (!CanOpenNewSlot(side, out var blockReason))
+                {
+                    LogOpenSkipThrottled(side, blockReason, effectiveNow);
+                    continue;
+                }
+
+                return new PortfolioSnapshotResult(
+                    OpenTrigger: trigger,
+                    CloseTargetSlot: null,
+                    CloseTrigger: null,
+                    UiNotices: uiNotices);
+            }
+        }
+
+        return uiNotices.Count == 0
+            ? PortfolioSnapshotResult.Empty
+            : new PortfolioSnapshotResult(null, null, null, uiNotices);
     }
 
     // ===== Slot lifecycle =====
@@ -668,6 +698,10 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _logger?.Log(
             $"[SLOT][CLOSE_CONFIRMED] slot={slot.SlotId} side={slot.Side} " +
             $"profit={slot.LastProfitSnapshot:F2} closeReason={slot.LastCloseReason ?? CloseSignalReason.Gap} " +
+            $"closeMode={ConfirmedCloseModeLabel(slot, closeOwner)} " +
+            $"confirmGapPts={slot.LastCloseConfirmGapPts?.ToString(CultureInfo.InvariantCulture) ?? "n/a"} " +
+            $"closeGapPts={slot.LastCloseGapPts?.ToString(CultureInfo.InvariantCulture) ?? "n/a"} " +
+            $"holdMs={slot.LastCloseHoldMs?.ToString(CultureInfo.InvariantCulture) ?? "n/a"} " +
             $"owner={closeOwner}");
         if (closeOwner == CloseExecutionOwner.Auto)
         {
@@ -735,6 +769,37 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         if (slot is null) return;
         slot.UpdateProfit(ticket, profit);
     }
+
+    private static string CloseModeLabel(GapSignalTriggerResult trigger)
+        => trigger.CloseReason == CloseSignalReason.Tp
+            ? "TP"
+            : trigger.CloseGapMode == CloseGapMode.Sos ? "SOS" : "NORMAL";
+
+    private static string ConfirmedCloseModeLabel(PositionSlot slot, CloseExecutionOwner owner)
+    {
+        if (owner != CloseExecutionOwner.Auto)
+        {
+            return owner.ToString().ToUpperInvariant();
+        }
+
+        return slot.LastCloseReason == CloseSignalReason.Tp
+            ? "TP"
+            : slot.LastCloseGapMode == CloseGapMode.Sos ? "SOS" : "NORMAL";
+    }
+
+    private static string GapDisplay(GapSignalTriggerResult trigger)
+    {
+        var closesByGapSell = trigger.TriggerType == GapSignalTriggerType.CloseByGapSell;
+        var gapName = closesByGapSell ? "GapSell" : "GapBuy";
+        var gapValue = closesByGapSell ? trigger.LastSellGap : trigger.LastBuyGap;
+        return $"{gapName}={gapValue?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"}";
+    }
+
+    private static string CloseGapSummary(GapSignalTriggerResult trigger)
+        => $"trigger={trigger.TriggerType} trackedGap={GapDisplay(trigger)} " +
+           $"confirmGapPts={trigger.EffectiveCloseConfirmGapPts?.ToString(CultureInfo.InvariantCulture) ?? "n/a"} " +
+           $"closeGapPts={trigger.EffectiveCloseGapPts?.ToString(CultureInfo.InvariantCulture) ?? "n/a"} " +
+           $"holdMs={trigger.EffectiveCloseHoldMs?.ToString(CultureInfo.InvariantCulture) ?? "n/a"}";
 
     private void LogTpCheck(PositionSlot slot, GapSignalConfirmationConfig config, DateTime effectiveNow)
     {

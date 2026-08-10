@@ -39,7 +39,7 @@ public sealed class PortfolioCoordinatorAdapterTests
     public void ProcessSnapshot_RunsSequentialFlow_OpenBuyThenCloseBuy()
     {
         var sut = CreateSut();
-        var start = new DateTime(2026, 3, 18, 15, 20, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         Assert.Equal(TradingFlowPhase.WaitingOpen, sut.CurrentPhase);
         Assert.Equal(TradingPositionSide.None, sut.CurrentPositionSide);
@@ -80,7 +80,7 @@ public sealed class PortfolioCoordinatorAdapterTests
     public void ProcessSnapshot_RunsSequentialFlow_OpenSellThenCloseSell()
     {
         var sut = CreateSut();
-        var start = new DateTime(2026, 3, 18, 15, 25, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         Assert.Null(Process(sut, start.AddMilliseconds(0), gapBuy: null, gapSell: -5));
         Assert.Null(Process(sut, start.AddMilliseconds(200), gapBuy: null, gapSell: -6));
@@ -107,7 +107,7 @@ public sealed class PortfolioCoordinatorAdapterTests
     public void Reset_ClearsPhaseAndPosition()
     {
         var sut = CreateSut();
-        var start = new DateTime(2026, 3, 18, 15, 30, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null);
@@ -126,7 +126,7 @@ public sealed class PortfolioCoordinatorAdapterTests
     public void ProcessSnapshot_WhenHoldingTimeNotReached_DoesNotCheckCloseUntilElapsed()
     {
         var sut = CreateSut();
-        var start = new DateTime(2026, 3, 18, 16, 0, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, ConfigWithTimeGuards);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null, ConfigWithTimeGuards);
@@ -152,7 +152,7 @@ public sealed class PortfolioCoordinatorAdapterTests
     public void ProcessSnapshot_WhenWaitingTimeNotReached_DoesNotCheckOpenUntilElapsed()
     {
         var sut = CreateSut();
-        var start = new DateTime(2026, 3, 18, 16, 10, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, ConfigWithTimeGuards);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null, ConfigWithTimeGuards);
@@ -195,7 +195,7 @@ public sealed class PortfolioCoordinatorAdapterTests
             CloseConfirmGapPts: 5, ClosePts: 8, CloseHoldConfirmMs: 400,
             StartTimeHold: 9, EndTimeHold: 4);
 
-        var start = new DateTime(2026, 3, 18, 16, 20, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, config);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null, config);
         var open = Process(sut, start.AddMilliseconds(550), gapBuy: 8, gapSell: null, config);
@@ -208,7 +208,7 @@ public sealed class PortfolioCoordinatorAdapterTests
     public void BeginWaitAfterClose_WhenPendingWasClearedButStillWaitingClose_CanStillTransitionToWaitingOpen()
     {
         var sut = CreateSut();
-        var start = new DateTime(2026, 3, 18, 16, 25, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null);
@@ -298,7 +298,7 @@ public sealed class PortfolioCoordinatorAdapterTests
     public void ForceWaitingClose_WhenHoldingSecondsAlreadySet_Preserves()
     {
         var sut = CreateSut();
-        var start = new DateTime(2026, 3, 18, 17, 0, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, ConfigWithTimeGuards);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null, ConfigWithTimeGuards);
@@ -315,7 +315,7 @@ public sealed class PortfolioCoordinatorAdapterTests
     public void ForceWaitingClose_WhenHoldingSecondsZero_UsesConfigFloorFromLastSeen()
     {
         var sut = CreateSut();
-        var start = new DateTime(2026, 3, 18, 17, 5, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start, gapBuy: null, gapSell: null, ConfigWithTimeGuards);
         Assert.Equal(0, sut.CurrentHoldingSeconds);
@@ -329,7 +329,7 @@ public sealed class PortfolioCoordinatorAdapterTests
     public void ProcessSnapshot_AfterForceWaitingClose_CloseStillGatedByHolding()
     {
         var sut = CreateSut();
-        var start = new DateTime(2026, 3, 18, 17, 10, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start.AddMilliseconds(0), gapBuy: 5, gapSell: null, ConfigWithTimeGuards);
         _ = Process(sut, start.AddMilliseconds(200), gapBuy: 6, gapSell: null, ConfigWithTimeGuards);
@@ -354,7 +354,7 @@ public sealed class PortfolioCoordinatorAdapterTests
     public void CanCheckClose_FallbackFloor_EvenWhenHoldingSecondsExternallyZero()
     {
         var sut = CreateSut();
-        var start = new DateTime(2026, 3, 18, 17, 20, 0, DateTimeKind.Utc);
+        var start = DateTime.UtcNow;
 
         _ = Process(sut, start, gapBuy: null, gapSell: null, ConfigWithTimeGuards);
         sut.ForceWaitingClose(TradingPositionSide.Sell);

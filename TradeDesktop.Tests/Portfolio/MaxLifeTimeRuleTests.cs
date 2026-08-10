@@ -10,6 +10,12 @@ namespace TradeDesktop.Tests.Portfolio;
 // profit when ages are equal. If none are overtime, fall back to Rule D (highest profit).
 public sealed class MaxLifeTimeRuleTests
 {
+    private sealed class CaptureLogger : ISlotLogger
+    {
+        public List<string> Messages { get; } = [];
+        public void Log(string message) => Messages.Add(message);
+    }
+
     private sealed class ScriptedCloseSignalEngine : ICloseSignalEngine
     {
         public GapSignalTriggerResult? NextResult { get; set; }
@@ -43,11 +49,19 @@ public sealed class MaxLifeTimeRuleTests
             new DateTime(2026, 5, 21, 10, 0, 0, DateTimeKind.Utc),
             null, null, null, null, null, null, null, null, 1);
 
-    private static GapSignalTriggerResult CloseTrigger()
+    private static GapSignalTriggerResult CloseTrigger(
+        CloseGapMode closeGapMode = CloseGapMode.Normal,
+        int? confirmGapPts = null,
+        int? closeGapPts = null,
+        int? holdMs = null)
         => new(true, GapSignalAction.Close, GapSignalTriggerType.CloseByGapSell, GapSignalSide.Buy,
-            Array.Empty<int>(), Array.Empty<int>(), null, null,
+            Array.Empty<int>(), [7], null, 7,
             new DateTime(2026, 5, 21, 11, 0, 0, DateTimeKind.Utc),
-            null, null, null, null, null, null, null, null, 1);
+            null, null, null, null, null, null, null, null, 1,
+            CloseGapMode: closeGapMode,
+            EffectiveCloseConfirmGapPts: confirmGapPts,
+            EffectiveCloseGapPts: closeGapPts,
+            EffectiveCloseHoldMs: holdMs);
 
     private static GapSignalSnapshot Snapshot(DateTime ts)
         => new(ts, 100m, 100.5m, 100m, 100.5m, GapBuy: null, GapSell: null, PointMultiplier: 1);
@@ -57,10 +71,12 @@ public sealed class MaxLifeTimeRuleTests
                CloseConfirmGapPts: 5, ClosePts: 8, CloseHoldConfirmMs: 100,
                StartTimeHold: 1, EndTimeHold: 1);
 
-    private static PortfolioCoordinator BuildCoordinator(ScriptedFactory factory)
+    private static PortfolioCoordinator BuildCoordinator(
+        ScriptedFactory factory,
+        ISlotLogger? logger = null)
     {
         var coordinator = new PortfolioCoordinator(
-            new GapSignalConfirmationEngine(), factory, logger: null, random: new Random(42));
+            new GapSignalConfirmationEngine(), factory, logger: logger, random: new Random(42));
         coordinator.UpdateQuotaConfig(maxTotal: 7, maxBuy: 4, maxSell: 4);
         coordinator.UpdateCooldownConfig(minSec: 0, maxSec: 0);
         return coordinator;
@@ -305,6 +321,62 @@ public sealed class MaxLifeTimeRuleTests
         var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
 
         Assert.Equal("p1", result.CloseTargetSlot!.PairId);
+    }
+
+    [Fact]
+    public void MinProfit_AtMaxLifeTime_SosClose_EmitsUiAndFileAuditWithEffectiveConfig()
+    {
+        var factory = new ScriptedFactory();
+        var logger = new CaptureLogger();
+        var coordinator = BuildCoordinator(factory, logger);
+        coordinator.UpdateMaxLifeTimeConfig(1650);
+        coordinator.UpdateMinProfitToCloseConfig(200);
+        var now = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-1650));
+        coordinator.UpdateProfit(100, -5);
+        coordinator.UpdateProfit(200, -5);
+        factory.Created[0].NextResult = CloseTrigger(CloseGapMode.Sos, 15, 8, 900);
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+
+        var notice = Assert.Single(result.UiNotices!);
+        Assert.Equal("MIN_PROFIT_EXPIRED", notice.Code);
+        Assert.Equal("[MAX LIFETIME][SOS] Slot 1 đã đạt 1650 giây. Min Profit không còn chặn;", notice.Message);
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[MIN_PROFIT][EXPIRED][SOS]")
+            && message.Contains("trackedGap=GapSell=7")
+            && message.Contains("confirmGapPts=15")
+            && message.Contains("closeGapPts=8")
+            && message.Contains("holdMs=900"));
+    }
+
+    [Fact]
+    public void CloseConfirmed_AfterSosSignal_PreservesModeAndEffectiveConfigInAuditLog()
+    {
+        var factory = new ScriptedFactory();
+        var logger = new CaptureLogger();
+        var coordinator = BuildCoordinator(factory, logger);
+        var now = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger());
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, now.AddSeconds(-120));
+        coordinator.UpdateProfit(100, 125);
+        coordinator.UpdateProfit(200, 125);
+        factory.Created[0].NextResult = CloseTrigger(CloseGapMode.Sos, 15, 8, 900);
+
+        var result = coordinator.ProcessSnapshot(Snapshot(now), Config());
+        Assert.NotNull(result.CloseTrigger);
+        coordinator.MarkSlotCloseConfirmed("p1", now.AddMilliseconds(50));
+
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[SLOT][CLOSE_CONFIRMED]")
+            && message.Contains("closeMode=SOS")
+            && message.Contains("confirmGapPts=15")
+            && message.Contains("closeGapPts=8")
+            && message.Contains("holdMs=900")
+            && message.Contains("owner=Auto"));
     }
 
     [Fact]

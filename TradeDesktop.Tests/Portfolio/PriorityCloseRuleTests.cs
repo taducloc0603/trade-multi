@@ -9,6 +9,22 @@ namespace TradeDesktop.Tests.Portfolio;
 // coordinator picks slot with highest LastProfitSnapshot. Losers keep window.
 public sealed class PriorityCloseRuleTests
 {
+    private sealed class ScriptedOpenSignalEngine : IOpenSignalEngine
+    {
+        public IReadOnlyList<GapSignalTriggerResult> NextResults { get; set; } = [];
+        public int ProcessCount { get; private set; }
+
+        public IReadOnlyList<GapSignalTriggerResult> ProcessSnapshot(
+            GapSignalSnapshot snapshot,
+            GapSignalConfirmationConfig config)
+        {
+            ProcessCount++;
+            return NextResults;
+        }
+
+        public void Reset() { }
+    }
+
     private sealed class ScriptedCloseSignalEngine : ICloseSignalEngine
     {
         public GapSignalTriggerResult? NextResult { get; set; }
@@ -206,5 +222,55 @@ public sealed class PriorityCloseRuleTests
         var result = coordinator.ProcessSnapshot(Snapshot(openTime.AddSeconds(20)), Config());
 
         Assert.Equal("p2", result.CloseTargetSlot!.PairId);
+    }
+
+    [Fact]
+    public void EligibleClose_TakesPriorityOverOpenInSameSnapshot()
+    {
+        var openEngine = new ScriptedOpenSignalEngine
+        {
+            NextResults = [OpenTrigger(GapSignalSide.Buy)]
+        };
+        var factory = new ScriptedFactory();
+        var coordinator = new PortfolioCoordinator(
+            openEngine, factory, logger: null, random: new Random(42));
+        coordinator.UpdateQuotaConfig(maxTotal: 2, maxBuy: 2, maxSell: 2);
+
+        var snapshotTime = new DateTime(2026, 5, 21, 11, 0, 0, DateTimeKind.Utc);
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger(GapSignalSide.Buy));
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, snapshotTime.AddSeconds(-10));
+        factory.Created[0].NextResult = CloseTrigger();
+
+        var result = coordinator.ProcessSnapshot(Snapshot(snapshotTime), Config());
+
+        Assert.NotNull(result.CloseTrigger);
+        Assert.Equal("p1", result.CloseTargetSlot!.PairId);
+        Assert.Null(result.OpenTrigger);
+        Assert.Equal(0, openEngine.ProcessCount);
+    }
+
+    [Fact]
+    public void NoEligibleClose_FallsThroughToOpen()
+    {
+        var openEngine = new ScriptedOpenSignalEngine
+        {
+            NextResults = [OpenTrigger(GapSignalSide.Buy)]
+        };
+        var factory = new ScriptedFactory();
+        var coordinator = new PortfolioCoordinator(
+            openEngine, factory, logger: null, random: new Random(42));
+        coordinator.UpdateQuotaConfig(maxTotal: 2, maxBuy: 2, maxSell: 2);
+
+        var snapshotTime = new DateTime(2026, 5, 21, 11, 0, 0, DateTimeKind.Utc);
+        coordinator.AllocatePendingOpenSlot("p1", OpenTrigger(GapSignalSide.Buy));
+        coordinator.MarkSlotOpenConfirmed("p1", 100, 200, snapshotTime.AddSeconds(-10));
+        factory.Created[0].NextResult = null;
+
+        var result = coordinator.ProcessSnapshot(Snapshot(snapshotTime), Config());
+
+        Assert.NotNull(result.OpenTrigger);
+        Assert.Equal(GapSignalSide.Buy, result.OpenTrigger!.PrimarySide);
+        Assert.Null(result.CloseTrigger);
+        Assert.Equal(1, openEngine.ProcessCount);
     }
 }

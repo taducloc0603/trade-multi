@@ -54,4 +54,38 @@ public static class SosCloseConfigResolver
 
         return null;
     }
+
+    public static string? ValidateLatestSosGap(
+        GapSignalTriggerType triggerType,
+        int? gapBuy,
+        int? gapSell,
+        int closeGapPts,
+        int limitMaxGap)
+    {
+        var threshold = Math.Abs((long)closeGapPts);
+        int? currentGap = triggerType switch
+        {
+            GapSignalTriggerType.CloseByGapBuy => gapBuy,
+            GapSignalTriggerType.CloseByGapSell => gapSell,
+            _ => null
+        };
+        var directionValid = triggerType switch
+        {
+            GapSignalTriggerType.CloseByGapBuy => currentGap is { } gap && gap >= -threshold,
+            GapSignalTriggerType.CloseByGapSell => currentGap is { } gap && gap <= threshold,
+            _ => false
+        };
+        if (!directionValid)
+        {
+            return "LATEST_SOS_CLOSE_CONDITION_INVALID";
+        }
+
+        var normalizedLimit = Math.Abs((long)limitMaxGap);
+        if (normalizedLimit > 0 && currentGap.HasValue && Math.Abs((long)currentGap.Value) > normalizedLimit)
+        {
+            return "LATEST_GAP_EXCEEDS_LIMIT";
+        }
+
+        return null;
+    }
 }

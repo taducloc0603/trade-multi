@@ -87,6 +87,34 @@ public sealed class TradeSignalLogBuilderTests
             line);
     }
 
+    [Theory]
+    [InlineData("Gap SELL", 7, 15, 8, "Mode=SOS, Confirm=15, Close=8, Hold=900ms")]
+    [InlineData("Gap BUY", -7, -15, -8, "Mode=SOS, Confirm=-15, Close=-8, Hold=900ms")]
+    public void FormatAutoClose_BySosGap_PrintsEffectiveSignedThresholds(
+        string gapLabel,
+        int lastGap,
+        int confirmGapPts,
+        int closeGapPts,
+        string expectedConfig)
+    {
+        var line = SignalLogFormatter.FormatAutoClose(
+            new DateTime(2026, 8, 10, 13, 0, 0, DateTimeKind.Local),
+            slot: 3,
+            exchangeLabel: "A",
+            tradeType: "BUY",
+            symbol: "XAUUSD",
+            price: 4555.42m,
+            gapLabel: gapLabel,
+            lastGap: lastGap,
+            allGaps: [lastGap],
+            closeGapMode: CloseGapMode.Sos,
+            closeConfirmGapPts: confirmGapPts,
+            closeGapPts: closeGapPts,
+            closeHoldMs: 900);
+
+        Assert.Contains(expectedConfig, line);
+    }
+
     private static GapSignalTriggerResult BuildTrigger(GapSignalAction action, GapSignalSide primarySide)
     {
         var triggeredAtUtc = new DateTime(2026, 3, 20, 6, 0, 43, 573, DateTimeKind.Utc);
