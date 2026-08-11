@@ -141,24 +141,26 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             return PortfolioSnapshotResult.Empty;
         }
 
-        if (_state.GlobalActionLockUntilUtc.HasValue && effectiveNow < _state.GlobalActionLockUntilUtc.Value)
+        var globalCooldownUntilUtc = _state.GlobalActionLockUntilUtc;
+        var globalCooldownActive = globalCooldownUntilUtc.HasValue
+            && effectiveNow < globalCooldownUntilUtc.Value;
+        if (globalCooldownActive)
         {
             // Phase 8: throttled log — chỉ log lần ĐẦU tiên bị block (tránh spam mỗi tick).
             // Log entry này giúp điều tra "tại sao không có trade nào dispatch" trong 1 window.
             if (!_wasBlockedByCooldownLastTick)
             {
-                var remaining = (_state.GlobalActionLockUntilUtc.Value - effectiveNow).TotalSeconds;
+                var remaining = (globalCooldownUntilUtc!.Value - effectiveNow).TotalSeconds;
                 _logger?.Log(
                     $"[SLOT][COOLDOWN][BLOCK] ProcessSnapshot bị skip — cooldown active " +
                     $"(remaining {remaining:F1}s, until {_state.GlobalActionLockUntilUtc:HH:mm:ss} UTC). " +
-                    $"Open/close signals trong window này sẽ bị bỏ qua.");
+                    $"Open/close thường bị chặn; slot SOS vẫn được xét close signal.");
                 _wasBlockedByCooldownLastTick = true;
             }
-            return PortfolioSnapshotResult.Empty;
         }
 
         // Phase 8: log khi cooldown vừa hết → giúp xác định thời điểm chính xác auto resumed.
-        if (_wasBlockedByCooldownLastTick)
+        if (!globalCooldownActive && _wasBlockedByCooldownLastTick)
         {
             _logger?.Log(
                 $"[SLOT][COOLDOWN][CLEAR] ProcessSnapshot resumed — cooldown đã hết " +
@@ -199,6 +201,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                     $"gapMode={(sosActive
                         ? SosCloseConfigResolver.HasUsableSosGapThresholds(config.SosCloseConfirmGapPts, config.SosCloseGapPts) ? "SOS" : "NORMAL_FALLBACK"
                         : "NORMAL")}");
+            }
+
+            // Trong global startup/recovery cooldown chỉ slot đang thỏa SOS mới được tiếp tục
+            // đánh giá close signal. Holding/post-open và toàn bộ close guard khác vẫn giữ nguyên.
+            if (globalCooldownActive && !sosActive)
+            {
+                continue;
             }
 
             var resolvedGap = SosCloseConfigResolver.ResolveGapThresholds(
@@ -343,6 +352,24 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 return PortfolioSnapshotResult.Empty;
             }
 
+            if (globalCooldownActive)
+            {
+                var remainingSeconds = Math.Max(
+                    0d,
+                    (globalCooldownUntilUtc!.Value - effectiveNow).TotalSeconds);
+                _logger?.Log(
+                    $"[SLOT][COOLDOWN][SOS_BYPASS] slot={winner.slot.SlotId} pairId={winner.slot.PairId} " +
+                    $"side={winner.slot.Side} source={winner.slot.SosActivationSource} " +
+                    $"closeMode={CloseModeLabel(winner.trigger)} remainingSeconds={remainingSeconds:F1} " +
+                    $"cooldownUntil={globalCooldownUntilUtc:O}");
+                uiNotices.Add(new PortfolioUiNotice(
+                    "SOS_COOLDOWN_BYPASS",
+                    winner.slot.SlotId,
+                    $"[SOS CLOSE][COOLDOWN BYPASS] Slot {winner.slot.SlotId} | " +
+                    $"Nguồn={winner.slot.SosActivationSource} | Close={CloseModeLabel(winner.trigger)} | " +
+                    $"Cooldown còn {remainingSeconds:F1}s"));
+            }
+
             // Reset both engines after a close trigger (matches TradingFlowEngine behavior).
             _openSignalEngine.Reset();
             winner.slot.CloseSignalEngine.Reset();
@@ -354,7 +381,15 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 UiNotices: uiNotices);
         }
 
-        // 4. OPEN path: only when no close is eligible and quota allows.
+        // 4. Global cooldown vẫn chặn toàn bộ Open và close thường.
+        if (globalCooldownActive)
+        {
+            return uiNotices.Count == 0
+                ? PortfolioSnapshotResult.Empty
+                : new PortfolioSnapshotResult(null, null, null, uiNotices);
+        }
+
+        // OPEN path: only when no close is eligible and quota allows.
         if (_state.CountLiveAndPendingTotal() < _state.MaxTotalOpens)
         {
             var triggers = _openSignalEngine.ProcessSnapshot(snapshot, config);
@@ -459,22 +494,32 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                     Reason: "NON_AUTO_CLOSE_IN_FLIGHT");
             }
 
+            var normalizedAction = (action ?? string.Empty).Trim().ToUpperInvariant();
+            var targetSlot = string.IsNullOrWhiteSpace(pairId)
+                ? null
+                : _state.GetSlotByPairId(pairId);
+            var sosCloseBypassesGlobalCooldown = normalizedAction == "CLOSE"
+                && targetSlot is { IsSosActive: true };
+            var bypassedGlobalCooldownRemaining = TimeSpan.Zero;
+
             if (_state.GlobalActionLockUntilUtc is { } lockUntilUtc
                 && requestedUtc < lockUntilUtc)
             {
-                var remaining = lockUntilUtc - requestedUtc;
-                _logger?.Log(
-                    $"[TRADE_GATE][BLOCKED] action={action} source={source} " +
-                    $"remainingMs={remaining.TotalMilliseconds:F0} lockUntil={lockUntilUtc:O}");
-                return new TradeActionGateResult(
-                    Acquired: false,
-                    LockUntilUtc: lockUntilUtc,
-                    Remaining: remaining,
-                    CooldownSeconds: 0,
-                    Reason: "GLOBAL_ACTION_COOLDOWN");
+                bypassedGlobalCooldownRemaining = lockUntilUtc - requestedUtc;
+                if (!sosCloseBypassesGlobalCooldown)
+                {
+                    _logger?.Log(
+                        $"[TRADE_GATE][BLOCKED] action={action} source={source} " +
+                        $"remainingMs={bypassedGlobalCooldownRemaining.TotalMilliseconds:F0} lockUntil={lockUntilUtc:O}");
+                    return new TradeActionGateResult(
+                        Acquired: false,
+                        LockUntilUtc: lockUntilUtc,
+                        Remaining: bypassedGlobalCooldownRemaining,
+                        CooldownSeconds: 0,
+                        Reason: "GLOBAL_ACTION_COOLDOWN");
+                }
             }
 
-            var normalizedAction = (action ?? string.Empty).Trim().ToUpperInvariant();
             var requestedType = normalizedAction switch
             {
                 "OPEN" => AutoTradeActionType.Open,
@@ -516,6 +561,16 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                     _state.GetSlotByPairId(pairId)?.SetSelectedPostCloseLockSeconds(
                         _state.LastSelectedPostCloseLockSeconds);
                 }
+            }
+
+            if (sosCloseBypassesGlobalCooldown && bypassedGlobalCooldownRemaining > TimeSpan.Zero)
+            {
+                _logger?.Log(
+                    $"[TRADE_GATE][SOS_RESET] pairId={pairId} slot={targetSlot!.SlotId} side={side} " +
+                    $"source={targetSlot.SosActivationSource} " +
+                    $"bypassedGlobalRemainingMs={bypassedGlobalCooldownRemaining.TotalMilliseconds:F0} " +
+                    $"sameActionSeconds={randomSec} postCloseSeconds={_state.LastSelectedPostCloseLockSeconds} " +
+                    $"dispatchAt={requestedUtc:O}");
             }
 
             _logger?.Log(

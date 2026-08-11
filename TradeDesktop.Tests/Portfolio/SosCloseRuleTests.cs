@@ -7,10 +7,18 @@ namespace TradeDesktop.Tests.Portfolio;
 
 public sealed class SosCloseRuleTests
 {
+    private sealed class CaptureLogger : ISlotLogger
+    {
+        public List<string> Messages { get; } = [];
+        public void Log(string message) => Messages.Add(message);
+    }
+
     private sealed class CaptureCloseEngine : ICloseSignalEngine
     {
         public GapSignalConfirmationConfig? LastConfig { get; private set; }
         public int GapResetCount { get; private set; }
+        public int ProcessCount { get; private set; }
+        public GapSignalTriggerResult? NextResult { get; set; }
 
         public GapSignalTriggerResult? ProcessSnapshot(
             GapSignalSnapshot snapshot,
@@ -18,8 +26,9 @@ public sealed class SosCloseRuleTests
             TradingOpenMode openMode,
             double? slotProfit = null)
         {
+            ProcessCount++;
             LastConfig = config;
-            return null;
+            return NextResult;
         }
 
         public void ResetGapState() => GapResetCount++;
@@ -136,4 +145,87 @@ public sealed class SosCloseRuleTests
         Assert.Equal(-8, engine.LastConfig.ClosePts);
         Assert.Equal(1, engine.GapResetCount);
     }
+
+    [Fact]
+    public void GlobalCooldown_OnlySosSlotWithCloseSignalCanTriggerClose()
+    {
+        var sosFactory = new CaptureFactory();
+        var logger = new CaptureLogger();
+        var coordinator = new PortfolioCoordinator(
+            new GapSignalConfirmationEngine(), sosFactory, logger, new Random(42));
+        coordinator.UpdateCooldownConfig(30, 30);
+        coordinator.UpdatePostOpenLockConfig(0, 0);
+        var now = DateTime.UtcNow;
+        coordinator.RecoverSlotsFromPersisted(new[]
+        {
+            new RecoveredSlotData(
+                1, "pair-sos", TradingPositionSide.Buy, TradingOpenMode.GapBuy,
+                101, 201, now.AddSeconds(-10), 0)
+        });
+        coordinator.UpdateProfit(101, 20);
+        sosFactory.Engine.NextResult = CloseTrigger(now);
+
+        var result = coordinator.ProcessSnapshot(
+            new GapSignalSnapshot(now, 100m, 101m, 100m, 101m, null, null, 1),
+            Config() with { SosTriggerAfterSeconds = 0 });
+
+        Assert.NotNull(result.CloseTrigger);
+        Assert.Equal("pair-sos", result.CloseTargetSlot!.PairId);
+        var notice = Assert.Single(result.UiNotices!);
+        Assert.Equal("SOS_COOLDOWN_BYPASS", notice.Code);
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[SLOT][COOLDOWN][SOS_BYPASS]")
+            && message.Contains("source=A_OPEN_DISTANCE")
+            && message.Contains("closeMode=SOS"));
+
+        var normalFactory = new CaptureFactory();
+        var normalCoordinator = new PortfolioCoordinator(
+            new GapSignalConfirmationEngine(), normalFactory, random: new Random(42));
+        normalCoordinator.UpdateCooldownConfig(30, 30);
+        normalCoordinator.RecoverSlotsFromPersisted(new[]
+        {
+            new RecoveredSlotData(
+                1, "pair-normal", TradingPositionSide.Buy, TradingOpenMode.GapBuy,
+                301, 401, now.AddSeconds(-10), 0)
+        });
+        normalCoordinator.UpdateProfit(301, 19);
+        normalFactory.Engine.NextResult = CloseTrigger(now);
+
+        var normalResult = normalCoordinator.ProcessSnapshot(
+            new GapSignalSnapshot(now, 100m, 101m, 100m, 101m, null, null, 1),
+            Config() with { SosTriggerAfterSeconds = 0 });
+
+        Assert.Null(normalResult.CloseTrigger);
+        Assert.Equal(0, normalFactory.Engine.ProcessCount);
+    }
+
+    [Fact]
+    public void GlobalCooldown_SosWithoutCloseSignal_DoesNotClose()
+    {
+        var factory = new CaptureFactory();
+        var coordinator = new PortfolioCoordinator(
+            new GapSignalConfirmationEngine(), factory, random: new Random(42));
+        coordinator.UpdateCooldownConfig(30, 30);
+        var now = DateTime.UtcNow;
+        coordinator.RecoverSlotsFromPersisted(new[]
+        {
+            new RecoveredSlotData(
+                1, "pair-sos", TradingPositionSide.Buy, TradingOpenMode.GapBuy,
+                101, 201, now.AddSeconds(-10), 0)
+        });
+        coordinator.UpdateProfit(101, 20);
+
+        var result = coordinator.ProcessSnapshot(
+            new GapSignalSnapshot(now, 100m, 101m, 100m, 101m, null, null, 1),
+            Config() with { SosTriggerAfterSeconds = 0 });
+
+        Assert.Null(result.CloseTrigger);
+        Assert.Equal(1, factory.Engine.ProcessCount);
+    }
+
+    private static GapSignalTriggerResult CloseTrigger(DateTime now) => new(
+        true, GapSignalAction.Close, GapSignalTriggerType.CloseByGapSell, GapSignalSide.Sell,
+        Array.Empty<int>(), new[] { -8 }, null, -8, now,
+        100m, 101m, 100m, 101m, null, null, null, null, 1,
+        CloseGapMode: CloseGapMode.Sos);
 }

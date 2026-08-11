@@ -273,6 +273,10 @@ TradeDesktop.Tests/            # xUnit tests
   post-close duration được chọn tại dispatch; per-slot post-open được chọn tại Open confirm.
 - `GlobalActionLockUntilUtc` chỉ còn dành cho startup/recovery cooldown. Recovery chỉ tạo timer nếu
   legacy `GlobalCooldownMinSec/MaxSec` lớn hơn 0; runtime hiện sync hai giá trị này về 0.
+- Ngoại lệ SOS: trong global startup/recovery cooldown, chỉ slot đang thỏa SOS tại cùng snapshot và có
+  close signal hợp lệ mới được bypass global timer. Holding, post-open, Min Profit, transition gate và
+  non-auto barrier vẫn áp dụng. Dispatch này phải ghi nhận như Auto Close mới, random lại same-action và
+  post-close theo DB; SOS không được bypass cooldown transition vừa tạo bởi chính close trước đó.
 - Manual buttons legacy hidden (Phase 6 `IsManualTradeButtonsVisible=false`). Manual per-pair là path riêng,
   bypass auto cooldown nhưng bắt buộc qua non-auto barrier và physical close mutex.
 

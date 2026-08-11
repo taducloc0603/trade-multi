@@ -116,11 +116,15 @@
 [SLOT][RECOVERY]        Restored slot 1: side=Buy mode=GapBuy ticketA=12345 ticketB=67890 openConfirmedAt=2024-01-15T14:20:30Z holding=300s
 [SLOT][COOLDOWN][BLOCK] ProcessSnapshot bị skip — cooldown active (remaining 45.3s, until 14:32:15 UTC)
 [SLOT][COOLDOWN][CLEAR] ProcessSnapshot resumed — cooldown đã hết
+[SLOT][COOLDOWN][SOS_BYPASS] slot=3 pairId=AUTO-0003 side=Buy source=A_OPEN_DISTANCE closeMode=TP remainingSeconds=12.4 cooldownUntil=...
+[TRADE_GATE][SOS_RESET] pairId=AUTO-0003 slot=3 side=Buy source=A_OPEN_DISTANCE bypassedGlobalRemainingMs=12400 sameActionSeconds=30 postCloseSeconds=60 dispatchAt=...
 [SLOT][COOLDOWN][SKIP]  cooldown=0s (config min=5/max=15) — reason=open-dispatch
 [SLOT][COOLDOWN][KEEP]  rolled=8s không extend lock (existing đến 14:30:45 UTC, remaining=45.2s, proposed đến 14:30:43 UTC) — reason=close-dispatch
 ```
 
 **Case đặc biệt:**
+- `[SLOT][COOLDOWN][SOS_BYPASS]` → slot SOS có close signal hợp lệ được đi xuyên global startup/recovery cooldown; các guard close khác vẫn giữ nguyên.
+- `[TRADE_GATE][SOS_RESET]` → router đã nhận SOS Close như Auto Close mới và tạo lại same-action/post-close cooldown theo DB.
 - `[SLOT][COOLDOWN][KEEP]` → cooldown đang chạy, roll mới ngắn hơn nên giữ nguyên (MAX semantics — Rule B)
 - `[SLOT][COOLDOWN][SKIP] cooldown=0s` → config min=max=0, hệ thống không cooldown. Cần review nếu unexpected
 - `[SLOT][ABORT]` → slot bị remove khỏi PendingOpen (thường do timeout hoặc close leg confirm trước khi open resolve). Check có lệnh thật trên sàn không

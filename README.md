@@ -119,7 +119,7 @@ Rule theo mode đã mở:
   - tick cuối: `GapBuy >= ClosePts`
   - `LimitMaxGap` áp dụng tương tự
 
-**SOS close path (theo từng slot):** SOS bật khi một trong hai điều kiện đúng: khoảng cách tuyệt đối giữa giá hiện tại và giá mở chân A `>= sos_trigger_a_open_distance_pts` (Buy dùng Bid A, Sell dùng Ask A; `0` là tắt), hoặc tuổi lệnh `>= sos_trigger_after_seconds` (`0` là tắt). Khoảng cách chân A được xét cả khi giá chạy thuận và chạy ngược chiều; nếu khoảng cách quay xuống dưới ngưỡng trước khi đủ thời gian thì slot trở lại Normal. Khi điều kiện thời gian đã đạt thì SOS tiếp tục bật. SOS giữ nguyên cơ chế window/hold của Normal nhưng kiểm tra theo chiều hồi vào trong: `GapSell` duy trì `<= +abs(sos_close_confirm_gap_pts)` và tick cuối `<= +abs(sos_close_gap_pts)` để phát `CloseByGapSell`; `GapBuy` duy trì `>= -abs(sos_close_confirm_gap_pts)` và tick cuối `>= -abs(sos_close_gap_pts)` để phát `CloseByGapBuy`. Tick đi ra ngoài ngưỡng confirm sẽ reset window và tick hợp lệ tiếp theo mở chu kỳ mới. Nếu một trong hai ngưỡng Gap SOS bằng `0`, hệ thống fail-safe về bộ Gap thường. Mỗi lần đổi Normal ↔ SOS chỉ reset window Gap của slot, không reset TP window; log chỉ ghi lúc chuyển trạng thái để tránh spam. Trước khi dispatch, Gap được kiểm tra lại bằng đúng mode của signal và phải không vượt `limit_max_gap`.
+**SOS close path (theo từng slot):** SOS bật khi một trong hai điều kiện đúng: khoảng cách tuyệt đối giữa giá hiện tại và giá mở chân A `>= sos_trigger_a_open_distance_pts` (Buy dùng Bid A, Sell dùng Ask A; `0` là tắt), hoặc tuổi lệnh `>= sos_trigger_after_seconds` (`0` là tắt). Khoảng cách chân A được xét cả khi giá chạy thuận và chạy ngược chiều; nếu khoảng cách quay xuống dưới ngưỡng trước khi đủ thời gian thì slot trở lại Normal. Khi điều kiện thời gian đã đạt thì SOS tiếp tục bật. SOS giữ nguyên cơ chế window/hold của Normal nhưng kiểm tra theo chiều hồi vào trong: `GapSell` duy trì `<= +abs(sos_close_confirm_gap_pts)` và tick cuối `<= +abs(sos_close_gap_pts)` để phát `CloseByGapSell`; `GapBuy` duy trì `>= -abs(sos_close_confirm_gap_pts)` và tick cuối `>= -abs(sos_close_gap_pts)` để phát `CloseByGapBuy`. Tick đi ra ngoài ngưỡng confirm sẽ reset window và tick hợp lệ tiếp theo mở chu kỳ mới. Nếu một trong hai ngưỡng Gap SOS bằng `0`, hệ thống fail-safe về bộ Gap thường. Mỗi lần đổi Normal ↔ SOS chỉ reset window Gap của slot, không reset TP window; log chỉ ghi lúc chuyển trạng thái để tránh spam. Trước khi dispatch, Gap được kiểm tra lại bằng đúng mode của signal và phải không vượt `limit_max_gap`. Trong global startup/recovery cooldown, close thường và mọi Open vẫn bị chặn; riêng slot đang thỏa SOS tại cùng snapshot được tiếp tục đánh giá và chỉ bypass global cooldown khi có close signal hợp lệ. Holding, post-open, Min Profit, transition gate và các close guard khác vẫn áp dụng. SOS Close được ghi nhận như Auto Close mới tại dispatch, sinh lại random same-action và post-close theo DB; vì vậy hành động tiếp theo phải chờ theo ma trận #9–#16.
 
 **TP close path** (song song với gap close, thắng nếu trigger trước):
 
@@ -478,6 +478,7 @@ Các lock không phải những khoảng thời gian nối tiếp để cộng t
 | Auto Close slot X | Holding floor + post-open riêng của X | Dùng deadline muộn hơn; Open slot Y không refresh timer của X |
 | Auto Close sau một Auto Close khác | Same-action lock + post-open riêng của slot sắp đóng | Phải pass cả hai; không cộng duration |
 | Auto Open sau Auto Close | Post-close từ dispatch + post-close từ confirm | Cùng một duration; confirm anchor thường muộn hơn nên chi phối |
+| SOS Close trong global startup/recovery cooldown | Bypass global cooldown cũ + post-open/transition/close guards | Chỉ bypass global timer; khi dispatch sẽ trở thành Auto Close mới và tạo lại same-action/post-close |
 | Manual/Recovery Close | Non-auto barrier + physical dispatch mutex | Bypass Auto timers; tạm pause Auto đến khi MMF xác nhận hoàn tất |
 
 Post-open được kiểm tra ở nhiều lớp nhưng dùng đúng một deadline
@@ -571,7 +572,7 @@ ViewModel push config xuống coordinator qua `SyncPortfolioCoordinatorConfig()`
 ```
 1. Cache lastSeen* hold range cho close-gate fallback.
 2. Resolve effectiveNow với wall-clock tolerance.
-3. Check startup cooldown/non-auto barrier → return Empty nếu active.
+3. Check non-auto barrier → return Empty nếu active. Nếu startup/recovery cooldown active thì chỉ tiếp tục close scan cho slot đang thỏa SOS; close thường và Open vẫn bị chặn.
 4. OPEN path:
    - Quota A allow → openSignalEngine.ProcessSnapshot → trigger.
    - Loop triggers, skip nếu CanOpenNewSlot fail (logs skip reason).

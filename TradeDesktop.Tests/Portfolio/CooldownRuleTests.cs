@@ -7,8 +7,14 @@ namespace TradeDesktop.Tests.Portfolio;
 
 public sealed class CooldownRuleTests
 {
-    private static PortfolioCoordinator CreateCoordinator(int seed = 42)
-        => new(new GapSignalConfirmationEngine(), new CloseSignalEngineFactory(), null, new Random(seed));
+    private sealed class CaptureLogger : ISlotLogger
+    {
+        public List<string> Messages { get; } = [];
+        public void Log(string message) => Messages.Add(message);
+    }
+
+    private static PortfolioCoordinator CreateCoordinator(int seed = 42, ISlotLogger? logger = null)
+        => new(new GapSignalConfirmationEngine(), new CloseSignalEngineFactory(), logger, new Random(seed));
 
     private static GapSignalTriggerResult Trigger(GapSignalSide side = GapSignalSide.Buy)
         => new(true, GapSignalAction.Open,
@@ -159,6 +165,78 @@ public sealed class CooldownRuleTests
             now.AddSeconds(selected - 1), "OPEN", "early", side: TradingPositionSide.Buy).Acquired);
         Assert.True(coordinator.TryAcquireTradeAction(
             now.AddSeconds(selected), "OPEN", "ready", side: TradingPositionSide.Buy).Acquired);
+    }
+
+    [Fact]
+    public void SosClose_BypassesGlobalCooldown_ThenResetsTransitionCooldowns()
+    {
+        var logger = new CaptureLogger();
+        var coordinator = CreateCoordinator(logger: logger);
+        coordinator.UpdateCooldownConfig(5, 5);
+        coordinator.UpdateSameActionLockConfig(19, 19);
+        coordinator.UpdatePostCloseLockConfig(23, 23);
+        coordinator.UpdatePostOpenLockConfig(0, 0);
+        var now = DateTime.UtcNow;
+        coordinator.RecoverSlotsFromPersisted(new[]
+        {
+            new RecoveredSlotData(
+                1, "p1", TradingPositionSide.Buy, TradingOpenMode.GapBuy,
+                101, 201, now.AddMinutes(-1), 0),
+            new RecoveredSlotData(
+                2, "p2", TradingPositionSide.Sell, TradingOpenMode.GapSell,
+                102, 202, now.AddMinutes(-1), 0)
+        });
+        coordinator.GetSlotByPairId("p1")!.UpdateSosMode(true, "A_OPEN_DISTANCE");
+        Assert.Equal("GLOBAL_ACTION_COOLDOWN", coordinator.TryAcquireTradeAction(
+            now, "OPEN", "open-during-global", side: TradingPositionSide.Buy).Reason);
+        Assert.Equal("GLOBAL_ACTION_COOLDOWN", coordinator.TryAcquireTradeAction(
+            now, "CLOSE", "normal-close-during-global",
+            side: TradingPositionSide.Sell, pairId: "p2").Reason);
+        coordinator.GetSlotByPairId("p2")!.UpdateSosMode(true, "TIME");
+
+        var sosClose = coordinator.TryAcquireTradeAction(
+            now, "CLOSE", "sos-close", side: TradingPositionSide.Buy, pairId: "p1");
+
+        Assert.True(sosClose.Acquired);
+        Assert.Equal(19, sosClose.CooldownSeconds);
+        Assert.Equal(23, coordinator.LastSelectedPostCloseLockSeconds);
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[TRADE_GATE][SOS_RESET]")
+            && message.Contains("sameActionSeconds=19")
+            && message.Contains("postCloseSeconds=23"));
+        var nextClose = coordinator.TryAcquireTradeAction(
+            now.AddSeconds(18), "CLOSE", "next-close", side: TradingPositionSide.Sell, pairId: "p2");
+        Assert.False(nextClose.Acquired);
+        Assert.Equal("CLOSE_TO_CLOSE_RANDOM_LOCK", nextClose.Reason);
+        var nextOpen = coordinator.TryAcquireTradeAction(
+            now.AddSeconds(22), "OPEN", "next-open", side: TradingPositionSide.Buy);
+        Assert.False(nextOpen.Acquired);
+        Assert.Equal("POST_CLOSE_OPEN_LOCK", nextOpen.Reason);
+        Assert.True(coordinator.TryAcquireTradeAction(
+            now.AddSeconds(23), "OPEN", "open-ready", side: TradingPositionSide.Buy).Acquired);
+    }
+
+    [Fact]
+    public void SosClose_DuringGlobalCooldown_StillRespectsPerSlotPostOpenLock()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateCooldownConfig(30, 30);
+        coordinator.UpdatePostOpenLockConfig(60, 60);
+        var now = DateTime.UtcNow;
+        coordinator.RecoverSlotsFromPersisted(new[]
+        {
+            new RecoveredSlotData(
+                1, "young-sos", TradingPositionSide.Buy, TradingOpenMode.GapBuy,
+                101, 201, now.AddSeconds(-5), 0)
+        });
+        coordinator.GetSlotByPairId("young-sos")!.UpdateSosMode(true, "A_OPEN_DISTANCE");
+
+        var result = coordinator.TryAcquireTradeAction(
+            now, "CLOSE", "young-sos-close",
+            side: TradingPositionSide.Buy, pairId: "young-sos");
+
+        Assert.False(result.Acquired);
+        Assert.Equal("PER_SLOT_POST_OPEN_LOCK", result.Reason);
     }
 
     [Fact]
