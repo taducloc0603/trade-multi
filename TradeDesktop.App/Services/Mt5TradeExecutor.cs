@@ -149,7 +149,17 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
                         Detail: $"Close {request.Exchange} skipped: ticket={request.Ticket} row=unresolved rowCount={rowCount} source=Mt5TradeExecutor");
                 }
 
-                var rowIndex = Math.Max(0, Math.Min(request.RowIndex.Value, rowCount - 1));
+                if (request.RowIndex.Value < 0 || request.RowIndex.Value >= rowCount)
+                {
+                    SafeLog($"[MT5][WARN] Close leg {request.Exchange} ticket={request.Ticket} failed: rowIndex={request.RowIndex.Value} outside UI rowCount={rowCount}");
+                    return new ManualTradeLegResult(
+                        Exchange: request.Exchange,
+                        Action: "CLOSE",
+                        Success: false,
+                        Detail: $"Close {request.Exchange} skipped: ticket={request.Ticket} row={request.RowIndex.Value} rowCount={rowCount} error=ROW_INDEX_OUT_OF_RANGE source=Mt5TradeExecutor");
+                }
+
+                var rowIndex = request.RowIndex.Value;
                 var closeResult = NativeMethodsMt5.ClosePositionMt5(ctx, rowIndex);
                 var success = closeResult == 1;
                 SafeLog($"[MT5][{(success ? "INFO" : "WARN")}] Close leg {request.Exchange} ticket={request.Ticket} row={rowIndex} result={(success ? "ok" : "failed")}");

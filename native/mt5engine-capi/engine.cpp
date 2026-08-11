@@ -112,34 +112,55 @@ int UpdateRowCount(Context* ctx)
     return static_cast<int>(ctx->cachedRows);
 }
 
-bool ClosePositionMT5(Context* ctx, int rowIdx)
+static bool SelectOnlyRow(Context* ctx, int rowIdx)
 {
-    if (!ctx || !ctx->hLV || !IsWindow(ctx->hLV) || !ctx->hProc || !ctx->hMT5)
+    if (!ctx || !ctx->hLV || !IsWindow(ctx->hLV) || !ctx->hProc || rowIdx < 0)
         return false;
 
-    LVITEM local    = {};
+    LVITEM local = {};
     local.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-    local.state     = LVIS_SELECTED | LVIS_FOCUSED;
 
     LVITEM* remote = static_cast<LVITEM*>(
         VirtualAllocEx(ctx->hProc, nullptr, sizeof(LVITEM), MEM_COMMIT, PAGE_READWRITE));
     if (!remote) return false;
 
-    WriteProcessMemory(ctx->hProc, remote, &local, sizeof(LVITEM), nullptr);
-    PostMessage(ctx->hLV, LVM_SETITEMSTATE, static_cast<WPARAM>(rowIdx), reinterpret_cast<LPARAM>(remote));
+    bool success = false;
+    do {
+        // Clear any row that the user (or a previous close) left selected. The MT
+        // close command acts on the selection, so retaining it can close multiple slots.
+        local.state = 0;
+        if (!WriteProcessMemory(ctx->hProc, remote, &local, sizeof(LVITEM), nullptr))
+            break;
 
-    using Pair = std::pair<HANDLE, LPVOID>;
-    HANDLE hProcCopy = ctx->hProc;
-    HANDLE hThread = CreateThread(nullptr, 0,
-        [](LPVOID arg) -> DWORD {
-            auto* p = reinterpret_cast<Pair*>(arg);
-            Sleep(50);
-            VirtualFreeEx(p->first, p->second, 0, MEM_RELEASE);
-            delete p;
-            return 0;
-        },
-        new Pair(hProcCopy, remote), 0, nullptr);
-    if (hThread) CloseHandle(hThread);
+        DWORD_PTR clearResult = 0;
+        if (!SendMessageTimeout(ctx->hLV, LVM_SETITEMSTATE, static_cast<WPARAM>(-1),
+                                reinterpret_cast<LPARAM>(remote),
+                                SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, &clearResult))
+            break;
+
+        local.state = LVIS_SELECTED | LVIS_FOCUSED;
+        if (!WriteProcessMemory(ctx->hProc, remote, &local, sizeof(LVITEM), nullptr))
+            break;
+
+        DWORD_PTR selectResult = 0;
+        if (!SendMessageTimeout(ctx->hLV, LVM_SETITEMSTATE, static_cast<WPARAM>(rowIdx),
+                                reinterpret_cast<LPARAM>(remote),
+                                SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, &selectResult))
+            break;
+
+        success = true;
+    } while (false);
+
+    VirtualFreeEx(ctx->hProc, remote, 0, MEM_RELEASE);
+    return success;
+}
+
+bool ClosePositionMT5(Context* ctx, int rowIdx)
+{
+    if (!ctx || !ctx->hLV || !IsWindow(ctx->hLV) || !ctx->hProc || !ctx->hMT5)
+        return false;
+
+    if (!SelectOnlyRow(ctx, rowIdx)) return false;
 
     PostMessage(ctx->hMT5, WM_COMMAND, MAKEWPARAM(33033, 0), 0);
     return true;
@@ -150,29 +171,7 @@ bool ClosePositionMT4(Context* ctx, int rowIdx)
     if (!ctx || !ctx->hLV || !IsWindow(ctx->hLV) || !ctx->hProc || !ctx->hMT5)
         return false;
 
-    LVITEM local    = {};
-    local.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-    local.state     = LVIS_SELECTED | LVIS_FOCUSED;
-
-    LVITEM* remote = static_cast<LVITEM*>(
-        VirtualAllocEx(ctx->hProc, nullptr, sizeof(LVITEM), MEM_COMMIT, PAGE_READWRITE));
-    if (!remote) return false;
-
-    WriteProcessMemory(ctx->hProc, remote, &local, sizeof(LVITEM), nullptr);
-    PostMessage(ctx->hLV, LVM_SETITEMSTATE, static_cast<WPARAM>(rowIdx), reinterpret_cast<LPARAM>(remote));
-
-    using Pair = std::pair<HANDLE, LPVOID>;
-    HANDLE hProcCopy = ctx->hProc;
-    HANDLE hThread = CreateThread(nullptr, 0,
-        [](LPVOID arg) -> DWORD {
-            auto* p = reinterpret_cast<Pair*>(arg);
-            Sleep(50);
-            VirtualFreeEx(p->first, p->second, 0, MEM_RELEASE);
-            delete p;
-            return 0;
-        },
-        new Pair(hProcCopy, remote), 0, nullptr);
-    if (hThread) CloseHandle(hThread);
+    if (!SelectOnlyRow(ctx, rowIdx)) return false;
 
     PostMessage(ctx->hMT5, WM_COMMAND, MAKEWPARAM(35451, 0), 0);
     return true;
