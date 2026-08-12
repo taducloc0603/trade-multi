@@ -194,6 +194,16 @@ public sealed class DashboardViewModel : ObservableObject
         public bool WaitingStarted { get; set; }
     }
 
+    private sealed record SignalLegDiagnostic(
+        string Exchange,
+        string? Symbol,
+        string TradeType,
+        ulong Ticket,
+        double? RequestedPrice,
+        double ActualPrice,
+        double? SlippagePts,
+        long? ExecutionMs);
+
     private sealed class ActiveAutoCycleState
     {
         public int Slot { get; init; }
@@ -285,6 +295,7 @@ public sealed class DashboardViewModel : ObservableObject
     private sealed class SignalLifecycleContext
     {
         public Guid SignalId { get; init; } = Guid.NewGuid();
+        public DateTime DetectedAtUtc { get; init; } = DateTime.UtcNow;
         public required GapSignalAction Action { get; init; }
         public required GapSignalSide Side { get; init; }
         public bool IsHedge { get; init; }
@@ -293,6 +304,8 @@ public sealed class DashboardViewModel : ObservableObject
         public TradingPositionSide OriginalSide { get; init; }
         public string? PairId { get; set; }
         public int? SlotId { get; set; }
+        public SignalLegDiagnostic? LegA { get; set; }
+        public SignalLegDiagnostic? LegB { get; set; }
         public bool FinalOutcomeLogged { get; set; }
     }
 
@@ -6105,7 +6118,6 @@ public sealed class DashboardViewModel : ObservableObject
 
             _openRequestByTicket[newRecord.Ticket] = pendingRequest;
             _pairIdByTicket[newRecord.Ticket] = pendingRequest.PairId;
-            MarkOpenPairLegConfirmed(pendingRequest, newRecord.Ticket, newRecord.Symbol, newRecord.Lot);
             var openExecutionMs = ComputeExecutionMilliseconds(
                 newRecord.OpenEaTimeLocal,
                 pendingRequest.AppOpenRequestRawMs);
@@ -6125,6 +6137,17 @@ public sealed class DashboardViewModel : ObservableObject
 
             // Phase 2: Open Confirm signal log
             var openSlippage = CalculateTradeOpenSlippage(newRecord, _runtimeConfigState.CurrentPoint);
+            CaptureSignalLegDiagnostic(
+                pendingRequest.PairId,
+                pendingRequest.ExchangeLabel,
+                newRecord.Symbol,
+                newRecord.TradeType,
+                newRecord.Ticket,
+                pendingRequest.ExpectedPrice,
+                newRecord.Price,
+                openSlippage,
+                openExecutionMs);
+            MarkOpenPairLegConfirmed(pendingRequest, newRecord.Ticket, newRecord.Symbol, newRecord.Lot);
             NotifySlippageAndDelayIfNeeded(
                 isOpen: true,
                 exchange: pendingRequest.ExchangeLabel,
@@ -6325,6 +6348,16 @@ public sealed class DashboardViewModel : ObservableObject
 
             // Phase 2: Close Confirm signal log
             var closeSlippage = CalculateHistoryCloseSlippage(record, _runtimeConfigState.CurrentPoint);
+            CaptureSignalLegDiagnostic(
+                pendingRequest.PairId,
+                pendingRequest.ExchangeLabel,
+                record.Symbol,
+                record.TradeType,
+                record.Ticket,
+                pendingRequest.ExpectedPrice,
+                record.ClosePrice,
+                closeSlippage,
+                closeExecutionMs);
             NotifySlippageAndDelayIfNeeded(
                 isOpen: false,
                 exchange: pendingRequest.ExchangeLabel,
@@ -8236,6 +8269,7 @@ public sealed class DashboardViewModel : ObservableObject
 
         var context = new SignalLifecycleContext
         {
+            DetectedAtUtc = trigger.TriggeredAtUtc,
             Action = trigger.Action,
             Side = trigger.PrimarySide,
             IsHedge = original is not null,
@@ -8252,6 +8286,8 @@ public sealed class DashboardViewModel : ObservableObject
         var context = GetOrCreateSignalContext(trigger);
         var signalId = context.SignalId.ToString("N");
         var gap = trigger.PrimarySide == GapSignalSide.Buy ? trigger.LastBuyGap : trigger.LastSellGap;
+        var allGaps = trigger.PrimarySide == GapSignalSide.Buy ? trigger.BuyGaps : trigger.SellGaps;
+        var metrics = _runtimeConfigState.CurrentDashboardMetrics;
 
         if (trigger.Action == GapSignalAction.Open)
         {
@@ -8268,7 +8304,14 @@ public sealed class DashboardViewModel : ObservableObject
                 ("originalSide", context.IsHedge ? context.OriginalSide : null),
                 ("originalSlot", context.OriginalSlot),
                 ("originalPairId", context.OriginalPairId),
-                ("gap", gap)));
+                ("gap", gap),
+                ("allGaps", FormatSignalValues(allGaps)),
+                ("aBid", trigger.LastABid),
+                ("aAsk", trigger.LastAAsk),
+                ("aSpread", metrics?.ExchangeA.Spread),
+                ("bBid", trigger.LastBBid),
+                ("bAsk", trigger.LastBAsk),
+                ("bSpread", metrics?.ExchangeB.Spread)));
             return;
         }
 
@@ -8283,16 +8326,118 @@ public sealed class DashboardViewModel : ObservableObject
             "SIGNAL_CLOSE_SOS" => "Phát hiện tín hiệu đóng khẩn cấp theo điều kiện SOS",
             _ => "Phát hiện tín hiệu đóng vị thế theo Gap thông thường"
         };
+        var slot = context.SlotId.HasValue
+            ? _portfolioCoordinator.LiveSlots.Concat(_portfolioCoordinator.PendingCloseSlots)
+                .FirstOrDefault(candidate => candidate.SlotId == context.SlotId.Value)
+            : null;
+        var isBuyPositionA = trigger.TriggerType == GapSignalTriggerType.CloseByGapSell;
+        var isBuyPositionB = !isBuyPositionA;
+        var closePriceA = SignalLogFormatter.ResolveClosePrice(trigger.LastABid, trigger.LastAAsk, isBuyPositionA);
+        var closePriceB = SignalLogFormatter.ResolveClosePrice(trigger.LastBBid, trigger.LastBAsk, isBuyPositionB);
         AddSignalLog(SignalLifecycleLogFormatter.Create(
             closeEvent,
             closeDescription,
             SignalLogLevel.Info,
             ("signalId", signalId),
+            ("pairId", context.PairId),
+            ("slot", context.SlotId),
+            ("aType", isBuyPositionA ? "BUY" : "SELL"),
+            ("aSymbol", metrics?.ExchangeA.Symbol ?? "-"),
+            ("aClosePrice", closePriceA),
+            ("bType", isBuyPositionB ? "BUY" : "SELL"),
+            ("bSymbol", metrics?.ExchangeB.Symbol ?? "-"),
+            ("bClosePrice", closePriceB),
             ("side", trigger.PrimarySide),
+            ("trigger", trigger.TriggerType),
+            ("reason", trigger.CloseReason),
             ("gap", gap),
             ("mode", trigger.CloseGapMode),
             ("profit", trigger.CloseTpProfit),
-            ("target", trigger.CloseTpTarget)));
+            ("target", trigger.CloseTpTarget),
+            ("tpProfits", FormatSignalValues(trigger.CloseTpProfits)),
+            ("profitA", slot?.LastProfitA),
+            ("profitB", slot?.LastProfitB),
+            ("totalProfit", slot?.LastProfitSnapshot),
+            ("aBid", trigger.LastABid),
+            ("aAsk", trigger.LastAAsk),
+            ("bBid", trigger.LastBBid),
+            ("bAsk", trigger.LastBAsk)));
+    }
+
+    private static string? FormatSignalValues<T>(IReadOnlyList<T>? values)
+        => values is null || values.Count == 0
+            ? null
+            : string.Join("|", values.Select(value => value is IFormattable formattable
+                ? formattable.ToString(null, CultureInfo.InvariantCulture)
+                : value?.ToString() ?? "-"));
+
+    private void CaptureSignalLegDiagnostic(
+        string pairId,
+        string exchange,
+        string? symbol,
+        int tradeType,
+        ulong ticket,
+        double? requestedPrice,
+        double actualPrice,
+        double? slippagePts,
+        long? executionMs)
+    {
+        if (!_signalContextByPairId.TryGetValue(pairId, out var context))
+        {
+            context = _closeSignalContextBySlot.Values.FirstOrDefault(candidate => candidate.PairId == pairId);
+            if (context is null)
+            {
+                return;
+            }
+        }
+
+        var diagnostic = new SignalLegDiagnostic(
+            exchange,
+            symbol,
+            SignalLogFormatter.TradeTypeString(tradeType),
+            ticket,
+            requestedPrice,
+            actualPrice,
+            slippagePts,
+            executionMs);
+        if (string.Equals(exchange, "A", StringComparison.OrdinalIgnoreCase))
+        {
+            context.LegA = diagnostic;
+        }
+        else if (string.Equals(exchange, "B", StringComparison.OrdinalIgnoreCase))
+        {
+            context.LegB = diagnostic;
+        }
+    }
+
+    private static void AddLegOutcomeFields(
+        List<(string Name, object? Value)> fields,
+        string prefix,
+        SignalLegDiagnostic? leg)
+    {
+        if (leg is null)
+        {
+            return;
+        }
+
+        fields.Add(($"{prefix}Type", leg?.TradeType));
+        fields.Add(($"{prefix}Symbol", leg?.Symbol));
+        fields.Add(($"{prefix}Ticket", leg?.Ticket));
+        fields.Add(($"{prefix}RequestedPrice", leg?.RequestedPrice));
+        fields.Add(($"{prefix}ActualPrice", leg?.ActualPrice));
+        fields.Add(($"{prefix}SlippagePts", leg?.SlippagePts));
+        fields.Add(($"{prefix}ExecutionMs", leg?.ExecutionMs));
+    }
+
+    private static void AddFieldIfValue(
+        List<(string Name, object? Value)> fields,
+        string name,
+        object? value)
+    {
+        if (value is not null)
+        {
+            fields.Add((name, value));
+        }
     }
 
     private void LogSignalOutcome(
@@ -8329,9 +8474,67 @@ public sealed class DashboardViewModel : ObservableObject
             ("pairId", pairId ?? context.PairId),
             ("slot", slotId ?? context.SlotId),
             ("side", context.Side),
-            ("reasonCode", string.IsNullOrWhiteSpace(reasonCode) ? null : reasonCode)
+            ("signalAgeMs", Math.Max(0d, (DateTime.UtcNow - context.DetectedAtUtc).TotalMilliseconds).ToString("0", CultureInfo.InvariantCulture))
         };
-        fields.AddRange(extraFields);
+        if (!string.IsNullOrWhiteSpace(reasonCode))
+        {
+            fields.Add(("reasonCode", reasonCode));
+        }
+
+        var resolvedPairId = pairId ?? context.PairId;
+        var slot = !string.IsNullOrWhiteSpace(resolvedPairId)
+            ? _portfolioCoordinator.GetSlotByPairId(resolvedPairId)
+            : (slotId ?? context.SlotId) is { } resolvedSlotId
+                ? _portfolioCoordinator.LiveSlots.Concat(_portfolioCoordinator.PendingCloseSlots)
+                    .FirstOrDefault(candidate => candidate.SlotId == resolvedSlotId)
+                : null;
+        var positionAgeSeconds = slot?.OpenConfirmedAtUtc is { } openedAt
+            ? Math.Max(0d, (DateTime.UtcNow - openedAt).TotalSeconds)
+            : (double?)null;
+
+        if (context.Action == GapSignalAction.Close)
+        {
+            AddFieldIfValue(fields, "profitA", slot?.LastProfitA);
+            AddFieldIfValue(fields, "profitB", slot?.LastProfitB);
+            AddFieldIfValue(fields, "totalProfit", slot?.LastProfitSnapshot);
+            AddFieldIfValue(fields, "positionAgeSeconds", positionAgeSeconds);
+        }
+
+        if (reasonCode is "QUOTA_TOTAL_FULL" or "QUOTA_BUY_FULL" or "QUOTA_SELL_FULL")
+        {
+            var quota = _portfolioCoordinator.RandomQuotaState;
+            fields.Add(("currentBuy", _portfolioCoordinator.LiveBuyCount));
+            fields.Add(("currentSell", _portfolioCoordinator.LiveSellCount));
+            fields.Add(("currentTotal", _portfolioCoordinator.LiveAndPendingTotalCount));
+            fields.Add(("effectiveBuyQuota", quota.EffectiveMaxBuy));
+            fields.Add(("effectiveSellQuota", quota.EffectiveMaxSell));
+            fields.Add(("randomCycle", quota.CycleNumber));
+        }
+
+        if (reasonCode is "LATENCY_GUARD" or "SPREAD_GUARD" or "PRICE_FREEZE_GUARD" or "CONNECTION_UNHEALTHY")
+        {
+            var metrics = _runtimeConfigState.CurrentDashboardMetrics;
+            AddFieldIfValue(fields, "aSpread", metrics?.ExchangeA.Spread);
+            AddFieldIfValue(fields, "bSpread", metrics?.ExchangeB.Spread);
+            AddFieldIfValue(fields, "aLatencyMs", metrics?.ExchangeA.LatencyMs);
+            AddFieldIfValue(fields, "bLatencyMs", metrics?.ExchangeB.LatencyMs);
+        }
+
+        if (_portfolioCoordinator.GlobalActionLockUntilUtc is { } lockUntil)
+        {
+            var lockRemainingMs = Math.Max(0d, (lockUntil - DateTime.UtcNow).TotalMilliseconds);
+            if (lockRemainingMs > 0d)
+            {
+                fields.Add(("globalLockRemainingMs", lockRemainingMs));
+            }
+        }
+
+        if (outcome is "CONFIRMED" or "FAILED")
+        {
+            AddLegOutcomeFields(fields, "a", context.LegA);
+            AddLegOutcomeFields(fields, "b", context.LegB);
+        }
+        fields.AddRange(extraFields.Where(field => field.Value is not null));
         AddSignalLog(SignalLifecycleLogFormatter.Create(eventType, description, level, fields.ToArray()));
         context.FinalOutcomeLogged = true;
         CleanupSignalContext(context);

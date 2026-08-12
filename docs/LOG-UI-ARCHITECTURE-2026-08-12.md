@@ -44,8 +44,33 @@ Collection Signal chỉ nhận `SignalLogItem` có cấu trúc. Các event chín
 - `SIGNAL_CLOSE_SOS`
 - Outcome tương ứng: `CONFIRMED`, `BLOCKED`, `CANCELLED`, `FAILED`
 
-Mỗi dòng gồm thời gian, event type, level, mô tả tiếng Việt và các trường truy vết như
+Mỗi dòng gồm thời gian, event type, level, các trường truy vết và `description` tiếng Việt ở cuối
+dòng để không che khuất dữ liệu quan trọng khi panel chưa cuộn ngang. Các trường chung gồm
 `signalId`, `pairId`, `slot`, `side`, `reasonCode`, ticket hoặc trạng thái từng leg.
+
+Signal Close lúc được phát hiện giữ thêm loại trigger/reason, Gap hiện tại, mode Normal/SOS,
+ngưỡng confirm/close, profit/target và toàn bộ mẫu TP, cùng giá Bid/Ask hai sàn.
+Để không mất dữ liệu nhận diện lệnh của format Close cũ, log còn giữ exchange, loại lệnh,
+symbol và close price riêng cho cả chân A và chân B. Các field không áp dụng cho loại Close hiện tại
+không được đưa vào dòng log.
+
+### 3.1. Ma trận dữ liệu structured Signal Log
+
+| Nhóm event | Dữ liệu chính |
+|---|---|
+| `SIGNAL_OPEN` | signal/side, Gap cuối + toàn bộ Gap và Bid/Ask/Spread A-B |
+| `SIGNAL_HEDGE` | Toàn bộ dữ liệu Open và thông tin vị thế gốc |
+| `SIGNAL_CLOSE_TP/GAP/SOS` | pair/slot, loại lệnh-symbol-close price A-B, trigger/reason, Gap hiện tại, mode, TP window, profit A-B-tổng và Bid/Ask |
+| `*_CONFIRMED` | tuổi signal, profit động của Close, ticket, requested/actual price, slippage và execution của leg có record |
+| `*_BLOCKED` | reason code + field nguyên nhân; quota chỉ có với quota block, spread/latency chỉ có với market guard, profit chỉ có với Close |
+| `*_CANCELLED` | reason code + trạng thái động tại call site; không in nhóm execution chưa phát sinh |
+| `*_FAILED` | reason code, trạng thái/error từng chân tại call site, tuổi signal và execution diagnostic của chân đã có record |
+
+Outcome dùng lại `SignalLifecycleContext` của event phát hiện. Context giữ định danh signal và diagnostic
+từng leg cho tới outcome cuối, sau đó được dọn để không tích lũy bộ nhớ.
+
+Giá trị cấu hình DB cố định được ghi tại log load/reload config, không lặp lại trong từng Signal Log.
+Formatter outcome chỉ thêm field có dữ liệu và có liên quan tới reason/outcome hiện tại.
 
 Signal text cũ không còn được thêm vào collection Signal và không phát realtime sang panel
 System. Chúng được ghi file-only để giữ khả năng truy vết trong giai đoạn chuyển đổi.
@@ -132,8 +157,10 @@ Các thay đổi log phải giữ các bất biến sau:
 Đã thực hiện:
 
 - Rà diff các điểm gọi signal, coordinator, router và logger.
-- Build solution với Windows targeting: 0 error, 0 warning.
-- Chạy toàn bộ test suite: 362/362 test pass.
+- Build ứng dụng với Windows targeting: 0 error; trên macOS có 3 cảnh báo CA1416 đã biết do API
+  `MemoryMappedFile.OpenExisting` chỉ hỗ trợ Windows.
+- Build project test: 0 error, 0 warning.
+- Test runtime chưa chạy trên máy audit hiện tại vì thiếu .NET 8 Runtime cho `testhost`.
 - Kiểm tra whitespace bằng `git diff --check`.
 
 Smoke test còn cần thực hiện trên Windows production-like:

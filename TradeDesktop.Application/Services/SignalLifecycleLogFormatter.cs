@@ -14,7 +14,9 @@ public static class SignalLifecycleLogFormatter
             eventType,
             level,
             description,
-            string.Join(" ", fields.Select(field => SignalLogItem.Field(field.Name, field.Value))));
+            string.Join(" ", fields
+                .Where(field => field.Value is not null)
+                .Select(field => SignalLogItem.Field(field.Name, field.Value))));
 
     public static string DescriptionForReason(string reasonCode, string action = "thực hiện")
         => reasonCode switch

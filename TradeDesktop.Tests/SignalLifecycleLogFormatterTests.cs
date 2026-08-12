@@ -34,6 +34,24 @@ public sealed class SignalLifecycleLogFormatterTests
         Assert.Contains("description=\"Không thể mở Hedge Buy vì quota Buy đã đầy\"", text);
         Assert.Contains("signalId=SG-203", text);
         Assert.Contains("reasonCode=QUOTA_BUY_FULL", text);
+        Assert.EndsWith("description=\"Không thể mở Hedge Buy vì quota Buy đã đầy\"", text);
+        Assert.True(text.IndexOf("reasonCode=QUOTA_BUY_FULL", StringComparison.Ordinal)
+                    < text.IndexOf("description=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Create_OmitsFieldsWithoutData()
+    {
+        var item = SignalLifecycleLogFormatter.Create(
+            "SIGNAL_OPEN",
+            "Phát hiện tín hiệu mở vị thế mới",
+            SignalLogLevel.Info,
+            ("signalId", "SG-204"),
+            ("originalSlot", null));
+
+        var text = item.ToString();
+        Assert.Contains("signalId=SG-204", text);
+        Assert.DoesNotContain("originalSlot", text);
     }
 
     [Theory]

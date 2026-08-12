@@ -37,9 +37,9 @@ public sealed record SignalLogItem(
 
     public override string ToString()
     {
-        var detailSuffix = string.IsNullOrWhiteSpace(Details) ? string.Empty : $" {Details}";
+        var detailPrefix = string.IsNullOrWhiteSpace(Details) ? string.Empty : $"{Details} ";
         return $"[{Timestamp:yyyy-MM-dd HH:mm:ss.fff}] [{EventType}][{Level.ToString().ToUpperInvariant()}] " +
-               $"description=\"{Description}\"{detailSuffix}";
+               $"{detailPrefix}description=\"{Description}\"";
     }
 
     public static string Field(string name, object? value)
