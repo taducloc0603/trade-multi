@@ -116,7 +116,9 @@ public sealed record RandomQuotaState(
     int EffectiveMaxSell,
     int OpenCountSinceRandom,
     int RandomAfterOpens,
-    long CycleNumber);
+    long CycleNumber,
+    int? PreviousMaxBuy = null,
+    int? PreviousMaxSell = null);
 
 public sealed record TradeActionGateResult(
     bool Acquired,

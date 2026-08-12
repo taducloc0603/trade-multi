@@ -121,7 +121,9 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _state.EffectiveMaxSellOpens,
         _state.QuotaOpenCountSinceRandom,
         _state.QuotaRandomAfterOpens,
-        _state.QuotaCycleNumber);
+        _state.QuotaCycleNumber,
+        _state.PreviousMaxBuyOpens,
+        _state.PreviousMaxSellOpens);
 
     internal PortfolioState State => _state;
     internal int LastSeenStartTimeHold => _lastSeenStartTimeHold;
@@ -1100,6 +1102,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _state.QuotaOpenCountSinceRandom = Math.Clamp(
             state.OpenCountSinceRandom, 0, _state.QuotaRandomAfterOpens - 1);
         _state.QuotaCycleNumber = Math.Max(1, state.CycleNumber);
+        _state.PreviousMaxBuyOpens = NormalizePreviousQuota(state.PreviousMaxBuy, _state.MaxBuyOpens);
+        _state.PreviousMaxSellOpens = NormalizePreviousQuota(state.PreviousMaxSell, _state.MaxSellOpens);
         LogRandomQuota("RESTORED", "APP_RESTART");
     }
 
@@ -1326,6 +1330,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
     private void StartNewRandomQuotaCycle(string reason)
     {
+        if (_state.QuotaCycleNumber > 0)
+        {
+            _state.PreviousMaxBuyOpens = _state.EffectiveMaxBuyOpens;
+            _state.PreviousMaxSellOpens = _state.EffectiveMaxSellOpens;
+        }
         _state.QuotaCycleNumber++;
         _state.EffectiveMaxBuyOpens = _random.Next(1, _state.MaxBuyOpens + 1);
         _state.EffectiveMaxSellOpens = _random.Next(1, _state.MaxSellOpens + 1);
@@ -1349,10 +1358,15 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _logger?.Log(
             $"[QUOTA_RANDOM][{action}] cycle={_state.QuotaCycleNumber} reason={reason} " +
             $"description=\"{description}\" " +
+            $"previousBuy={_state.PreviousMaxBuyOpens?.ToString(CultureInfo.InvariantCulture) ?? "n/a"} " +
+            $"previousSell={_state.PreviousMaxSellOpens?.ToString(CultureInfo.InvariantCulture) ?? "n/a"} " +
             $"effectiveBuy={_state.EffectiveMaxBuyOpens} effectiveSell={_state.EffectiveMaxSellOpens} " +
             $"maxTotal={_state.MaxTotalOpens} count={_state.QuotaOpenCountSinceRandom}/" +
             $"{_state.QuotaRandomAfterOpens}");
     }
+
+    private static int? NormalizePreviousQuota(int? value, int configuredMax)
+        => value.HasValue ? Math.Clamp(value.Value, 1, configuredMax) : null;
 
     private static double GetSlotAgeSeconds(PositionSlot slot, DateTime nowUtc)
         => slot.OpenConfirmedAtUtc.HasValue

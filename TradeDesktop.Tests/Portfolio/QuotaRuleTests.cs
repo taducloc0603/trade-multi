@@ -179,6 +179,8 @@ public sealed class QuotaRuleTests
         coordinator.MarkSlotOpenConfirmed(finalPair, 100, 101, DateTime.UtcNow);
 
         Assert.Equal(initial.CycleNumber + 1, coordinator.RandomQuotaState.CycleNumber);
+        Assert.Equal(initial.EffectiveMaxBuy, coordinator.RandomQuotaState.PreviousMaxBuy);
+        Assert.Equal(initial.EffectiveMaxSell, coordinator.RandomQuotaState.PreviousMaxSell);
         Assert.Equal(0, coordinator.RandomQuotaState.OpenCountSinceRandom);
         Assert.InRange(coordinator.RandomQuotaState.RandomAfterOpens, 2, 5);
     }
@@ -208,5 +210,16 @@ public sealed class QuotaRuleTests
         coordinator.RestoreRandomQuotaState(new(true, 9, 8, 2, 4, 12));
 
         Assert.Equal(new(true, 2, 3, 2, 4, 12), coordinator.RandomQuotaState);
+    }
+
+    [Fact]
+    public void RandomQuota_RestorePreservesPreviousQuotaAndClampsItToCurrentCaps()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(maxTotal: 5, maxBuy: 2, maxSell: 3);
+
+        coordinator.RestoreRandomQuotaState(new(true, 2, 3, 1, 4, 9, 8, 7));
+
+        Assert.Equal(new(true, 2, 3, 1, 4, 9, 2, 3), coordinator.RandomQuotaState);
     }
 }

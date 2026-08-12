@@ -48,7 +48,8 @@ hiện tại là tổng `5`, cận trên Buy `3`, cận trên Sell `3`. `Portfol
 - `max_total_opens` là giới hạn tổng trực tiếp. Mỗi chu kỳ chọn `effectiveBuy=random(1..max_buy_opens)`, `effectiveSell=random(1..max_sell_opens)` và `X=random(2..5)` (inclusive).
 - Chỉ pair Open confirmed đủ hai chân A/B tăng tiến độ đúng một lần. Signal/dispatch fail, partial Open rollback, Close, recovery và slot restore không tăng tiến độ. Đủ X thì tạo chu kỳ mới.
 - Quota mới thấp hơn số slot hiện tại chỉ chặn Open mới; tuyệt đối không force-close. Close không bị quota Open chặn.
-- Persist `effectiveBuy`, `effectiveSell`, X, progress và cycle cùng `current_slots`; restart restore chu kỳ cũ. Reload config không reroll, chỉ clamp quota chiều nếu cận trên giảm; Total mới áp dụng ngay.
+- Persist `previousBuy/Sell`, `effectiveBuy/Sell`, X, progress và cycle cùng `current_slots`; restart restore chu kỳ cũ. Reload config không reroll, chỉ clamp quota chiều nếu cận trên giảm; Total mới áp dụng ngay.
+- Trading Signal hiển thị Old/Current/Total/Cycle/Progress/Active; `OVER TARGET` chỉ là trạng thái quan sát và chặn Open mới, không force-close.
 - Implementation: `coordinator.CanOpenNewSlot(side, out reason)`.
 
 ### Rule B — Auto cooldown + non-auto close barrier

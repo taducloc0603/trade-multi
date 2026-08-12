@@ -19,6 +19,8 @@ public sealed class PortfolioState
     public int MaxSellOpens { get; set; } = 1;
     public int EffectiveMaxBuyOpens { get; set; } = 1;
     public int EffectiveMaxSellOpens { get; set; } = 1;
+    public int? PreviousMaxBuyOpens { get; set; }
+    public int? PreviousMaxSellOpens { get; set; }
     public int QuotaOpenCountSinceRandom { get; set; }
     public int QuotaRandomAfterOpens { get; set; }
     public long QuotaCycleNumber { get; set; }

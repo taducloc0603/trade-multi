@@ -191,6 +191,18 @@ public sealed class SlotPersistenceTests
     }
 
     [Fact]
+    public void DeserializeRandomQuota_RoundTripsPreviousAndCurrentQuota()
+    {
+        var slot = CreateSlot(1, "AUTO-0001-1234", PositionSlotStatus.Live, ticketA: 555, ticketB: 666);
+        var quota = new RandomQuotaState(true, 1, 3, 2, 4, 8, 3, 2);
+
+        var json = SlotPersistence.Serialize(new[] { slot }, quota);
+
+        Assert.Equal(quota, SlotPersistence.DeserializeRandomQuota(json));
+        Assert.Single(SlotPersistence.Deserialize(json));
+    }
+
+    [Fact]
     public void Deserialize_LegacySnapshotWithoutHwndProfile_RemainsCompatible()
     {
         const string json = "[{\"slotId\":1,\"pairId\":\"old\",\"side\":\"Buy\",\"openMode\":\"GapBuy\",\"ticketA\":1,\"ticketB\":2,\"openConfirmedAtUtc\":\"2026-01-01T00:00:00Z\",\"holdingSeconds\":3}]";

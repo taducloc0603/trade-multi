@@ -652,6 +652,7 @@ public sealed class DashboardViewModel : ObservableObject
     public string CurrentPositionTextA => ResolveCurrentPositionText(isExchangeA: true);
     public string CurrentPositionTextB => ResolveCurrentPositionText(isExchangeA: false);
     public string ManagedPairsText => ResolveManagedPairsText();
+    public string RandomQuotaText => ResolveRandomQuotaText();
     public string CloseMonitoringText => ResolveCloseMonitoringText();
     public string PositionSyncText => ResolvePositionSyncText();
     public string CurrentPhaseText => ResolveCurrentPhaseText();
@@ -7086,6 +7087,30 @@ public sealed class DashboardViewModel : ObservableObject
         return $"GapBuy {gapBuy}/{maxBuy} | GapSell {gapSell}/{maxSell} | Total {active.Count}/{maxTotal}{suffix}";
     }
 
+    private string ResolveRandomQuotaText()
+    {
+        var quota = _portfolioCoordinator.RandomQuotaState;
+        if (!quota.IsEnabled)
+        {
+            return "Disabled";
+        }
+
+        var oldBuy = quota.PreviousMaxBuy?.ToString(CultureInfo.InvariantCulture) ?? "N/A";
+        var oldSell = quota.PreviousMaxSell?.ToString(CultureInfo.InvariantCulture) ?? "N/A";
+        var activeBuy = _portfolioCoordinator.LiveBuyCount;
+        var activeSell = _portfolioCoordinator.LiveSellCount;
+        var over = new List<string>(2);
+        if (activeBuy > quota.EffectiveMaxBuy) over.Add("Buy OVER TARGET");
+        if (activeSell > quota.EffectiveMaxSell) over.Add("Sell OVER TARGET");
+        var status = over.Count == 0 ? "OK" : string.Join(", ", over);
+
+        return $"Old: Buy {oldBuy}, Sell {oldSell} | " +
+               $"Current: Buy {quota.EffectiveMaxBuy}, Sell {quota.EffectiveMaxSell} | " +
+               $"Total Max: {_runtimeConfigState.CurrentMaxTotalOpens} | Cycle: {quota.CycleNumber} | " +
+               $"Progress: {quota.OpenCountSinceRandom}/{quota.RandomAfterOpens} | " +
+               $"Active: Buy {activeBuy}, Sell {activeSell} | {status}";
+    }
+
     private string ResolveCloseMonitoringText()
     {
         var positions = _portfolioCoordinator.LiveSlots
@@ -7133,6 +7158,7 @@ public sealed class DashboardViewModel : ObservableObject
         OnPropertyChanged(nameof(CurrentPositionTextA));
         OnPropertyChanged(nameof(CurrentPositionTextB));
         OnPropertyChanged(nameof(ManagedPairsText));
+        OnPropertyChanged(nameof(RandomQuotaText));
         OnPropertyChanged(nameof(CloseMonitoringText));
         OnPropertyChanged(nameof(PositionSyncText));
     }

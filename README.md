@@ -454,7 +454,8 @@ X                   = random(2..5)           // 2, 3, 4 hoặc 5
 - Một pair chỉ được tính vào X khi cả hai chân A/B đã Open confirmed. Signal bị chặn, dispatch thất bại, partial Open rồi rollback, Close và recovery không tăng bộ đếm.
 - Quota mới thấp hơn số slot hiện tại chỉ chặn Open mới; không đóng hoặc thay đổi slot đang tồn tại. Close không chịu ảnh hưởng của quota Open.
 - Đủ X thì quota Buy/Sell và X được random lại; Open thứ X đã được cấp phép theo chu kỳ cũ.
-- Trạng thái `effectiveBuy`, `effectiveSell`, X, tiến độ và số chu kỳ được lưu cùng `current_slots`; restart tiếp tục chu kỳ cũ. Snapshot mảng legacy vẫn đọc được.
+- Trạng thái quota trước đó (`previousBuy/Sell`), quota hiện tại (`effectiveBuy/Sell`), X, tiến độ và số chu kỳ được lưu cùng `current_slots`; restart tiếp tục chu kỳ cũ. Snapshot mảng legacy vẫn đọc được.
+- Trading Signal hiển thị cố định `Old`, `Current`, `Total Max`, `Cycle`, `Progress` và số slot Active. Nếu Active lớn hơn Current sau reroll, UI báo `OVER TARGET`; lệnh cũ vẫn giữ nguyên và chỉ Open mới bị chặn.
 - Reload DB không reroll: nếu cận trên Buy/Sell giảm thì quota hiệu lực được clamp; `max_total_opens` mới áp dụng ngay.
 
 Ma trận Auto transition:

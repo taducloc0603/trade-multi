@@ -212,10 +212,10 @@
 
 **Ví dụ:**
 ```text
-[QUOTA_RANDOM][NEW_CYCLE] cycle=1 reason=INITIALIZED description="Khởi tạo chu kỳ quota ngẫu nhiên đầu tiên" effectiveBuy=2 effectiveSell=3 maxTotal=5 count=0/4
+[QUOTA_RANDOM][NEW_CYCLE] cycle=1 reason=INITIALIZED description="Khởi tạo chu kỳ quota ngẫu nhiên đầu tiên" previousBuy=n/a previousSell=n/a effectiveBuy=2 effectiveSell=3 maxTotal=5 count=0/4
 [QUOTA_RANDOM][PROGRESS] cycle=1 pairId=AUTO-0001 description="Pair đã mở thành công đủ hai chân A/B; tăng tiến độ chu kỳ quota" count=1/4 effectiveBuy=2 effectiveSell=3 maxTotal=5
-[QUOTA_RANDOM][NEW_CYCLE] cycle=2 reason=OPEN_THRESHOLD_REACHED description="Đã đủ số pair Open thành công của chu kỳ trước; bắt đầu chu kỳ quota mới" effectiveBuy=1 effectiveSell=2 maxTotal=5 count=0/3
-[QUOTA_RANDOM][RESTORED] cycle=8 reason=APP_RESTART description="Khôi phục quota và tiến độ chu kỳ cũ sau khi ứng dụng khởi động lại" effectiveBuy=2 effectiveSell=3 maxTotal=5 count=2/4
+[QUOTA_RANDOM][NEW_CYCLE] cycle=2 reason=OPEN_THRESHOLD_REACHED description="Đã đủ số pair Open thành công của chu kỳ trước; bắt đầu chu kỳ quota mới" previousBuy=2 previousSell=3 effectiveBuy=1 effectiveSell=2 maxTotal=5 count=0/3
+[QUOTA_RANDOM][RESTORED] cycle=8 reason=APP_RESTART description="Khôi phục quota và tiến độ chu kỳ cũ sau khi ứng dụng khởi động lại" previousBuy=3 previousSell=1 effectiveBuy=2 effectiveSell=3 maxTotal=5 count=2/4
 ```
 
 **Log chặn Open:**
@@ -228,6 +228,7 @@
 - `count=n/X`: đã có n pair Open confirmed trong chu kỳ; X chỉ có thể là 2, 3, 4 hoặc 5.
 - Log `[SLOT][SKIP]` được throttle: ghi khi side/reason đổi hoặc sau tối thiểu 30 giây.
 - Open bị chặn không tăng `count` và không làm reroll. Close không ảnh hưởng chu kỳ.
+- UI Trading Signal giữ Old gần nhất và Current; `OVER TARGET` không đóng lệnh cũ.
 - `[PERSIST][INFO] Saved current_slots (...)` chứa object `slots` và `randomQuota`; `[PERSIST][WARN]` nghĩa là trạng thái restart chưa được lưu thành công.
 
 ---

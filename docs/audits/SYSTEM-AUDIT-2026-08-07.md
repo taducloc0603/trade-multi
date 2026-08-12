@@ -119,7 +119,7 @@ không chịu Auto post-open.
 - Priority hiện tại: nếu có overtime slot, chọn **slot già nhất**, rồi dùng profit làm tie-break;
   nếu không có overtime, chọn profit cao nhất toàn bộ eligible.
 - `max_life_time_by_second` chỉ tạo overtime tier, không tự sinh close signal.
-- `min_profit_to_close` là gate của Auto Close: trước max lifetime cần tổng profit hai chân đạt ngưỡng; từ đúng mốc max lifetime trở đi gate được bỏ qua. Max lifetime bằng `0` làm gate không hết hạn. Manual/recovery không bị chặn.
+- `min_profit_to_close` là gate của Auto Close: trước max lifetime cần `abs(dịch chuyển chân A từ Open Price)` đạt ngưỡng point; từ đúng mốc max lifetime trở đi gate được bỏ qua. Max lifetime bằng `0` làm gate không hết hạn. Manual/recovery không bị chặn.
 
 ## Ownership, recovery và persistence
 

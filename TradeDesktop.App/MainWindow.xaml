@@ -344,6 +344,8 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="4" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="4" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <TextBlock FontWeight="SemiBold" Foreground="#344054">
@@ -384,6 +386,11 @@
                             <StackPanel Grid.Row="14" Orientation="Horizontal">
                                 <TextBlock Text="Position Sync: " FontWeight="SemiBold" Foreground="#344054" />
                                 <TextBlock Text="{Binding PositionSyncText, Mode=OneWay}" Foreground="#101828" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="16" Orientation="Horizontal">
+                                <TextBlock Text="Random Quota: " FontWeight="SemiBold" Foreground="#344054" />
+                                <TextBlock Text="{Binding RandomQuotaText, Mode=OneWay}" Foreground="#101828" TextWrapping="Wrap" />
                             </StackPanel>
                         </Grid>
                     </Border>
