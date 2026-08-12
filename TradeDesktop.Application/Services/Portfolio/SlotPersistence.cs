@@ -18,7 +18,7 @@ public static class SlotPersistence
         WriteIndented = false,
     };
 
-    public static string Serialize(IEnumerable<PositionSlot> liveSlots)
+    public static string Serialize(IEnumerable<PositionSlot> liveSlots, RandomQuotaState? randomQuota = null)
     {
         var dtos = liveSlots
             .Where(s => s.Status == PositionSlotStatus.Live)
@@ -42,7 +42,16 @@ public static class SlotPersistence
             })
             .ToList();
 
-        return JsonSerializer.Serialize(dtos, JsonOptions);
+        if (randomQuota is null)
+        {
+            return JsonSerializer.Serialize(dtos, JsonOptions);
+        }
+
+        return JsonSerializer.Serialize(new PortfolioPersistenceDto
+        {
+            Slots = dtos,
+            RandomQuota = randomQuota
+        }, JsonOptions);
     }
 
     public static IReadOnlyList<RecoveredSlotData> Deserialize(string json)
@@ -54,8 +63,10 @@ public static class SlotPersistence
 
         try
         {
-            var dtos = JsonSerializer.Deserialize<List<SlotPersistenceDto>>(json, JsonOptions)
-                       ?? new List<SlotPersistenceDto>();
+            using var document = JsonDocument.Parse(json);
+            var dtos = document.RootElement.ValueKind == JsonValueKind.Array
+                ? JsonSerializer.Deserialize<List<SlotPersistenceDto>>(json, JsonOptions) ?? []
+                : JsonSerializer.Deserialize<PortfolioPersistenceDto>(json, JsonOptions)?.Slots ?? [];
 
             return dtos
                 .Select(d => new RecoveredSlotData(
@@ -82,6 +93,30 @@ public static class SlotPersistence
             return Array.Empty<RecoveredSlotData>();
         }
     }
+
+    public static RandomQuotaState? DeserializeRandomQuota(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return null;
+            return JsonSerializer.Deserialize<PortfolioPersistenceDto>(json, JsonOptions)?.RandomQuota;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+}
+
+internal sealed class PortfolioPersistenceDto
+{
+    [JsonPropertyName("slots")]
+    public List<SlotPersistenceDto> Slots { get; set; } = [];
+
+    [JsonPropertyName("randomQuota")]
+    public RandomQuotaState? RandomQuota { get; set; }
 }
 
 internal sealed class SlotPersistenceDto

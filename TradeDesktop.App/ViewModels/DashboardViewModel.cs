@@ -3031,8 +3031,8 @@ public sealed class DashboardViewModel : ObservableObject
             try
             {
                 await _configService.SaveCurrentTicksAsync("", "");
-                await _configService.SaveCurrentSlotsAsync("[]");
-                SafeVmLog("[RECOVERY][INFO] Cleared current ticks/current_slots from DB after close finalize");
+                await PersistCurrentSlotsSnapshotAsync("close-finalized");
+                SafeVmLog("[RECOVERY][INFO] Cleared current ticks and persisted empty slots with quota state after close finalize");
             }
             catch (Exception ex)
             {
@@ -6570,6 +6570,7 @@ public sealed class DashboardViewModel : ObservableObject
                 _runtimeConfigState.UpdateManualTradeHwnd(result.ManualHwndColumns);
                 IsShowConfigVisible = result.IsShowConfig == 1;
                 ResetTradingLogicState();
+                _portfolioCoordinator.EnableRandomQuota();
 
                 // Recovery: prefer multi-slot snapshot, fallback to legacy single pair fields.
                 var recoveredFromSlots = await TryRecoverSlotsFromConfigAsync(result.CurrentSlots);
@@ -6577,6 +6578,7 @@ public sealed class DashboardViewModel : ObservableObject
                 {
                     await TryRecoverTicketsFromConfigAsync(result.CurrentTickA, result.CurrentTickB);
                 }
+                await PersistCurrentSlotsSnapshotAsync("random-quota-initialized-or-restored");
 
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
@@ -7331,6 +7333,12 @@ public sealed class DashboardViewModel : ObservableObject
     {
         try
         {
+            var persistedRandomQuota = SlotPersistence.DeserializeRandomQuota(currentSlotsJson);
+            if (persistedRandomQuota is not null)
+            {
+                _portfolioCoordinator.RestoreRandomQuotaState(persistedRandomQuota);
+            }
+
             var persistedSlots = SlotPersistence.Deserialize(currentSlotsJson);
             if (persistedSlots.Count == 0)
             {
@@ -7361,7 +7369,7 @@ public sealed class DashboardViewModel : ObservableObject
             if (liveSlots.Count == 0)
             {
                 SafeVmLog("[RECOVERY][INFO] Persisted slots not found in shared memory. Clearing DB slot snapshot.");
-                await _configService.SaveCurrentSlotsAsync("[]");
+                await PersistCurrentSlotsSnapshotAsync("drop-all-stale-persisted-slots");
                 return false;
             }
 
@@ -7738,7 +7746,9 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task PersistCurrentSlotsSnapshotAsync(string reason)
     {
-        var json = SlotPersistence.Serialize(_portfolioCoordinator.LiveSlots);
+        var json = SlotPersistence.Serialize(
+            _portfolioCoordinator.LiveSlots,
+            _portfolioCoordinator.RandomQuotaState);
         try
         {
             await _configService.SaveCurrentSlotsAsync(json);

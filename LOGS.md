@@ -204,6 +204,34 @@
 
 ---
 
+## [QUOTA_RANDOM] — Quota Open ngẫu nhiên
+
+**File:** `TradeDesktop.Application/Services/Portfolio/PortfolioCoordinator.cs`
+
+**Dùng để làm gì:** Theo dõi quota Buy/Sell hiệu lực, tiến độ số pair Open confirmed và việc khôi phục chu kỳ sau restart. `maxTotal` luôn lấy cố định từ DB.
+
+**Ví dụ:**
+```text
+[QUOTA_RANDOM][NEW_CYCLE] cycle=1 reason=INITIALIZED description="Khởi tạo chu kỳ quota ngẫu nhiên đầu tiên" effectiveBuy=2 effectiveSell=3 maxTotal=5 count=0/4
+[QUOTA_RANDOM][PROGRESS] cycle=1 pairId=AUTO-0001 description="Pair đã mở thành công đủ hai chân A/B; tăng tiến độ chu kỳ quota" count=1/4 effectiveBuy=2 effectiveSell=3 maxTotal=5
+[QUOTA_RANDOM][NEW_CYCLE] cycle=2 reason=OPEN_THRESHOLD_REACHED description="Đã đủ số pair Open thành công của chu kỳ trước; bắt đầu chu kỳ quota mới" effectiveBuy=1 effectiveSell=2 maxTotal=5 count=0/3
+[QUOTA_RANDOM][RESTORED] cycle=8 reason=APP_RESTART description="Khôi phục quota và tiến độ chu kỳ cũ sau khi ứng dụng khởi động lại" effectiveBuy=2 effectiveSell=3 maxTotal=5 count=2/4
+```
+
+**Log chặn Open:**
+```text
+[SLOT][SKIP] Open Buy blocked: QUOTA_BUY_FULL (2/2) description="Số lệnh Buy hiện tại đã đạt quota Buy ngẫu nhiên 2; không mở thêm Buy"
+[SLOT][SKIP] Open Sell blocked: QUOTA_SELL_FULL (3/3) description="Số lệnh Sell hiện tại đã đạt quota Sell ngẫu nhiên 3; không mở thêm Sell"
+[SLOT][SKIP] Open Buy blocked: QUOTA_TOTAL_FULL (5/5) description="Tổng số lệnh hiện tại đã đạt giới hạn cố định 5; không mở thêm lệnh mới"
+```
+
+- `count=n/X`: đã có n pair Open confirmed trong chu kỳ; X chỉ có thể là 2, 3, 4 hoặc 5.
+- Log `[SLOT][SKIP]` được throttle: ghi khi side/reason đổi hoặc sau tối thiểu 30 giây.
+- Open bị chặn không tăng `count` và không làm reroll. Close không ảnh hưởng chu kỳ.
+- `[PERSIST][INFO] Saved current_slots (...)` chứa object `slots` và `randomQuota`; `[PERSIST][WARN]` nghĩa là trạng thái restart chưa được lưu thành công.
+
+---
+
 ## [ROUTER] — Trade Execution Router
 
 **File:** `TradeDesktop.App/Services/TradeExecutionRouter.cs`

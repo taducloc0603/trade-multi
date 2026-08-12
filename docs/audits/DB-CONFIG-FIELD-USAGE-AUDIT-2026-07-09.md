@@ -91,13 +91,15 @@
 
 | Thông số | Ý nghĩa dễ hiểu |
 |---|---|
-| `max_total_opens` | **Tối đa bao nhiêu lệnh** được mở cùng lúc. |
-| `max_buy_opens` | Tối đa bao nhiêu lệnh **Mua** cùng lúc. |
-| `max_sell_opens` | Tối đa bao nhiêu lệnh **Bán** cùng lúc. |
+| `max_total_opens` | **Trần tổng cố định**, không random. |
+| `max_buy_opens` | Cận trên để random quota Buy hiệu lực trong `1..max_buy_opens`. |
+| `max_sell_opens` | Cận trên để random quota Sell hiệu lực trong `1..max_sell_opens`. |
 | `max_life_time_by_second` | Khi nhiều lệnh cùng đủ điều kiện đóng, app **ưu tiên đóng lệnh đã sống lâu hơn**. (Chỉ để chọn thứ tự ưu tiên — **không** tự ép đóng lệnh khi chưa có tín hiệu.) |
 | `min_profit_to_close` | Tổng lợi nhuận tối thiểu của hai chân để Auto Close khi tuổi lệnh còn dưới `max_life_time_by_second`. `0` là tắt; khi đạt max lifetime thì bỏ qua ngưỡng nhưng vẫn cần close signal. |
 
 > Nếu để quota = 0, app tự hiểu là **1** (không bao giờ về 0).
+
+> **Cập nhật sau audit (2026-08-12):** Mỗi chu kỳ random quota Buy/Sell và X trong `2..5`; đủ X pair Open confirmed thì tạo chu kỳ mới. Total giữ cố định. Trạng thái chu kỳ được lưu cùng `current_slots` và được khôi phục sau restart.
 
 ---
 

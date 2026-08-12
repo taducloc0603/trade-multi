@@ -17,6 +17,12 @@ public sealed class PortfolioState
     public int MaxTotalOpens { get; set; } = 1;
     public int MaxBuyOpens { get; set; } = 1;
     public int MaxSellOpens { get; set; } = 1;
+    public int EffectiveMaxBuyOpens { get; set; } = 1;
+    public int EffectiveMaxSellOpens { get; set; } = 1;
+    public int QuotaOpenCountSinceRandom { get; set; }
+    public int QuotaRandomAfterOpens { get; set; }
+    public long QuotaCycleNumber { get; set; }
+    public bool IsRandomQuotaEnabled { get; set; }
     public DateTime? GlobalActionLockUntilUtc { get; set; }
     public int GlobalCooldownMinSec { get; set; } = 0;
     public int GlobalCooldownMaxSec { get; set; } = 0;

@@ -78,7 +78,7 @@ Luồng chuẩn:
 
 | Nhóm | DB/runtime | Normalize/fallback thực tế |
 |---|---|---|
-| Quota | `max_total_opens`, `max_buy_opens`, `max_sell_opens` | Runtime `5/3/3`, tối thiểu 1 |
+| Quota | `max_total_opens`, `max_buy_opens`, `max_sell_opens` | Cập nhật 2026-08-12: Total cố định; Buy/Sell là cận trên random từ 1; X random 2..5 Open confirmed; trạng thái được persist |
 | Opposite time | `opposite_side_lock_seconds` | `<=0` cuối cùng fallback 300s ở coordinator |
 | Opposite price | `opposite_open_min_distance_pts` | `0` tắt; thiếu MMF/price thì fail closed khi guard bật |
 | Same action | `rd_start/end_same_action_lock_seconds` | Mỗi đầu không hợp lệ fallback `3/10`, range tự swap |

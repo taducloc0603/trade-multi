@@ -216,6 +216,23 @@ public sealed class SlotPersistenceTests
         Assert.Empty(SlotPersistence.Deserialize("[]"));
     }
 
+    [Fact]
+    public void Serialize_RoundTripsRandomQuotaAlongsideSlots()
+    {
+        var quota = new RandomQuotaState(true, 2, 3, 1, 4, 8);
+        var json = SlotPersistence.Serialize(Array.Empty<PositionSlot>(), quota);
+
+        Assert.Empty(SlotPersistence.Deserialize(json));
+        Assert.Equal(quota, SlotPersistence.DeserializeRandomQuota(json));
+        Assert.Contains("\"randomQuota\"", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DeserializeRandomQuota_LegacyArray_ReturnsNull()
+    {
+        Assert.Null(SlotPersistence.DeserializeRandomQuota("[]"));
+    }
+
     private static PositionSlot CreateSlot(
         int slotId, string pairId, PositionSlotStatus status,
         ulong? ticketA, ulong? ticketB)

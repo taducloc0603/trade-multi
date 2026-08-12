@@ -30,8 +30,9 @@ TradeDesktop là WPF (.NET 8) app điều phối auto-trading qua 2 sàn MT4/MT5
 mạnh trong cửa sổ confirm thì trigger open/close pair trên cả 2 sàn.
 
 **Đặc thù multi-slot:** mỗi pair là một `PositionSlot` độc lập với `CloseSignalEngine`
-riêng. Quota được load từ DB (`max_total_opens`, `max_buy_opens`, `max_sell_opens`);
-runtime fallback hiện tại là tổng `5`, Buy `3`, Sell `3`. `PortfolioState` khởi tạo
+riêng. `max_total_opens` là trần tổng cố định từ DB; `max_buy_opens` và
+`max_sell_opens` là cận trên cho quota Buy/Sell random theo chu kỳ. Runtime fallback
+hiện tại là tổng `5`, cận trên Buy `3`, cận trên Sell `3`. `PortfolioState` khởi tạo
 `1/1/1` chỉ là trạng thái nội bộ trước lần `SyncPortfolioCoordinatorConfig` đầu tiên.
 
 Đọc `README.md` cho chi tiết signal logic, gap formula, state machine.
@@ -41,10 +42,13 @@ runtime fallback hiện tại là tổng `5`, Buy `3`, Sell `3`. `PortfolioState
 
 ## 2. Critical business rules (DO NOT violate)
 
-### Rule A — Quota
-- Quota cấu hình động; fallback runtime: tổng 5, Buy 3, Sell 3.
+### Rule A — Random quota Open
+- Trần tổng cấu hình động nhưng không random; fallback runtime: tổng 5, cận trên Buy 3, cận trên Sell 3.
 - Đếm bao gồm `PendingOpen + Live + PendingClose`.
-- Config: `max_total_opens` / `max_buy_opens` / `max_sell_opens` từ DB; mỗi giá trị được normalize tối thiểu 1.
+- `max_total_opens` là giới hạn tổng trực tiếp. Mỗi chu kỳ chọn `effectiveBuy=random(1..max_buy_opens)`, `effectiveSell=random(1..max_sell_opens)` và `X=random(2..5)` (inclusive).
+- Chỉ pair Open confirmed đủ hai chân A/B tăng tiến độ đúng một lần. Signal/dispatch fail, partial Open rollback, Close, recovery và slot restore không tăng tiến độ. Đủ X thì tạo chu kỳ mới.
+- Quota mới thấp hơn số slot hiện tại chỉ chặn Open mới; tuyệt đối không force-close. Close không bị quota Open chặn.
+- Persist `effectiveBuy`, `effectiveSell`, X, progress và cycle cùng `current_slots`; restart restore chu kỳ cũ. Reload config không reroll, chỉ clamp quota chiều nếu cận trên giảm; Total mới áp dụng ngay.
 - Implementation: `coordinator.CanOpenNewSlot(side, out reason)`.
 
 ### Rule B — Auto cooldown + non-auto close barrier

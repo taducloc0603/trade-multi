@@ -133,4 +133,80 @@ public sealed class QuotaRuleTests
         Assert.NotNull(slot);
         Assert.False(coordinator.CanOpenNewSlot(TradingPositionSide.Buy, out _));
     }
+
+    [Fact]
+    public void RandomQuota_UsesConfiguredSideCaps_AndKeepsTotalFixed()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(maxTotal: 5, maxBuy: 5, maxSell: 5);
+        coordinator.EnableRandomQuota();
+        coordinator.RestoreRandomQuotaState(new(true, 5, 5, 0, 5, 1));
+
+        var state = coordinator.RandomQuotaState;
+        Assert.True(state.IsEnabled);
+        Assert.InRange(state.EffectiveMaxBuy, 1, 5);
+        Assert.InRange(state.EffectiveMaxSell, 1, 5);
+        Assert.InRange(state.RandomAfterOpens, 2, 5);
+
+        for (var i = 0; i < 5; i++)
+        {
+            Assert.NotNull(coordinator.AllocatePendingOpenSlot($"total-{i}", Trigger(GapSignalSide.Buy)));
+        }
+        Assert.False(coordinator.CanOpenNewSlot(TradingPositionSide.Sell, out var reason));
+        Assert.Contains("QUOTA_TOTAL_FULL (5/5)", reason);
+    }
+
+    [Fact]
+    public void RandomQuota_RerollsOnlyAfterConfiguredNumberOfConfirmedPairs()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(maxTotal: 20, maxBuy: 20, maxSell: 20);
+        coordinator.EnableRandomQuota();
+        var selectedThreshold = coordinator.RandomQuotaState.RandomAfterOpens;
+        coordinator.RestoreRandomQuotaState(new(true, 20, 20, 0, selectedThreshold, 1));
+        var initial = coordinator.RandomQuotaState;
+
+        for (var i = 1; i < initial.RandomAfterOpens; i++)
+        {
+            var pairId = $"confirmed-{i}";
+            coordinator.AllocatePendingOpenSlot(pairId, Trigger(GapSignalSide.Buy));
+            coordinator.MarkSlotOpenConfirmed(pairId, (ulong)(i * 2), (ulong)(i * 2 + 1), DateTime.UtcNow);
+            Assert.Equal(initial.CycleNumber, coordinator.RandomQuotaState.CycleNumber);
+        }
+
+        const string finalPair = "confirmed-final";
+        coordinator.AllocatePendingOpenSlot(finalPair, Trigger(GapSignalSide.Buy));
+        coordinator.MarkSlotOpenConfirmed(finalPair, 100, 101, DateTime.UtcNow);
+
+        Assert.Equal(initial.CycleNumber + 1, coordinator.RandomQuotaState.CycleNumber);
+        Assert.Equal(0, coordinator.RandomQuotaState.OpenCountSinceRandom);
+        Assert.InRange(coordinator.RandomQuotaState.RandomAfterOpens, 2, 5);
+    }
+
+    [Fact]
+    public void RandomQuota_DuplicateConfirmation_CountsOnlyOnce()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(10, 10, 10);
+        coordinator.EnableRandomQuota();
+        coordinator.RestoreRandomQuotaState(new(true, 10, 10, 0, 5, 7));
+        coordinator.AllocatePendingOpenSlot("p1", Trigger(GapSignalSide.Buy));
+
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+        coordinator.MarkSlotOpenConfirmed("p1", 1, 2, DateTime.UtcNow);
+
+        Assert.Equal(1, coordinator.RandomQuotaState.OpenCountSinceRandom);
+        Assert.Equal(7, coordinator.RandomQuotaState.CycleNumber);
+    }
+
+    [Fact]
+    public void RandomQuota_RestoreClampsToLatestConfiguredCaps()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(maxTotal: 5, maxBuy: 2, maxSell: 3);
+
+        coordinator.RestoreRandomQuotaState(new(true, 9, 8, 2, 4, 12));
+
+        Assert.Equal(new(true, 2, 3, 2, 4, 12), coordinator.RandomQuotaState);
+    }
 }

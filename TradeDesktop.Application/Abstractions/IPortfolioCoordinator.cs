@@ -36,6 +36,7 @@ public interface IPortfolioCoordinator
     int RdEndSameActionLockSeconds { get; }
     int GlobalCooldownMinSec { get; }
     int GlobalCooldownMaxSec { get; }
+    RandomQuotaState RandomQuotaState { get; }
     TradeActionGateResult TryAcquireTradeAction(
         DateTime requestedAtUtc,
         string action,
@@ -88,6 +89,8 @@ public interface IPortfolioCoordinator
 
     // === Config sync from RuntimeConfigState (Phase 2) ===
     void UpdateQuotaConfig(int maxTotal, int maxBuy, int maxSell);
+    void EnableRandomQuota();
+    void RestoreRandomQuotaState(RandomQuotaState state);
     void UpdateCooldownConfig(int minSec, int maxSec);
     void UpdateMaxLifeTimeConfig(int maxLifeTimeSec);
     void UpdateMinProfitToCloseConfig(double minProfitToClose);
@@ -106,6 +109,14 @@ public interface IPortfolioCoordinator
     void ClearAllSlots();
     void RecoverSlotsFromPersisted(IEnumerable<RecoveredSlotData> slots);
 }
+
+public sealed record RandomQuotaState(
+    bool IsEnabled,
+    int EffectiveMaxBuy,
+    int EffectiveMaxSell,
+    int OpenCountSinceRandom,
+    int RandomAfterOpens,
+    long CycleNumber);
 
 public sealed record TradeActionGateResult(
     bool Acquired,

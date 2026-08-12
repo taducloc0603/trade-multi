@@ -63,6 +63,26 @@ Một tín hiệu OPEN chỉ được trigger khi **tất cả** điều kiện 
 - `OpenPts` thường lớn hơn `ConfirmGapPts` (confirm để vào cửa sổ, open để chốt tại tick cuối).
 - Sell dùng đối xứng âm vì GapSell âm khi có cơ hội bán.
 
+### 2.1 Random quota sau tín hiệu OPEN
+
+Quota không tạo tín hiệu; đây là cổng cấp phép sau khi đã có Open Signal hợp lệ:
+
+```text
+EffectiveMaxBuy  = random integer [1, MaxBuyOpens]
+EffectiveMaxSell = random integer [1, MaxSellOpens]
+RandomAfterOpens = random integer [2, 5]
+MaxTotal         = MaxTotalOpens  // cố định
+
+CanOpenBuy  = CurrentBuy  < EffectiveMaxBuy  && CurrentTotal < MaxTotal
+CanOpenSell = CurrentSell < EffectiveMaxSell && CurrentTotal < MaxTotal
+```
+
+`CurrentBuy`, `CurrentSell` và `CurrentTotal` tính `PendingOpen + Live + PendingClose`.
+Bộ đếm chỉ tăng khi pair chuyển `PendingOpen → Live` sau khi đủ ticket A/B. Khi
+`OpenCountSinceRandom >= RandomAfterOpens`, hệ thống random chu kỳ kế tiếp và reset
+bộ đếm về 0. Quota giảm không làm đóng lệnh hiện tại. Trạng thái chu kỳ được persist
+cùng `current_slots` để restart không random ngoài ý muốn.
+
 ---
 
 ## 3. Tín hiệu CLOSE (đóng lệnh)

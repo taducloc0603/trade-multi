@@ -429,7 +429,7 @@ Fields chính:
 
 | Rule | Spec |
 |------|------|
-| **A — Quota** | Cấu hình qua `max_total_opens`, `max_buy_opens`, `max_sell_opens` (code default 5/3/3). Đếm cả `PendingOpen + Live + PendingClose`. |
+| **A — Random quota Open** | `max_total_opens` là trần tổng cố định từ DB. Mỗi chu kỳ random `effectiveBuy = random(1..max_buy_opens)`, `effectiveSell = random(1..max_sell_opens)` và `X = random(2..5)`. Chỉ pair Open confirmed đủ A/B tăng tiến độ; đủ X thì tạo chu kỳ mới. Đếm cả `PendingOpen + Live + PendingClose`. |
 | **B — Auto transition gate** | Gate atomic theo action trước/action kế tiếp. Open cùng chiều và Close→Close random theo same-action range DB; Close→Open random theo post-close range; Open→Close dùng giá trị random post-open riêng của slot (phương án B). Manual/recovery không mutate state Auto. |
 | **C — Opposite-side lock** | `opposite_side_lock_seconds` (default 300s): sau OPEN block OPEN opposite-side; same-side OPEN refresh timer. Đây là lớp bổ sung ngoài Auto transition gate. |
 | **D — Priority close (extended)** | Khi nhiều slot trigger close cùng tick: (1) nếu `max_life_time_by_second > 0`, lọc ra các slot có tuổi `(now - OpenConfirmedAtUtc) > max_life_time_by_second` (overtime tier) → chọn profit cao nhất trong tier đó; (2) nếu không có slot nào overtime, chọn profit cao nhất trong tất cả eligible (Rule D gốc). Losers giữ window. `max_life_time_by_second = 0` (default) = disable tier, hành vi giống Rule D gốc. |
@@ -439,6 +439,23 @@ Rule A + C check trong `CanOpenNewSlot(side, out reason)`. Rule B được pre-c
 `ProcessSnapshot`/`CanCloseNow`, nhưng lớp bảo vệ cuối và atomic nằm trong
 `TradeExecutionRouter` → `PortfolioCoordinator.TryAcquireTradeAction`.
 Rule D pick trong `ProcessSnapshot` close path: overtime tier nếu có, fallback toàn bộ eligible — cả 2 đều `OrderByDescending(LastProfitSnapshot ?? double.MinValue).First()`.
+
+#### Random quota Open
+
+Quota Buy/Sell hiệu lực được giữ ổn định trong một chu kỳ:
+
+```text
+effective_max_buy  = random(1..max_buy_opens)
+effective_max_sell = random(1..max_sell_opens)
+max_total           = max_total_opens       // cố định, không random
+X                   = random(2..5)           // 2, 3, 4 hoặc 5
+```
+
+- Một pair chỉ được tính vào X khi cả hai chân A/B đã Open confirmed. Signal bị chặn, dispatch thất bại, partial Open rồi rollback, Close và recovery không tăng bộ đếm.
+- Quota mới thấp hơn số slot hiện tại chỉ chặn Open mới; không đóng hoặc thay đổi slot đang tồn tại. Close không chịu ảnh hưởng của quota Open.
+- Đủ X thì quota Buy/Sell và X được random lại; Open thứ X đã được cấp phép theo chu kỳ cũ.
+- Trạng thái `effectiveBuy`, `effectiveSell`, X, tiến độ và số chu kỳ được lưu cùng `current_slots`; restart tiếp tục chu kỳ cũ. Snapshot mảng legacy vẫn đọc được.
+- Reload DB không reroll: nếu cận trên Buy/Sell giảm thì quota hiệu lực được clamp; `max_total_opens` mới áp dụng ngay.
 
 Ma trận Auto transition:
 

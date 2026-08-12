@@ -115,6 +115,13 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public int RdEndSameActionLockSeconds => _state.RdEndSameActionLockSeconds;
     public int GlobalCooldownMinSec => _state.GlobalCooldownMinSec;
     public int GlobalCooldownMaxSec => _state.GlobalCooldownMaxSec;
+    public RandomQuotaState RandomQuotaState => new(
+        _state.IsRandomQuotaEnabled,
+        _state.EffectiveMaxBuyOpens,
+        _state.EffectiveMaxSellOpens,
+        _state.QuotaOpenCountSinceRandom,
+        _state.QuotaRandomAfterOpens,
+        _state.QuotaCycleNumber);
 
     internal PortfolioState State => _state;
     internal int LastSeenStartTimeHold => _lastSeenStartTimeHold;
@@ -675,13 +682,14 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public void MarkSlotOpenConfirmed(string pairId, ulong ticketA, ulong ticketB, DateTime confirmedAtUtc)
     {
         var slot = _state.GetSlotByPairId(pairId);
-        if (slot is null) return;
+        if (slot is null || slot.Status != PositionSlotStatus.PendingOpen) return;
 
         var selectedPostOpenLockSeconds = NextSecondsInRange(
             _state.RdStartPostOpenLockSeconds,
             _state.RdEndPostOpenLockSeconds);
         slot.MarkOpenConfirmed(ticketA, ticketB, confirmedAtUtc, selectedPostOpenLockSeconds);
         Interlocked.Increment(ref _totalOpensAllTime);
+        AdvanceRandomQuotaAfterConfirmedOpen(pairId);
 
         // Phase 8: cooldown ĐÃ được set tại dispatch (AllocatePendingOpenSlot).
         // Tại confirm chỉ update LastOpenConfirmed* cho Rule C (opposite-side lock 300s
@@ -966,7 +974,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var totalNow = _state.CountLiveAndPendingTotal();
         if (totalNow >= _state.MaxTotalOpens)
         {
-            blockReason = $"QUOTA_TOTAL_FULL ({totalNow}/{_state.MaxTotalOpens})";
+            blockReason = $"QUOTA_TOTAL_FULL ({totalNow}/{_state.MaxTotalOpens}) " +
+                $"description=\"Tổng số lệnh hiện tại đã đạt giới hạn cố định {_state.MaxTotalOpens}; không mở thêm lệnh mới\"";
             Interlocked.Increment(ref _quotaSkipCount);
             return false;
         }
@@ -974,9 +983,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         if (side == TradingPositionSide.Buy)
         {
             var buyNow = _state.CountLiveAndPendingBuy();
-            if (buyNow >= _state.MaxBuyOpens)
+            var maxBuy = _state.IsRandomQuotaEnabled ? _state.EffectiveMaxBuyOpens : _state.MaxBuyOpens;
+            if (buyNow >= maxBuy)
             {
-                blockReason = $"QUOTA_BUY_FULL ({buyNow}/{_state.MaxBuyOpens})";
+                blockReason = $"QUOTA_BUY_FULL ({buyNow}/{maxBuy}) " +
+                    $"description=\"Số lệnh Buy hiện tại đã đạt quota Buy ngẫu nhiên {maxBuy}; không mở thêm Buy\"";
                 Interlocked.Increment(ref _quotaSkipCount);
                 return false;
             }
@@ -984,9 +995,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         else if (side == TradingPositionSide.Sell)
         {
             var sellNow = _state.CountLiveAndPendingSell();
-            if (sellNow >= _state.MaxSellOpens)
+            var maxSell = _state.IsRandomQuotaEnabled ? _state.EffectiveMaxSellOpens : _state.MaxSellOpens;
+            if (sellNow >= maxSell)
             {
-                blockReason = $"QUOTA_SELL_FULL ({sellNow}/{_state.MaxSellOpens})";
+                blockReason = $"QUOTA_SELL_FULL ({sellNow}/{maxSell}) " +
+                    $"description=\"Số lệnh Sell hiện tại đã đạt quota Sell ngẫu nhiên {maxSell}; không mở thêm Sell\"";
                 Interlocked.Increment(ref _quotaSkipCount);
                 return false;
             }
@@ -1062,6 +1075,32 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _state.MaxTotalOpens = Math.Max(1, maxTotal);
         _state.MaxBuyOpens = Math.Max(1, maxBuy);
         _state.MaxSellOpens = Math.Max(1, maxSell);
+        if (_state.IsRandomQuotaEnabled)
+        {
+            _state.EffectiveMaxBuyOpens = Math.Clamp(_state.EffectiveMaxBuyOpens, 1, _state.MaxBuyOpens);
+            _state.EffectiveMaxSellOpens = Math.Clamp(_state.EffectiveMaxSellOpens, 1, _state.MaxSellOpens);
+        }
+    }
+
+    public void EnableRandomQuota()
+    {
+        if (_state.IsRandomQuotaEnabled) return;
+        _state.IsRandomQuotaEnabled = true;
+        StartNewRandomQuotaCycle("INITIALIZED");
+    }
+
+    public void RestoreRandomQuotaState(RandomQuotaState state)
+    {
+        if (!state.IsEnabled) return;
+
+        _state.IsRandomQuotaEnabled = true;
+        _state.EffectiveMaxBuyOpens = Math.Clamp(state.EffectiveMaxBuy, 1, _state.MaxBuyOpens);
+        _state.EffectiveMaxSellOpens = Math.Clamp(state.EffectiveMaxSell, 1, _state.MaxSellOpens);
+        _state.QuotaRandomAfterOpens = Math.Clamp(state.RandomAfterOpens, 2, 5);
+        _state.QuotaOpenCountSinceRandom = Math.Clamp(
+            state.OpenCountSinceRandom, 0, _state.QuotaRandomAfterOpens - 1);
+        _state.QuotaCycleNumber = Math.Max(1, state.CycleNumber);
+        LogRandomQuota("RESTORED", "APP_RESTART");
     }
 
     public void UpdateCooldownConfig(int minSec, int maxSec)
@@ -1267,6 +1306,54 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     }
 
     // ===== Helpers =====
+    private void AdvanceRandomQuotaAfterConfirmedOpen(string pairId)
+    {
+        if (!_state.IsRandomQuotaEnabled) return;
+
+        _state.QuotaOpenCountSinceRandom++;
+        _logger?.Log(
+            $"[QUOTA_RANDOM][PROGRESS] cycle={_state.QuotaCycleNumber} pairId={pairId} " +
+            $"description=\"Pair đã mở thành công đủ hai chân A/B; tăng tiến độ chu kỳ quota\" " +
+            $"count={_state.QuotaOpenCountSinceRandom}/{_state.QuotaRandomAfterOpens} " +
+            $"effectiveBuy={_state.EffectiveMaxBuyOpens} effectiveSell={_state.EffectiveMaxSellOpens} " +
+            $"maxTotal={_state.MaxTotalOpens}");
+
+        if (_state.QuotaOpenCountSinceRandom >= _state.QuotaRandomAfterOpens)
+        {
+            StartNewRandomQuotaCycle("OPEN_THRESHOLD_REACHED");
+        }
+    }
+
+    private void StartNewRandomQuotaCycle(string reason)
+    {
+        _state.QuotaCycleNumber++;
+        _state.EffectiveMaxBuyOpens = _random.Next(1, _state.MaxBuyOpens + 1);
+        _state.EffectiveMaxSellOpens = _random.Next(1, _state.MaxSellOpens + 1);
+        _state.QuotaRandomAfterOpens = _random.Next(2, 6);
+        _state.QuotaOpenCountSinceRandom = 0;
+        LogRandomQuota("NEW_CYCLE", reason);
+    }
+
+    private void LogRandomQuota(string action, string reason)
+    {
+        var description = (action, reason) switch
+        {
+            ("NEW_CYCLE", "INITIALIZED") =>
+                "Khởi tạo chu kỳ quota ngẫu nhiên đầu tiên",
+            ("NEW_CYCLE", "OPEN_THRESHOLD_REACHED") =>
+                "Đã đủ số pair Open thành công của chu kỳ trước; bắt đầu chu kỳ quota mới",
+            ("RESTORED", "APP_RESTART") =>
+                "Khôi phục quota và tiến độ chu kỳ cũ sau khi ứng dụng khởi động lại",
+            _ => "Cập nhật trạng thái quota ngẫu nhiên"
+        };
+        _logger?.Log(
+            $"[QUOTA_RANDOM][{action}] cycle={_state.QuotaCycleNumber} reason={reason} " +
+            $"description=\"{description}\" " +
+            $"effectiveBuy={_state.EffectiveMaxBuyOpens} effectiveSell={_state.EffectiveMaxSellOpens} " +
+            $"maxTotal={_state.MaxTotalOpens} count={_state.QuotaOpenCountSinceRandom}/" +
+            $"{_state.QuotaRandomAfterOpens}");
+    }
+
     private static double GetSlotAgeSeconds(PositionSlot slot, DateTime nowUtc)
         => slot.OpenConfirmedAtUtc.HasValue
             ? Math.Max(0d, (nowUtc - slot.OpenConfirmedAtUtc.Value).TotalSeconds)
