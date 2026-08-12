@@ -2,7 +2,7 @@ using System.Collections.ObjectModel;
 
 namespace TradeDesktop.App.ViewModels;
 
-internal sealed class CappedObservableCollection<T> : ObservableCollection<T>
+public class CappedObservableCollection<T> : ObservableCollection<T>
 {
     private readonly int _maxCount;
 
@@ -26,6 +26,27 @@ internal sealed class CappedObservableCollection<T> : ObservableCollection<T>
         while (Count > _maxCount)
         {
             RemoveAt(Count - 1);
+        }
+    }
+}
+
+public sealed class SignalLogCollection : CappedObservableCollection<TradeDesktop.Application.Models.SignalLogItem>
+{
+    private readonly Action<string> _legacyLogSink;
+
+    public SignalLogCollection(int maxCount, Action<string> legacyLogSink)
+        : base(maxCount)
+    {
+        _legacyLogSink = legacyLogSink;
+    }
+
+    // Keep legacy strings completely outside the Signal UI collection. They are
+    // written file-only until System / Execution log distribution is implemented.
+    public void Insert(int index, string legacyMessage)
+    {
+        if (!string.IsNullOrWhiteSpace(legacyMessage))
+        {
+            _legacyLogSink(legacyMessage);
         }
     }
 }

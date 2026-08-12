@@ -1,0 +1,209 @@
+<Window x:Class="TradeDesktop.App.SignalLogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:helpers="clr-namespace:TradeDesktop.App.Helpers"
+        Title="Trading Logs"
+        Height="620"
+        Width="1000"
+        MinHeight="420"
+        MinWidth="820"
+        WindowStartupLocation="CenterOwner"
+        Background="#F4F6FA">
+    <Window.Resources>
+        <helpers:SignalLogColorConverter x:Key="SignalLogColorConverter" />
+        <helpers:SystemLogColorConverter x:Key="SystemLogColorConverter" />
+    </Window.Resources>
+    <Grid Margin="16">
+        <Border CornerRadius="12"
+                Padding="12"
+                Background="White"
+                BorderBrush="#E4E7EC"
+                BorderThickness="1">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="12" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="10" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Text="Trading Logs"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button Content="Current Log"
+                                Width="100"
+                                Height="34"
+                                Margin="0,0,8,0"
+                                Command="{Binding OpenCurrentLogCommand}" />
+                        <Button Content="Log Folder"
+                                Width="92"
+                                Height="34"
+                                Margin="0,0,8,0"
+                                Command="{Binding OpenLogFolderCommand}" />
+                        <Button Content="Close"
+                                Width="72"
+                                Height="34"
+                                Click="OnCloseClick" />
+                    </StackPanel>
+                </Grid>
+
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="5" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0"
+                            BorderBrush="#EEF1F5"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="10"
+                            Background="#FAFBFC">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="8" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="8" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Text="SIGNAL LOGS"
+                                       FontWeight="SemiBold"
+                                       Foreground="#344054" />
+
+                            <StackPanel Grid.Row="2" Orientation="Horizontal">
+                                <ComboBox x:Name="SignalFilter"
+                                          Width="82"
+                                          SelectedIndex="0"
+                                          SelectionChanged="OnSignalFilterChanged">
+                                    <ComboBoxItem Content="All" Tag="All" />
+                                    <ComboBoxItem Content="Open" Tag="Open" />
+                                    <ComboBoxItem Content="Hedge" Tag="Hedge" />
+                                    <ComboBoxItem Content="Close" Tag="Close" />
+                                </ComboBox>
+                            </StackPanel>
+
+                            <ListBox x:Name="SignalLogList"
+                                     Grid.Row="4"
+                                     ItemsSource="{Binding SignalLogItems}"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     Foreground="#101828"
+                                     FontFamily="Consolas"
+                                     FontSize="12"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding DisplayText}"
+                                                   Foreground="{Binding Converter={StaticResource SignalLogColorConverter}}"
+                                                   TextWrapping="NoWrap" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </Border>
+
+                    <GridSplitter Grid.Column="1"
+                                  Width="5"
+                                  HorizontalAlignment="Stretch"
+                                  VerticalAlignment="Stretch"
+                                  Background="#E4E7EC"
+                                  ShowsPreview="True" />
+
+                    <Border Grid.Column="2"
+                            BorderBrush="#EEF1F5"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="10"
+                            Background="#FAFBFC">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="8" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="8" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Text="SYSTEM / EXECUTION LOGS"
+                                       FontWeight="SemiBold"
+                                       Foreground="#344054" />
+
+                            <StackPanel Grid.Row="2" Orientation="Horizontal">
+                                <ComboBox x:Name="SystemDomainFilter"
+                                          Width="108"
+                                          SelectedIndex="0"
+                                          SelectionChanged="OnSystemFilterChanged">
+                                    <ComboBoxItem Content="All" Tag="All" />
+                                    <ComboBoxItem Content="Trading" Tag="Trading" />
+                                    <ComboBoxItem Content="Execution" Tag="Execution" />
+                                    <ComboBoxItem Content="Recovery" Tag="Recovery" />
+                                    <ComboBoxItem Content="Market" Tag="Market" />
+                                    <ComboBoxItem Content="Connection" Tag="Connection" />
+                                    <ComboBoxItem Content="Application" Tag="Application" />
+                                </ComboBox>
+                                <ComboBox x:Name="SystemLevelFilter"
+                                          Width="76"
+                                          Margin="8,0,0,0"
+                                          SelectedIndex="0"
+                                          SelectionChanged="OnSystemFilterChanged">
+                                    <ComboBoxItem Content="All" Tag="All" />
+                                    <ComboBoxItem Content="Info" Tag="Info" />
+                                    <ComboBoxItem Content="Warn" Tag="Warn" />
+                                    <ComboBoxItem Content="Error" Tag="Error" />
+                                </ComboBox>
+                            </StackPanel>
+
+                            <ListBox x:Name="SystemLogList"
+                                     Grid.Row="4"
+                                     ItemsSource="{Binding SystemLogItems}"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     Foreground="#101828"
+                                     FontFamily="Consolas"
+                                     FontSize="12"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding DisplayText}"
+                                                   Foreground="{Binding Converter={StaticResource SystemLogColorConverter}}"
+                                                   TextWrapping="NoWrap" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <Grid Grid.Row="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="5" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="Signal logs: realtime"
+                               Foreground="#667085"
+                               FontSize="12" />
+                    <TextBlock Grid.Column="2"
+                               Text="{Binding SystemLogStatusText}"
+                               Foreground="#667085"
+                               FontSize="12" />
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

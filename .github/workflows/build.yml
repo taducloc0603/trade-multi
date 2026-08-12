@@ -2,7 +2,7 @@ name: Build and Release Windows App
 
 on:
   push:
-    branches: [ dev, dev-4 ]
+    branches: [ dev, dev-5 ]
   workflow_dispatch:
 
 permissions:

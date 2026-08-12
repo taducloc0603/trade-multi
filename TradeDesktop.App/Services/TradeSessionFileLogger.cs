@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using TradeDesktop.Application.Models;
 
 namespace TradeDesktop.App.Services;
 
@@ -22,6 +23,8 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     private BlockingCollection<string>? _writeQueue;
     private Task? _drainTask;
     private long _droppedLogCount;
+
+    public event Action<SystemLogItem>? RealtimeLogAccepted;
 
     public bool IsSessionActive
     {
@@ -106,6 +109,15 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     }
 
     public void Log(TradeLogLevel level, string message)
+        => LogCore(level, message, publishRealtime: true);
+
+    public void Log(string message)
+        => LogCore(InferLevelFromMessage(message), message, publishRealtime: true);
+
+    public void LogFileOnly(string message)
+        => LogCore(InferLevelFromMessage(message), message, publishRealtime: false);
+
+    private void LogCore(TradeLogLevel level, string message, bool publishRealtime)
     {
         var queue = _writeQueue;
         if (queue is null || queue.IsAddingCompleted)
@@ -122,7 +134,10 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         {
             var timestamp = DateTimeOffset.Now;
             var line = $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {message}";
-            TryEnqueue(queue, line, level);
+            if (TryEnqueue(queue, line, level) && publishRealtime)
+            {
+                PublishRealtimeLog(timestamp.LocalDateTime, message, level);
+            }
         }
         catch (ObjectDisposedException)
         {
@@ -135,40 +150,6 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         catch (Exception ex)
         {
             SafeDebug($"Log(level) enqueue failed: {ex}");
-        }
-    }
-
-    public void Log(string message)
-    {
-        var queue = _writeQueue;
-        if (queue is null || queue.IsAddingCompleted)
-        {
-            return;
-        }
-
-        var level = InferLevelFromMessage(message);
-        if (level < _minLevel)
-        {
-            return;
-        }
-
-        try
-        {
-            var timestamp = DateTimeOffset.Now;
-            var line = $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {message}";
-            TryEnqueue(queue, line, level);
-        }
-        catch (ObjectDisposedException)
-        {
-            // Queue was disposed concurrently with stop; drop silently.
-        }
-        catch (InvalidOperationException)
-        {
-            // Queue was completed between the IsAddingCompleted check and Add; drop silently.
-        }
-        catch (Exception ex)
-        {
-            SafeDebug($"Log enqueue failed: {ex}");
         }
     }
 
@@ -216,11 +197,11 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         }
     }
 
-    private void TryEnqueue(BlockingCollection<string> queue, string line, TradeLogLevel level)
+    private bool TryEnqueue(BlockingCollection<string> queue, string line, TradeLogLevel level)
     {
         if (queue.TryAdd(line))
         {
-            return;
+            return true;
         }
 
         // Preserve operationally important records even during a log storm. This may
@@ -232,10 +213,30 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 WriteDroppedLogSummaryIfNeeded();
                 WriteLineCore(line);
             }
-            return;
+            return true;
         }
 
         Interlocked.Increment(ref _droppedLogCount);
+        return false;
+    }
+
+    private void PublishRealtimeLog(DateTime timestamp, string message, TradeLogLevel level)
+    {
+        try
+        {
+            var severity = level switch
+            {
+                TradeLogLevel.Debug => SystemLogSeverity.Debug,
+                TradeLogLevel.Warn => SystemLogSeverity.Warn,
+                TradeLogLevel.Error => SystemLogSeverity.Error,
+                _ => SystemLogSeverity.Info
+            };
+            RealtimeLogAccepted?.Invoke(SystemLogItem.Parse(timestamp, message, severity));
+        }
+        catch (Exception ex)
+        {
+            SafeDebug($"Realtime log subscriber failed: {ex}");
+        }
     }
 
     private void WriteDroppedLogSummaryIfNeeded()
@@ -247,9 +248,9 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         }
 
         var timestamp = DateTimeOffset.Now;
-        WriteLineCore(
-            $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] [LOGGER][WARN] " +
-            $"Dropped {dropped} log lines because the bounded queue was full.");
+        var message = $"[LOGGER][WARN] Dropped {dropped} log lines because the bounded queue was full.";
+        WriteLineCore($"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {message}");
+        PublishRealtimeLog(timestamp.LocalDateTime, message, TradeLogLevel.Warn);
     }
 
     private void DrainAndCloseQueue()

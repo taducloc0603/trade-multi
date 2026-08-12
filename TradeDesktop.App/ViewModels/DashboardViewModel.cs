@@ -2,9 +2,11 @@ using System.Globalization;
 using System.IO;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using TradeDesktop.App.Commands;
 using TradeDesktop.App.Helpers;
@@ -21,6 +23,7 @@ namespace TradeDesktop.App.ViewModels;
 public sealed class DashboardViewModel : ObservableObject
 {
     private static readonly string AssemblyVersion = GetAssemblyVersion();
+    private static readonly string[] SystemLogThrottleSubjectKeys = ["pairId=", "slot=", "exchange=", "map="];
 
     private readonly IServiceProvider _serviceProvider;
     private readonly RuntimeConfigState _runtimeConfigState;
@@ -36,6 +39,15 @@ public sealed class DashboardViewModel : ObservableObject
     private readonly ITradeExecutionRouter _tradeExecutionRouter;
     private readonly IMt5ManualTradeService _mt5ManualTradeService;
     private readonly ITradeSessionFileLogger _tradeSessionFileLogger;
+    private readonly ConcurrentQueue<SystemLogItem> _pendingSystemLogs = new();
+    private readonly object _systemLogQueueSync = new();
+    private readonly object _systemLogThrottleSync = new();
+    private readonly Dictionary<string, DateTime> _lastSystemLogByThrottleKey = new(StringComparer.Ordinal);
+    private readonly DispatcherTimer _systemLogFlushTimer;
+    private int _pendingSystemLogCount;
+    private long _systemLogTotalCount;
+    private long _systemLogWarningCount;
+    private long _systemLogErrorCount;
     private readonly ITelegramNotifier _telegramNotifier;
     private readonly IHwndHealthChecker _hwndHealthChecker;
     private readonly string _normalizedHostName;
@@ -65,6 +77,10 @@ public sealed class DashboardViewModel : ObservableObject
     private readonly Dictionary<string, int> _sttByPairId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PendingOpenPairState> _pendingOpenPairById = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PendingClosePairState> _pendingClosePairById = new(StringComparer.Ordinal);
+    private readonly Dictionary<GapSignalTriggerResult, SignalLifecycleContext> _signalContextByTrigger =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<string, SignalLifecycleContext> _signalContextByPairId = new(StringComparer.Ordinal);
+    private readonly Dictionary<int, SignalLifecycleContext> _closeSignalContextBySlot = [];
     private int _nextStt = 1;
     private int _manualSlot;
     private int _autoSlot;
@@ -266,6 +282,20 @@ public sealed class DashboardViewModel : ObservableObject
         public bool IsResolved { get; set; }
     }
 
+    private sealed class SignalLifecycleContext
+    {
+        public Guid SignalId { get; init; } = Guid.NewGuid();
+        public required GapSignalAction Action { get; init; }
+        public required GapSignalSide Side { get; init; }
+        public bool IsHedge { get; init; }
+        public int? OriginalSlot { get; init; }
+        public string? OriginalPairId { get; init; }
+        public TradingPositionSide OriginalSide { get; init; }
+        public string? PairId { get; set; }
+        public int? SlotId { get; set; }
+        public bool FinalOutcomeLogged { get; set; }
+    }
+
     private sealed record PendingOpenTimeoutAction(
         string PairId,
         bool IsAutoFlow,
@@ -391,6 +421,15 @@ public sealed class DashboardViewModel : ObservableObject
         _tradeExecutionRouter = tradeExecutionRouter;
         _mt5ManualTradeService = mt5ManualTradeService;
         _tradeSessionFileLogger = tradeSessionFileLogger;
+        SignalLogItems = new SignalLogCollection(MaxSignalLogItems, LogLegacySignalFileOnly);
+        SystemLogItems = new CappedObservableCollection<SystemLogItem>(MaxSystemLogItems);
+        _tradeSessionFileLogger.RealtimeLogAccepted += OnRealtimeLogAccepted;
+        _systemLogFlushTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(200)
+        };
+        _systemLogFlushTimer.Tick += (_, _) => FlushPendingSystemLogs();
+        _systemLogFlushTimer.Start();
         _telegramNotifier = telegramNotifier;
         _hwndHealthChecker = hwndHealthChecker;
 
@@ -564,7 +603,13 @@ public sealed class DashboardViewModel : ObservableObject
     }
 
     private const int MaxSignalLogItems = 500;
-    public ObservableCollection<string> SignalLogItems { get; } = new CappedObservableCollection<string>(MaxSignalLogItems);
+    private const int MaxSystemLogItems = 2_000;
+    private const int MaxPendingSystemLogs = 5_000;
+    private const int MaxSystemLogsPerFlush = 150;
+    public SignalLogCollection SignalLogItems { get; }
+    public CappedObservableCollection<SystemLogItem> SystemLogItems { get; }
+    public string SystemLogStatusText =>
+        $"System: {_systemLogTotalCount} lines · {_systemLogWarningCount} warnings · {_systemLogErrorCount} errors";
     public ObservableCollection<TradePairRealtimeProfitRowViewModel> TradeRealtimeProfitRows { get; } = [];
     public ObservableCollection<HistoryPairProfitRowViewModel> HistoryRealtimeProfitRows { get; } = [];
     public string HistoryRealtimeProfitSummary
@@ -991,6 +1036,7 @@ public sealed class DashboardViewModel : ObservableObject
         _lastSignalPairId = null;
         LastSignalText = "-";
         SignalLogItems.Clear();
+        ResetSystemLogDisplay();
 
         await ResyncOpenTradesAsync();
 
@@ -1045,9 +1091,9 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 for (var i = e.NewItems.Count - 1; i >= 0; i--)
                 {
-                    if (e.NewItems[i] is string line && !string.IsNullOrWhiteSpace(line))
+                    if (e.NewItems[i] is SignalLogItem item)
                     {
-                        _tradeSessionFileLogger.Log(line);
+                        _tradeSessionFileLogger.Log(item.ToString());
                     }
                 }
 
@@ -1056,9 +1102,9 @@ public sealed class DashboardViewModel : ObservableObject
 
             foreach (var item in e.NewItems)
             {
-                if (item is string line && !string.IsNullOrWhiteSpace(line))
+                if (item is SignalLogItem signalLogItem)
                 {
-                    _tradeSessionFileLogger.Log(line);
+                    _tradeSessionFileLogger.Log(signalLogItem.ToString());
                 }
             }
         }
@@ -1067,6 +1113,143 @@ public sealed class DashboardViewModel : ObservableObject
             // Phase A requirement: never break runtime flow because of file logging.
             SafeVmLog($"[VM][WARN] Suppressed exception at OnSignalLogItemsCollectionChanged: {ex.Message}");
         }
+    }
+
+    private void OnRealtimeLogAccepted(SystemLogItem item)
+    {
+        // Structured signal records own the left panel. Keeping them out here also
+        // prevents duplicate collection notifications and duplicate rendering work.
+        if (item.IsSignal || item.Severity == SystemLogSeverity.Debug || ShouldThrottleSystemLog(item))
+        {
+            return;
+        }
+
+        lock (_systemLogQueueSync)
+        {
+            // The file remains authoritative. A hard UI cap prevents even a WARN/ERROR
+            // storm from growing application memory without bound.
+            if (_pendingSystemLogCount >= MaxPendingSystemLogs)
+            {
+                return;
+            }
+
+            _pendingSystemLogs.Enqueue(item);
+            _pendingSystemLogCount++;
+        }
+    }
+
+    private bool ShouldThrottleSystemLog(SystemLogItem item)
+    {
+        var interval = ResolveSystemLogThrottleInterval(item.Message);
+        if (interval == TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        var key = $"{item.Category}|{item.EventType}|{ResolveThrottleSubject(item.Message)}";
+        lock (_systemLogThrottleSync)
+        {
+            if (_lastSystemLogByThrottleKey.Count >= 4_096)
+            {
+                _lastSystemLogByThrottleKey.Clear();
+            }
+
+            if (_lastSystemLogByThrottleKey.TryGetValue(key, out var lastAt)
+                && item.Timestamp - lastAt < interval)
+            {
+                return true;
+            }
+
+            _lastSystemLogByThrottleKey[key] = item.Timestamp;
+            return false;
+        }
+    }
+
+    private static TimeSpan ResolveSystemLogThrottleInterval(string message)
+    {
+        if (message.Contains("[TP_CHECK]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("[TRADE_GATE][BLOCKED]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Latency spike", StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeSpan.FromSeconds(10);
+        }
+
+        if (message.Contains("[MIN_PROFIT][WAITING]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("[COOLDOWN][BLOCK]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("[CONN][SKIP]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("[HWND][SKIP]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("[OPPOSITE_OPEN_GUARD]", StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeSpan.FromSeconds(30);
+        }
+
+        return TimeSpan.Zero;
+    }
+
+    private static string ResolveThrottleSubject(string message)
+    {
+        foreach (var key in SystemLogThrottleSubjectKeys)
+        {
+            var start = message.IndexOf(key, StringComparison.OrdinalIgnoreCase);
+            if (start < 0)
+            {
+                continue;
+            }
+
+            start += key.Length;
+            var end = message.IndexOfAny([' ', ',', ';'], start);
+            return end > start ? message[start..end] : message[start..];
+        }
+
+        return "global";
+    }
+
+    private void FlushPendingSystemLogs()
+    {
+        var flushed = 0;
+        while (flushed < MaxSystemLogsPerFlush)
+        {
+            SystemLogItem? item;
+            lock (_systemLogQueueSync)
+            {
+                if (!_pendingSystemLogs.TryDequeue(out item))
+                {
+                    break;
+                }
+
+                _pendingSystemLogCount--;
+            }
+
+            SystemLogItems.Insert(0, item);
+            _systemLogTotalCount++;
+            if (item.Severity == SystemLogSeverity.Warn) _systemLogWarningCount++;
+            if (item.Severity == SystemLogSeverity.Error) _systemLogErrorCount++;
+            flushed++;
+        }
+
+        if (flushed > 0)
+        {
+            OnPropertyChanged(nameof(SystemLogStatusText));
+        }
+    }
+
+    private void ResetSystemLogDisplay()
+    {
+        lock (_systemLogQueueSync)
+        {
+            while (_pendingSystemLogs.TryDequeue(out _)) { }
+            _pendingSystemLogCount = 0;
+        }
+        lock (_systemLogThrottleSync)
+        {
+            _lastSystemLogByThrottleKey.Clear();
+        }
+
+        SystemLogItems.Clear();
+        _systemLogTotalCount = 0;
+        _systemLogWarningCount = 0;
+        _systemLogErrorCount = 0;
+        OnPropertyChanged(nameof(SystemLogStatusText));
     }
 
     private async Task BuyAsync()
@@ -1529,6 +1712,11 @@ public sealed class DashboardViewModel : ObservableObject
         {
             SetLastSignalStatus("FAILED");
             SafeVmLog($"[VM][ERROR] Auto trade error: {ex}");
+            LogSignalOutcome(
+                GetOrCreateSignalContext(trigger),
+                "FAILED",
+                "EXECUTION_FAILED",
+                extraFields: [("error", ex.Message)]);
             if (trigger.Action == GapSignalAction.Close)
             {
                 _tradingFlowEngine.AbortPendingCloseExecution();
@@ -1563,6 +1751,7 @@ public sealed class DashboardViewModel : ObservableObject
         if (ShouldSkipTradeOp("auto-open"))
         {
             SetLastSignalStatus("REJECTED: TRADE OPS DISABLED");
+            LogSignalOutcome(GetOrCreateSignalContext(trigger), "BLOCKED", "CONNECTION_UNHEALTHY");
             return Task.CompletedTask;
         }
 
@@ -1578,6 +1767,12 @@ public sealed class DashboardViewModel : ObservableObject
         if (ShouldSkipTradeOp("auto-close"))
         {
             SetLastSignalStatus("REJECTED: TRADE OPS DISABLED");
+            LogSignalOutcome(
+                GetOrCreateSignalContext(trigger),
+                "BLOCKED",
+                "CONNECTION_UNHEALTHY",
+                targetSlot.PairId,
+                targetSlot.SlotId);
             return;
         }
 
@@ -1592,6 +1787,13 @@ public sealed class DashboardViewModel : ObservableObject
             SafeVmLog($"[VM][ERROR] Auto close error: {ex}");
             _tradingFlowEngine.AbortPendingCloseExecution();
             LogFlowTransitionIfChanged("close-aborted-by-exception");
+            LogSignalOutcome(
+                GetOrCreateSignalContext(trigger),
+                "FAILED",
+                "EXECUTION_FAILED",
+                targetSlot.PairId,
+                targetSlot.SlotId,
+                ("error", ex.Message));
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
                 RaiseCurrentPositionTextChanged();
@@ -1604,6 +1806,7 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task AutoBuyAsync(GapSignalTriggerResult trigger)
     {
+        var signalContext = GetOrCreateSignalContext(trigger);
         if (_isAutoOpenPausedByInvariant)
         {
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
@@ -1611,11 +1814,13 @@ public sealed class DashboardViewModel : ObservableObject
                 SignalLogItems.Insert(0,
                     $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: invariant watchdog is active (auto-open paused)");
             });
+            LogSignalOutcome(signalContext, "BLOCKED", "WATCHDOG_PAUSED");
             return;
         }
 
         if (!TryAllowOppositeOpenPriceGuard(requestedTradeType: 0, stage: "CHECK", pairId: null))
         {
+            LogSignalOutcome(signalContext, "BLOCKED", "OPPOSITE_SIDE_LOCK");
             return;
         }
 
@@ -1631,12 +1836,15 @@ public sealed class DashboardViewModel : ObservableObject
                 SignalLogItems.Insert(0,
                     $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: another auto-open is in flight");
             });
+            LogSignalOutcome(signalContext, "BLOCKED", "DUPLICATE_SIGNAL");
             return;
         }
 
         var slot = _autoSlot;
         var appOpenRequestRawMs = Environment.TickCount64;
         var pairId = BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: true);
+        signalContext.PairId = pairId;
+        _signalContextByPairId[pairId] = signalContext;
         SetLastSignalStatus("DISPATCHING", pairId: pairId);
 
         try
@@ -1653,6 +1861,12 @@ public sealed class DashboardViewModel : ObservableObject
                         $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: pending auto cycle " +
                         $"{blockingPairId} not yet fully confirmed (waiting MMF for both legs)");
                 });
+                LogSignalOutcome(
+                    signalContext,
+                    "BLOCKED",
+                    "UNRESOLVED_PENDING_CYCLE",
+                    pairId,
+                    extraFields: [("blockingPairId", blockingPairId)]);
                 return;
             }
 
@@ -1667,6 +1881,7 @@ public sealed class DashboardViewModel : ObservableObject
                         $"    - [{DateTime.Now:HH:mm:ss.fff}] Open Buy blocked: debounce window " +
                         $"({AutoOpenDebounceMs}ms) since last Buy click at {_lastAutoOpenBuyAtLocal.Value:HH:mm:ss.fff}");
                 });
+                LogSignalOutcome(signalContext, "BLOCKED", "DUPLICATE_SIGNAL", pairId, extraFields: [("debounceMs", AutoOpenDebounceMs)]);
                 return;
             }
 
@@ -1680,7 +1895,8 @@ public sealed class DashboardViewModel : ObservableObject
             CapturePendingOpenRequestFromTrigger(TradeTab.RightPanel.TargetMapName, trigger, isExchangeA: false, tradeType: 1, appOpenRequestTimeLocal, appOpenRequestRawMs, slot);
 
             // Phase 1: allocate coordinator slot AFTER pending captured. If quota full, abort.
-            var coordinatorSlot = _portfolioCoordinator.AllocatePendingOpenSlot(pairId, trigger);
+            var allocation = _portfolioCoordinator.AllocatePendingOpenSlotWithReason(pairId, trigger);
+            var coordinatorSlot = allocation.Slot;
             if (coordinatorSlot is null)
             {
                 System.Windows.Application.Current.Dispatcher.Invoke(() =>
@@ -1688,8 +1904,15 @@ public sealed class DashboardViewModel : ObservableObject
                     SignalLogItems.Insert(0,
                         $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: portfolio quota full");
                 });
+                LogSignalOutcome(
+                    signalContext,
+                    "BLOCKED",
+                    ResolveCoordinatorBlockReasonCode(allocation.BlockReason),
+                    pairId,
+                    extraFields: [("detail", allocation.BlockReason)]);
                 return;
             }
+            signalContext.SlotId = coordinatorSlot.SlotId;
             coordinatorSlot.SetHwndProfile(hwndIndex, hwndColumn);
             SafeVmLog($"[SLOT][INFO] Slot {coordinatorSlot.SlotId} allocated: pairId={pairId} side=Buy mode=GapBuy");
 
@@ -1725,9 +1948,24 @@ public sealed class DashboardViewModel : ObservableObject
                         "auto-gap-buy",
                         trigger,
                         pairId,
-                        coordinatorSlot.SlotId)));
+                        coordinatorSlot.SlotId,
+                        signalContext.SignalId)));
 
             NotifyOpenCloseFailures("OPEN", openResult, pairId);
+
+            var successfulOpenLegs = openResult.Legs.Count(leg => leg.Success);
+            if (!openResult.Success && successfulOpenLegs > 0)
+            {
+                LogSignalOutcome(
+                    signalContext,
+                    "FAILED",
+                    "PARTIAL_OPEN",
+                    pairId,
+                    coordinatorSlot.SlotId,
+                    ("successfulLegs", successfulOpenLegs),
+                    ("totalLegs", openResult.Legs.Count),
+                    ("rollback", "pending"));
+            }
 
             if (!openResult.Success && openResult.Legs.All(x => !x.Success))
             {
@@ -1738,6 +1976,7 @@ public sealed class DashboardViewModel : ObservableObject
                     state.IsResolved = true;
                 }
                 _portfolioCoordinator.AbortPendingOpen(pairId);
+                LogSignalOutcome(signalContext, "FAILED", "EXECUTION_FAILED", pairId, coordinatorSlot.SlotId);
             }
             if (openResult.IsDispatchBlocked)
             {
@@ -1749,6 +1988,14 @@ public sealed class DashboardViewModel : ObservableObject
                 }
                 _portfolioCoordinator.AbortPendingOpen(pairId);
                 SafeVmLog($"[TRADE_GATE][BLOCKED] OPEN pairId={pairId} remainingMs={openResult.GateRemainingMilliseconds}");
+                var policyCode = openResult.PolicyBlockCode;
+                LogSignalOutcome(
+                    signalContext,
+                    string.Equals(policyCode, "SIGNAL_EXPIRED", StringComparison.Ordinal) ? "CANCELLED" : "BLOCKED",
+                    policyCode ?? "TRADE_GATE_BLOCKED",
+                    pairId,
+                    coordinatorSlot.SlotId,
+                    ("remainingMs", openResult.GateRemainingMilliseconds));
                 return;
             }
 
@@ -1792,6 +2039,7 @@ public sealed class DashboardViewModel : ObservableObject
 
     private async Task AutoSellAsync(GapSignalTriggerResult trigger)
     {
+        var signalContext = GetOrCreateSignalContext(trigger);
         if (_isAutoOpenPausedByInvariant)
         {
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
@@ -1799,11 +2047,13 @@ public sealed class DashboardViewModel : ObservableObject
                 SignalLogItems.Insert(0,
                     $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: invariant watchdog is active (auto-open paused)");
             });
+            LogSignalOutcome(signalContext, "BLOCKED", "WATCHDOG_PAUSED");
             return;
         }
 
         if (!TryAllowOppositeOpenPriceGuard(requestedTradeType: 1, stage: "CHECK", pairId: null))
         {
+            LogSignalOutcome(signalContext, "BLOCKED", "OPPOSITE_SIDE_LOCK");
             return;
         }
 
@@ -1817,12 +2067,15 @@ public sealed class DashboardViewModel : ObservableObject
                 SignalLogItems.Insert(0,
                     $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: another auto-open is in flight");
             });
+            LogSignalOutcome(signalContext, "BLOCKED", "DUPLICATE_SIGNAL");
             return;
         }
 
         var slot = _autoSlot;
         var appOpenRequestRawMs = Environment.TickCount64;
         var pairId = BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: true);
+        signalContext.PairId = pairId;
+        _signalContextByPairId[pairId] = signalContext;
         SetLastSignalStatus("DISPATCHING", pairId: pairId);
 
         try
@@ -1839,6 +2092,12 @@ public sealed class DashboardViewModel : ObservableObject
                         $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: pending auto cycle " +
                         $"{blockingPairId} not yet fully confirmed (waiting MMF for both legs)");
                 });
+                LogSignalOutcome(
+                    signalContext,
+                    "BLOCKED",
+                    "UNRESOLVED_PENDING_CYCLE",
+                    pairId,
+                    extraFields: [("blockingPairId", blockingPairId)]);
                 return;
             }
 
@@ -1853,6 +2112,7 @@ public sealed class DashboardViewModel : ObservableObject
                         $"    - [{DateTime.Now:HH:mm:ss.fff}] Open Sell blocked: debounce window " +
                         $"({AutoOpenDebounceMs}ms) since last Sell click at {_lastAutoOpenSellAtLocal.Value:HH:mm:ss.fff}");
                 });
+                LogSignalOutcome(signalContext, "BLOCKED", "DUPLICATE_SIGNAL", pairId, extraFields: [("debounceMs", AutoOpenDebounceMs)]);
                 return;
             }
 
@@ -1866,7 +2126,8 @@ public sealed class DashboardViewModel : ObservableObject
             CapturePendingOpenRequestFromTrigger(TradeTab.RightPanel.TargetMapName, trigger, isExchangeA: false, tradeType: 0, appOpenRequestTimeLocal, appOpenRequestRawMs, slot);
 
             // Phase 1: allocate coordinator slot AFTER pending captured. If quota full, abort.
-            var coordinatorSlot = _portfolioCoordinator.AllocatePendingOpenSlot(pairId, trigger);
+            var allocation = _portfolioCoordinator.AllocatePendingOpenSlotWithReason(pairId, trigger);
+            var coordinatorSlot = allocation.Slot;
             if (coordinatorSlot is null)
             {
                 System.Windows.Application.Current.Dispatcher.Invoke(() =>
@@ -1874,8 +2135,15 @@ public sealed class DashboardViewModel : ObservableObject
                     SignalLogItems.Insert(0,
                         $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: portfolio quota full");
                 });
+                LogSignalOutcome(
+                    signalContext,
+                    "BLOCKED",
+                    ResolveCoordinatorBlockReasonCode(allocation.BlockReason),
+                    pairId,
+                    extraFields: [("detail", allocation.BlockReason)]);
                 return;
             }
+            signalContext.SlotId = coordinatorSlot.SlotId;
             coordinatorSlot.SetHwndProfile(hwndIndex, hwndColumn);
             SafeVmLog($"[SLOT][INFO] Slot {coordinatorSlot.SlotId} allocated: pairId={pairId} side=Sell mode=GapSell");
 
@@ -1911,9 +2179,24 @@ public sealed class DashboardViewModel : ObservableObject
                         "auto-gap-sell",
                         trigger,
                         pairId,
-                        coordinatorSlot.SlotId)));
+                        coordinatorSlot.SlotId,
+                        signalContext.SignalId)));
 
             NotifyOpenCloseFailures("OPEN", openResult, pairId);
+
+            var successfulOpenLegs = openResult.Legs.Count(leg => leg.Success);
+            if (!openResult.Success && successfulOpenLegs > 0)
+            {
+                LogSignalOutcome(
+                    signalContext,
+                    "FAILED",
+                    "PARTIAL_OPEN",
+                    pairId,
+                    coordinatorSlot.SlotId,
+                    ("successfulLegs", successfulOpenLegs),
+                    ("totalLegs", openResult.Legs.Count),
+                    ("rollback", "pending"));
+            }
 
             if (!openResult.Success && openResult.Legs.All(x => !x.Success))
             {
@@ -1924,6 +2207,7 @@ public sealed class DashboardViewModel : ObservableObject
                     state.IsResolved = true;
                 }
                 _portfolioCoordinator.AbortPendingOpen(pairId);
+                LogSignalOutcome(signalContext, "FAILED", "EXECUTION_FAILED", pairId, coordinatorSlot.SlotId);
             }
             if (openResult.IsDispatchBlocked)
             {
@@ -1935,6 +2219,14 @@ public sealed class DashboardViewModel : ObservableObject
                 }
                 _portfolioCoordinator.AbortPendingOpen(pairId);
                 SafeVmLog($"[TRADE_GATE][BLOCKED] OPEN pairId={pairId} remainingMs={openResult.GateRemainingMilliseconds}");
+                var policyCode = openResult.PolicyBlockCode;
+                LogSignalOutcome(
+                    signalContext,
+                    string.Equals(policyCode, "SIGNAL_EXPIRED", StringComparison.Ordinal) ? "CANCELLED" : "BLOCKED",
+                    policyCode ?? "TRADE_GATE_BLOCKED",
+                    pairId,
+                    coordinatorSlot.SlotId,
+                    ("remainingMs", openResult.GateRemainingMilliseconds));
                 return;
             }
 
@@ -1983,6 +2275,7 @@ public sealed class DashboardViewModel : ObservableObject
     /// </summary>
     private async Task AutoCloseOrderAsync(GapSignalTriggerResult trigger, PositionSlot? targetSlot = null)
     {
+        var signalContext = GetOrCreateSignalContext(trigger);
         if (Interlocked.CompareExchange(ref _closeDispatchInFlight, 1, 0) != 0)
         {
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
@@ -1990,12 +2283,18 @@ public sealed class DashboardViewModel : ObservableObject
                 SignalLogItems.Insert(0,
                     $"    - [{DateTime.Now:HH:mm:ss.fff}] Close blocked: another auto-close is in flight");
             });
+            LogSignalOutcome(
+                signalContext,
+                "BLOCKED",
+                "DUPLICATE_SIGNAL",
+                targetSlot?.PairId,
+                targetSlot?.SlotId);
             return;
         }
 
         try
         {
-            var slot = Math.Max(0, _autoSlot - 1);
+            var slot = targetSlot?.SlotId ?? Math.Max(0, _autoSlot - 1);
             _closeConfirmBySlot.Remove(slot);
 
             // Phase 4: if coordinator provided a specific slot, lookup by ticket.
@@ -2048,8 +2347,8 @@ public sealed class DashboardViewModel : ObservableObject
             });
 
             // Capture pending request BEFORE executing close to avoid race with shared-memory polling.
-            CapturePendingCloseRequestFromTrigger(selectA, trigger, isExchangeA: true, appCloseRequestTimeLocal, appCloseRequestRawMs, slot);
-            CapturePendingCloseRequestFromTrigger(selectB, trigger, isExchangeA: false, appCloseRequestTimeLocal, appCloseRequestRawMs, slot);
+            CapturePendingCloseRequestFromTrigger(selectA, trigger, isExchangeA: true, appCloseRequestTimeLocal, appCloseRequestRawMs, slot, targetSlot?.PairId);
+            CapturePendingCloseRequestFromTrigger(selectB, trigger, isExchangeA: false, appCloseRequestTimeLocal, appCloseRequestRawMs, slot, targetSlot?.PairId);
 
             if (targetSlot is not null)
             {
@@ -2085,7 +2384,8 @@ public sealed class DashboardViewModel : ObservableObject
                         "auto-close",
                         trigger,
                         targetSlot?.PairId,
-                        targetSlot?.SlotId)));
+                        targetSlot?.SlotId,
+                        signalContext.SignalId)));
 
             if (closeResult.IsDispatchBlocked)
             {
@@ -2101,6 +2401,14 @@ public sealed class DashboardViewModel : ObservableObject
                 }
                 _activeAutoCloseRecoveryCycle = null;
                 SafeVmLog($"[TRADE_GATE][BLOCKED] CLOSE remainingMs={closeResult.GateRemainingMilliseconds}");
+                var policyCode = closeResult.PolicyBlockCode;
+                LogSignalOutcome(
+                    signalContext,
+                    string.Equals(policyCode, "SIGNAL_EXPIRED", StringComparison.Ordinal) ? "CANCELLED" : "BLOCKED",
+                    policyCode ?? "TRADE_GATE_BLOCKED",
+                    targetSlot?.PairId,
+                    targetSlot?.SlotId,
+                    ("remainingMs", closeResult.GateRemainingMilliseconds));
                 return;
             }
 
@@ -2119,9 +2427,29 @@ public sealed class DashboardViewModel : ObservableObject
             var closeSuccessB = !hadCloseCandidateB
                 || (successByExchange.TryGetValue("B", out var successB) && successB);
             var hasCloseSuccessBoth = hadCloseCandidateBoth && closeSuccessA && closeSuccessB;
+            if (hadCloseCandidateBoth && closeSuccessA != closeSuccessB)
+            {
+                LogSignalOutcome(
+                    signalContext,
+                    "FAILED",
+                    "PARTIAL_CLOSE",
+                    targetSlot?.PairId,
+                    targetSlot?.SlotId,
+                    ("legA", closeSuccessA ? "closed" : "open"),
+                    ("legB", closeSuccessB ? "closed" : "open"),
+                    ("retry", "pending"));
+            }
             if (hadCloseCandidateBoth && !closeSuccessA && !closeSuccessB)
             {
                 SetLastSignalStatus("FAILED");
+                LogSignalOutcome(
+                    signalContext,
+                    "FAILED",
+                    "EXECUTION_FAILED",
+                    targetSlot?.PairId,
+                    targetSlot?.SlotId,
+                    ("legA", closeSuccessA),
+                    ("legB", closeSuccessB));
             }
 
             var reconcileTradeLeft = ReadTradesWithMmfLog(TradeTab.LeftPanel.TargetMapName);
@@ -2263,7 +2591,8 @@ public sealed class DashboardViewModel : ObservableObject
         bool isExchangeA,
         DateTimeOffset appCloseRequestTimeLocal,
         long appCloseRequestRawMs,
-        int slotNumber = 0)
+        int slotNumber = 0,
+        string? pairIdOverride = null)
     {
         if (selection.Request is null || !selection.TradeType.HasValue)
         {
@@ -2285,7 +2614,8 @@ public sealed class DashboardViewModel : ObservableObject
             volume: selection.Volume,
             isAutoFlow: true,
             slotNumber: slotNumber,
-            exchangeLabel: isExchangeA ? "A" : "B");
+            exchangeLabel: isExchangeA ? "A" : "B",
+            pairIdOverride: pairIdOverride);
     }
 
     private static double? ResolveExpectedPriceFromTrigger(GapSignalTriggerResult trigger, bool isExchangeA, int tradeType)
@@ -3130,6 +3460,9 @@ public sealed class DashboardViewModel : ObservableObject
         _invariantClearStreak = 0;
         _activeAutoCycle = null;
         _activeAutoCloseRecoveryCycle = null;
+        _signalContextByTrigger.Clear();
+        _signalContextByPairId.Clear();
+        _closeSignalContextBySlot.Clear();
         _closeBothFlatPollStreak = 0;
         _externalPartialCloseStreak = 0;
         _externalPartialCloseInFlight = false;
@@ -4051,6 +4384,18 @@ public sealed class DashboardViewModel : ObservableObject
             SafeVmLog(
                 $"[CYCLE][ERROR] Pending open timeout: pairId={state.PairId} elapsedMs={(now - state.CreatedAtLocal).TotalMilliseconds:0} " +
                 $"confirmedA={state.OpenConfirmedA} confirmedB={state.OpenConfirmedB}");
+            if (_signalContextByPairId.TryGetValue(state.PairId, out var signalContext))
+            {
+                LogSignalOutcome(
+                    signalContext,
+                    "FAILED",
+                    "CONFIRMATION_TIMEOUT",
+                    state.PairId,
+                    signalContext.SlotId ?? state.SlotNumber,
+                    ("confirmedA", state.OpenConfirmedA),
+                    ("confirmedB", state.OpenConfirmedB),
+                    ("elapsedMs", (long)(now - state.CreatedAtLocal).TotalMilliseconds));
+            }
             NotifyTelegram(
                 eventCode: hasOnlyA ? "OPEN_PARTIAL_A_ONLY" : "OPEN_PARTIAL_B_ONLY",
                 severity: "CRITICAL",
@@ -5885,6 +6230,18 @@ public sealed class DashboardViewModel : ObservableObject
             }
             SafeVmLog($"[CYCLE][INFO] Pending open resolved: pairId={pendingRequest.PairId} ticketA={state.OpenedTicketA} ticketB={state.OpenedTicketB}");
 
+            if (_signalContextByPairId.TryGetValue(pendingRequest.PairId, out var signalContext))
+            {
+                LogSignalOutcome(
+                    signalContext,
+                    "CONFIRMED",
+                    string.Empty,
+                    pendingRequest.PairId,
+                    signalContext.SlotId ?? pendingRequest.SlotNumber,
+                    ("ticketA", state.OpenedTicketA),
+                    ("ticketB", state.OpenedTicketB));
+            }
+
             // Phase 1: notify coordinator so slot transitions PendingOpen → Live and tickets are stored.
             if (state.IsAutoFlow && state.OpenedTicketA.HasValue && state.OpenedTicketB.HasValue)
             {
@@ -6006,6 +6363,18 @@ public sealed class DashboardViewModel : ObservableObject
                 if (closeCycle.HasA && closeCycle.HasB && !closeCycle.WaitingStarted)
                 {
                     closeCycle.WaitingStarted = true;
+                    if (_signalContextByPairId.TryGetValue(pendingRequest.PairId, out var signalContext)
+                        || _closeSignalContextBySlot.TryGetValue(pendingRequest.SlotNumber, out signalContext))
+                    {
+                        LogSignalOutcome(
+                            signalContext,
+                            "CONFIRMED",
+                            string.Empty,
+                            pendingRequest.PairId,
+                            pendingRequest.SlotNumber,
+                            ("ticketA", _pendingClosePairById.TryGetValue(pendingRequest.PairId, out var closeStateA) ? closeStateA.TicketA : null),
+                            ("ticketB", _pendingClosePairById.TryGetValue(pendingRequest.PairId, out var closeStateB) ? closeStateB.TicketB : null));
+                    }
                     if (string.Equals(_lastSignalPairId, pendingRequest.PairId, StringComparison.Ordinal))
                     {
                         SetLastSignalStatus("CONFIRMED");
@@ -6763,6 +7132,15 @@ public sealed class DashboardViewModel : ObservableObject
                 _runtimeConfigState.CurrentCloseHoldConfirmMs);
             var signalSummary = BuildAutoSignalSummary(trigger);
             SetLastSignalStatus("DETECTED", signalSummary);
+            var signalContext = GetOrCreateSignalContext(trigger);
+            if (closeTargetSlot is not null)
+            {
+                signalContext.PairId = closeTargetSlot.PairId;
+                signalContext.SlotId = closeTargetSlot.SlotId;
+                _signalContextByPairId[closeTargetSlot.PairId] = signalContext;
+                _closeSignalContextBySlot[closeTargetSlot.SlotId] = signalContext;
+            }
+            LogSignalDetected(trigger);
             if (!guardResult.CanTrade)
             {
                 SetLastSignalStatus("REJECTED: GUARD");
@@ -6788,6 +7166,14 @@ public sealed class DashboardViewModel : ObservableObject
                 RaiseCurrentPositionTextChanged();
                 OnPropertyChanged(nameof(CurrentPhaseText));
 
+                LogSignalOutcome(
+                    signalContext,
+                    "BLOCKED",
+                    ResolveGuardReasonCode(guardResult.SkipReason),
+                    closeTargetSlot?.PairId,
+                    closeTargetSlot?.SlotId,
+                    ("guardReason", guardResult.SkipReason));
+
                 return;
             }
 
@@ -6804,6 +7190,7 @@ public sealed class DashboardViewModel : ObservableObject
 
                 SignalLogItems.Insert(0,
                     $"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked by toggle: {blockedReason}");
+                LogSignalOutcome(signalContext, "BLOCKED", "SIDE_DISABLED", extraFields: [("detail", blockedReason)]);
                 return;
             }
 
@@ -6817,6 +7204,12 @@ public sealed class DashboardViewModel : ObservableObject
                     SetLastSignalStatus($"WAITING QUALIFY {current}/{requiredN}");
                     SignalLogItems.Insert(0,
                         $"[{DateTime.Now:HH:mm:ss.fff}] [SKIP OPEN] qualifying {current}/{requiredN} - side={trigger.PrimarySide}");
+
+                    LogSignalOutcome(
+                        signalContext,
+                        "BLOCKED",
+                        "QUALIFYING_NOT_REACHED",
+                        extraFields: [("current", current), ("required", requiredN)]);
 
                     _tradingFlowEngine.AbortPendingOpenExecution();
                     LogFlowTransitionIfChanged("open-aborted-by-qualifying");
@@ -6838,6 +7231,15 @@ public sealed class DashboardViewModel : ObservableObject
                     SetLastSignalStatus($"WAITING QUALIFY {current}/{requiredN}");
                     SignalLogItems.Insert(0,
                         $"[{DateTime.Now:HH:mm:ss.fff}] [SKIP CLOSE] qualifying {current}/{requiredN} - mode={_tradingFlowEngine.CurrentOpenMode}");
+
+                    LogSignalOutcome(
+                        signalContext,
+                        "BLOCKED",
+                        "QUALIFYING_NOT_REACHED",
+                        closeTargetSlot?.PairId,
+                        closeTargetSlot?.SlotId,
+                        ("current", current),
+                        ("required", requiredN));
 
                     _tradingFlowEngine.AbortPendingCloseExecution();
                     LogFlowTransitionIfChanged("close-aborted-by-qualifying");
@@ -7788,7 +8190,192 @@ public sealed class DashboardViewModel : ObservableObject
 
     private void AddSignalLog(string message)
     {
-        System.Windows.Application.Current.Dispatcher.Invoke(() => SignalLogItems.Insert(0, message));
+        try
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() => SignalLogItems.Insert(0, message));
+        }
+        catch
+        {
+            // Legacy file-only logging is also non-critical to trading flow.
+        }
+    }
+
+    private void AddSignalLog(SignalLogItem item)
+    {
+        try
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() => SignalLogItems.Insert(0, item));
+        }
+        catch
+        {
+            // Logging and UI rendering are observational only and must never stop
+            // signal evaluation or physical trade execution.
+        }
+    }
+
+    private SignalLifecycleContext GetOrCreateSignalContext(GapSignalTriggerResult trigger)
+    {
+        if (_signalContextByTrigger.TryGetValue(trigger, out var existing))
+        {
+            return existing;
+        }
+
+        PositionSlot? original = null;
+        if (trigger.Action == GapSignalAction.Open)
+        {
+            var opposite = trigger.PrimarySide == GapSignalSide.Buy
+                ? TradingPositionSide.Sell
+                : TradingPositionSide.Buy;
+            var latestPosition = _portfolioCoordinator.LiveSlots
+                .Concat(_portfolioCoordinator.PendingCloseSlots)
+                .OrderByDescending(slot => slot.OpenConfirmedAtUtc ?? slot.OpenedAtUtc ?? DateTime.MinValue)
+                .ThenByDescending(slot => slot.SlotId)
+                .FirstOrDefault();
+            original = latestPosition?.Side == opposite ? latestPosition : null;
+        }
+
+        var context = new SignalLifecycleContext
+        {
+            Action = trigger.Action,
+            Side = trigger.PrimarySide,
+            IsHedge = original is not null,
+            OriginalSlot = original?.SlotId,
+            OriginalPairId = original?.PairId,
+            OriginalSide = original?.Side ?? TradingPositionSide.None
+        };
+        _signalContextByTrigger[trigger] = context;
+        return context;
+    }
+
+    private void LogSignalDetected(GapSignalTriggerResult trigger)
+    {
+        var context = GetOrCreateSignalContext(trigger);
+        var signalId = context.SignalId.ToString("N");
+        var gap = trigger.PrimarySide == GapSignalSide.Buy ? trigger.LastBuyGap : trigger.LastSellGap;
+
+        if (trigger.Action == GapSignalAction.Open)
+        {
+            var eventType = context.IsHedge ? "SIGNAL_HEDGE" : "SIGNAL_OPEN";
+            var description = context.IsHedge
+                ? $"Phát hiện tín hiệu {trigger.PrimarySide} đối ứng với vị thế {context.OriginalSide} còn tồn tại"
+                : "Phát hiện tín hiệu mở vị thế mới";
+            AddSignalLog(SignalLifecycleLogFormatter.Create(
+                eventType,
+                description,
+                SignalLogLevel.Info,
+                ("signalId", signalId),
+                (context.IsHedge ? "newSide" : "side", trigger.PrimarySide),
+                ("originalSide", context.IsHedge ? context.OriginalSide : null),
+                ("originalSlot", context.OriginalSlot),
+                ("originalPairId", context.OriginalPairId),
+                ("gap", gap)));
+            return;
+        }
+
+        var closeEvent = trigger.CloseReason == CloseSignalReason.Tp
+            ? "SIGNAL_CLOSE_TP"
+            : trigger.CloseGapMode == CloseGapMode.Sos
+                ? "SIGNAL_CLOSE_SOS"
+                : "SIGNAL_CLOSE_GAP";
+        var closeDescription = closeEvent switch
+        {
+            "SIGNAL_CLOSE_TP" => "Phát hiện tín hiệu đóng vì lợi nhuận đạt điều kiện TP",
+            "SIGNAL_CLOSE_SOS" => "Phát hiện tín hiệu đóng khẩn cấp theo điều kiện SOS",
+            _ => "Phát hiện tín hiệu đóng vị thế theo Gap thông thường"
+        };
+        AddSignalLog(SignalLifecycleLogFormatter.Create(
+            closeEvent,
+            closeDescription,
+            SignalLogLevel.Info,
+            ("signalId", signalId),
+            ("side", trigger.PrimarySide),
+            ("gap", gap),
+            ("mode", trigger.CloseGapMode),
+            ("profit", trigger.CloseTpProfit),
+            ("target", trigger.CloseTpTarget)));
+    }
+
+    private void LogSignalOutcome(
+        SignalLifecycleContext context,
+        string outcome,
+        string reasonCode,
+        string? pairId = null,
+        int? slotId = null,
+        params (string Name, object? Value)[] extraFields)
+    {
+        if (context.FinalOutcomeLogged)
+        {
+            return;
+        }
+
+        var prefix = context.Action == GapSignalAction.Close
+            ? "SIGNAL_CLOSE"
+            : context.IsHedge ? "SIGNAL_HEDGE" : "SIGNAL_OPEN";
+        var eventType = $"{prefix}_{outcome}";
+        var level = outcome == "FAILED" ? SignalLogLevel.Error
+            : outcome is "BLOCKED" or "CANCELLED" ? SignalLogLevel.Warn
+            : SignalLogLevel.Info;
+        var action = context.Action == GapSignalAction.Close ? "đóng vị thế" : context.IsHedge ? "mở Hedge" : "mở vị thế";
+        var description = outcome switch
+        {
+            "CONFIRMED" when context.Action == GapSignalAction.Close => "Hai chân của vị thế đã đóng thành công",
+            "CONFIRMED" when context.IsHedge => "Hai chân của vị thế Hedge đã mở thành công",
+            "CONFIRMED" => "Hai chân A/B đã mở thành công",
+            _ => SignalLifecycleLogFormatter.DescriptionForReason(reasonCode, action)
+        };
+        var fields = new List<(string Name, object? Value)>
+        {
+            ("signalId", context.SignalId.ToString("N")),
+            ("pairId", pairId ?? context.PairId),
+            ("slot", slotId ?? context.SlotId),
+            ("side", context.Side),
+            ("reasonCode", string.IsNullOrWhiteSpace(reasonCode) ? null : reasonCode)
+        };
+        fields.AddRange(extraFields);
+        AddSignalLog(SignalLifecycleLogFormatter.Create(eventType, description, level, fields.ToArray()));
+        context.FinalOutcomeLogged = true;
+        CleanupSignalContext(context);
+    }
+
+    private void CleanupSignalContext(SignalLifecycleContext context)
+    {
+        foreach (var trigger in _signalContextByTrigger
+                     .Where(entry => ReferenceEquals(entry.Value, context))
+                     .Select(entry => entry.Key)
+                     .ToList())
+        {
+            _signalContextByTrigger.Remove(trigger);
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.PairId))
+        {
+            _signalContextByPairId.Remove(context.PairId);
+        }
+
+        if (context.SlotId.HasValue
+            && _closeSignalContextBySlot.TryGetValue(context.SlotId.Value, out var slotContext)
+            && ReferenceEquals(slotContext, context))
+        {
+            _closeSignalContextBySlot.Remove(context.SlotId.Value);
+        }
+    }
+
+    private static string ResolveGuardReasonCode(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) return "TRADE_POLICY_BLOCKED";
+        if (reason.Contains("latency", StringComparison.OrdinalIgnoreCase)) return "LATENCY_GUARD";
+        if (reason.Contains("spread", StringComparison.OrdinalIgnoreCase)) return "SPREAD_GUARD";
+        if (reason.Contains("freeze", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("price", StringComparison.OrdinalIgnoreCase)) return "PRICE_FREEZE_GUARD";
+        if (reason.Contains("gap", StringComparison.OrdinalIgnoreCase)) return "MAX_GAP_GUARD";
+        return "TRADE_POLICY_BLOCKED";
+    }
+
+    private static string ResolveCoordinatorBlockReasonCode(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) return "NO_AVAILABLE_SLOT";
+        var separator = reason.IndexOfAny([' ', '(']);
+        return separator > 0 ? reason[..separator] : reason;
     }
 
     private void SafeVmLog(string message)
@@ -7800,6 +8387,18 @@ public sealed class DashboardViewModel : ObservableObject
         catch
         {
             // ignored by design
+        }
+    }
+
+    private void LogLegacySignalFileOnly(string message)
+    {
+        try
+        {
+            _tradeSessionFileLogger.LogFileOnly(message);
+        }
+        catch
+        {
+            // Legacy signal text must never affect trading flow.
         }
     }
 
@@ -7820,7 +8419,8 @@ public sealed class DashboardViewModel : ObservableObject
         string source,
         GapSignalTriggerResult trigger,
         string? pairId,
-        int? slotId)
+        int? slotId,
+        Guid signalId)
     {
         var createdAtUtc = trigger.TriggeredAtUtc.Kind switch
         {
@@ -7837,7 +8437,7 @@ public sealed class DashboardViewModel : ObservableObject
             trigger.CloseGapMode,
             createdAtUtc.Ticks.ToString(CultureInfo.InvariantCulture));
         var signal = new SignalAuthorization(
-            SignalId: Guid.NewGuid(),
+            SignalId: signalId,
             Action: trigger.Action,
             TriggerType: trigger.TriggerType,
             Side: trigger.PrimarySide,

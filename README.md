@@ -371,8 +371,94 @@ Desktop/trade-log/
 
 ### 11.4 UI menu
 
-- **Log Folder**: mở thư mục `Desktop/trade-log` trong Explorer/Finder.
-- **Current Log**: mở file log hiện tại bằng editor mặc định (Notepad/VSCode/...). Nếu chưa Start session → hiện thông báo.
+- UI chính có nút **Open Log** nằm sau **Reconnect** để mở cửa sổ Trading Logs.
+- Cửa sổ Trading Logs chia 50:50: **Signal Logs** bên trái và **System / Execution Logs** bên phải.
+- **Log Folder** và **Current Log** nằm trong cửa sổ Trading Logs; nếu chưa Start session thì Current Log hiện thông báo.
+- Chi tiết kiến trúc, phân nhóm, throttle và giới hạn tài nguyên xem
+  [`docs/LOG-UI-ARCHITECTURE-2026-08-12.md`](docs/LOG-UI-ARCHITECTURE-2026-08-12.md).
+
+### 11.5 Danh mục log hiển thị
+
+#### Signal Logs
+
+Các event `DETECTED` được ghi một lần khi phát hiện signal. Mỗi signal chỉ ghi một outcome cuối
+`CONFIRMED`, `BLOCKED`, `CANCELLED` hoặc `FAILED`. `signalId` dùng để nối event phát hiện với outcome.
+
+| Panel hiển thị | Event | Level | Mô tả tiếng Việt | Khi nào xuất hiện | Ví dụ rút gọn | Tần suất / tối ưu | Ghi file |
+|---|---|---|---|---|---|---|---|
+| Signal Logs | `SIGNAL_OPEN` | Info | Phát hiện tín hiệu mở vị thế mới | Open signal đủ cửa sổ xác nhận | `[SIGNAL_OPEN][INFO] description="Phát hiện tín hiệu mở vị thế mới" signalId=... side=Buy gap=12.5` | Một lần mỗi signal | Có |
+| Signal Logs | `SIGNAL_HEDGE` | Info | Phát hiện tín hiệu đối ứng với vị thế còn tồn tại | Vị thế gần nhất là Sell và signal mới là Buy, hoặc ngược lại | `[SIGNAL_HEDGE][INFO] description="Phát hiện tín hiệu Buy đối ứng với vị thế Sell còn tồn tại" originalSlot=1 newSide=Buy` | Một lần mỗi signal; chỉ là nhãn quan sát | Có |
+| Signal Logs | `SIGNAL_CLOSE_TP` | Info | Phát hiện tín hiệu đóng vì đạt điều kiện TP | Close engine phát signal TP | `[SIGNAL_CLOSE_TP][INFO] description="Phát hiện tín hiệu đóng vì lợi nhuận đạt điều kiện TP" profit=15.2 target=12` | Một lần mỗi signal | Có |
+| Signal Logs | `SIGNAL_CLOSE_GAP` | Info | Phát hiện tín hiệu đóng theo Gap thông thường | Close engine phát signal Gap ở Normal mode | `[SIGNAL_CLOSE_GAP][INFO] description="Phát hiện tín hiệu đóng vị thế theo Gap thông thường" side=Sell gap=-4.2` | Một lần mỗi signal | Có |
+| Signal Logs | `SIGNAL_CLOSE_SOS` | Info | Phát hiện tín hiệu đóng khẩn cấp theo SOS | Slot ở SOS mode và close signal hợp lệ | `[SIGNAL_CLOSE_SOS][INFO] description="Phát hiện tín hiệu đóng khẩn cấp theo điều kiện SOS" slot=2 gap=-8.4` | Một lần mỗi signal | Có |
+| Signal Logs | `SIGNAL_OPEN_CONFIRMED` | Info | Hai chân A/B đã mở thành công | MMF xác nhận đủ ticket A và B | `[SIGNAL_OPEN_CONFIRMED][INFO] description="Hai chân A/B đã mở thành công" pairId=p1 slot=2 ticketA=101 ticketB=202` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_HEDGE_CONFIRMED` | Info | Hai chân của vị thế Hedge đã mở thành công | MMF xác nhận đủ hai chân Hedge | `[SIGNAL_HEDGE_CONFIRMED][INFO] description="Hai chân của vị thế Hedge đã mở thành công" pairId=p2 slot=3` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_CLOSE_CONFIRMED` | Info | Hai chân của vị thế đã đóng thành công | MMF/history xác nhận cả hai ticket đã đóng | `[SIGNAL_CLOSE_CONFIRMED][INFO] description="Hai chân của vị thế đã đóng thành công" pairId=p1 slot=2` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_OPEN_BLOCKED` | Warn | Có Open signal nhưng không được phép mở | Quota, cooldown, guard, gate, kết nối, HWND hoặc policy chặn | `[SIGNAL_OPEN_BLOCKED][WARN] description="Không thể mở vì tổng số vị thế đã đạt giới hạn" reasonCode=QUOTA_TOTAL_FULL` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_HEDGE_BLOCKED` | Warn | Có Hedge signal nhưng không được phép mở | Hedge gặp cùng guard/policy như Open thường | `[SIGNAL_HEDGE_BLOCKED][WARN] description="Không thể mở Hedge vì execution gate đang bị khóa" reasonCode=TRADE_GATE_BLOCKED` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_CLOSE_BLOCKED` | Warn | Có Close signal nhưng chưa được phép dispatch | Close gate, cooldown, min-profit, connection hoặc policy chặn | `[SIGNAL_CLOSE_BLOCKED][WARN] description="Chưa thể đóng vì lợi nhuận chưa đạt mức tối thiểu" reasonCode=MIN_PROFIT_WAITING` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_OPEN_CANCELLED` | Warn | Open signal bị hủy trước dispatch | Signal hết hạn hoặc trạng thái mục tiêu không còn hợp lệ | `[SIGNAL_OPEN_CANCELLED][WARN] description="Hủy tín hiệu vì đã hết hạn trong thời gian chờ" reasonCode=SIGNAL_EXPIRED` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_HEDGE_CANCELLED` | Warn | Hedge signal bị hủy trước dispatch | Vị thế gốc đã đóng, mất slot hoặc đổi side | `[SIGNAL_HEDGE_CANCELLED][WARN] description="Hủy Hedge vì vị thế gốc đã đóng trước khi gửi lệnh" reasonCode=ORIGINAL_POSITION_CLOSED` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_CLOSE_CANCELLED` | Warn | Close signal bị hủy trước dispatch | Signal hết hạn hoặc vị thế đã đóng trước đó | `[SIGNAL_CLOSE_CANCELLED][WARN] description="Hủy đóng vì vị thế đã được đóng trước đó" reasonCode=POSITION_ALREADY_CLOSED` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_OPEN_FAILED` | Error | Thực thi Open thất bại | Cả hai leg fail, partial-open hoặc confirmation timeout | `[SIGNAL_OPEN_FAILED][ERROR] description="Mở vị thế thất bại vì chỉ một chân thành công" reasonCode=PARTIAL_OPEN rollback=pending` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_HEDGE_FAILED` | Error | Thực thi Hedge thất bại | Cả hai leg fail, partial-open hoặc confirmation timeout | `[SIGNAL_HEDGE_FAILED][ERROR] description="Mở vị thế Hedge thất bại vì chỉ một chân thành công" reasonCode=PARTIAL_OPEN` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_CLOSE_FAILED` | Error | Thực thi Close thất bại | Cả hai leg fail, partial-close hoặc confirmation timeout | `[SIGNAL_CLOSE_FAILED][ERROR] description="Đóng vị thế thất bại vì một chân vẫn còn mở" reasonCode=PARTIAL_CLOSE retry=pending` | Một outcome cuối | Có |
+
+Các `reasonCode` hiện được chuẩn hóa như sau:
+
+| Nhóm | Reason code | Ý nghĩa |
+|---|---|---|
+| Capacity | `QUOTA_TOTAL_FULL`, `QUOTA_BUY_FULL`, `QUOTA_SELL_FULL`, `NO_AVAILABLE_SLOT` | Hết quota tổng/quota hướng hoặc không còn slot |
+| Cycle / timer | `UNRESOLVED_PENDING_CYCLE`, `COOLDOWN_ACTIVE`, `OPPOSITE_SIDE_LOCK`, `DUPLICATE_SIGNAL`, `QUALIFYING_NOT_REACHED` | Chu kỳ trước chưa xong, timer còn hiệu lực hoặc signal chưa đủ xác nhận |
+| Execution policy | `TRADE_GATE_BLOCKED`, `TRADE_POLICY_BLOCKED`, `SIGNAL_EXPIRED` | Gate/policy từ chối hoặc signal hết hạn khi chờ |
+| Market guard | `LATENCY_GUARD`, `MAX_GAP_GUARD`, `SPREAD_GUARD`, `PRICE_FREEZE_GUARD` | Dữ liệu thị trường không đạt điều kiện an toàn |
+| Runtime health | `CONNECTION_UNHEALTHY`, `HWND_INVALID`, `WATCHDOG_PAUSED`, `TRADING_STOPPED`, `SIDE_DISABLED` | Kết nối/UI/runtime không cho phép thực hiện |
+| Close eligibility | `MIN_PROFIT_WAITING`, `POSITION_ALREADY_CLOSED` | Chưa đạt lợi nhuận tối thiểu hoặc vị thế không còn mở |
+| Hedge validity | `ORIGINAL_POSITION_CLOSED`, `ORIGINAL_SLOT_NOT_FOUND`, `ORIGINAL_SIDE_CHANGED` | Trạng thái vị thế gốc không còn hợp lệ cho Hedge |
+| Execution result | `PARTIAL_OPEN`, `PARTIAL_CLOSE`, `CONFIRMATION_TIMEOUT`, `EXECUTION_FAILED` | Thực thi một phần, timeout xác nhận hoặc cả hai leg thất bại |
+
+#### System / Execution Logs
+
+Bảng này gom theo category; từng category có thể có nhiều message cụ thể. Panel chỉ nhận log đã vượt
+`LOG_LEVEL` và được file logger chấp nhận. Category Signal bị loại khỏi panel này.
+
+| Panel hiển thị | Category / event | Level thường dùng | Phân nhóm bộ lọc | Giá trị chẩn đoán | Ví dụ rút gọn | Tần suất / tối ưu UI | Ghi file |
+|---|---|---|---|---|---|---|---|
+| System / Execution Logs | `FLOW` | Info | Trading | Chuyển phase, open mode và position side | `[FLOW][INFO] Session start: phase=WaitingOpen openMode=None side=None` | Khi flow/session đổi trạng thái | Có |
+| System / Execution Logs | `CYCLE` | Info/Warn/Error | Trading | Vòng đời open/close, pending, resolve, timeout và rollback | `[CYCLE][INFO] Pending open resolved: pairId=p1 ticketA=101 ticketB=202` | Theo transition; không được loại bỏ | Có |
+| System / Execution Logs | `SLOT` | Info/Warn/Skip | Trading | Cấp slot, confirm, timeout, quota và trạng thái slot | `[SLOT][INFO] Slot 2 allocated: pairId=p1 side=Buy mode=GapBuy` | Theo transition; không được loại bỏ | Có |
+| System / Execution Logs | `CLOSE_SELECT` | Info/Warn | Trading | Chọn slot/ticket đóng và lý do bỏ qua candidate | `[CLOSE_SELECT][INFO] Selected slot=2 pairId=p1 profit=15.2` | Mỗi vòng chọn có giá trị; không được loại bỏ | Có |
+| System / Execution Logs | `TRADE_GATE` | Info/Blocked | Trading | Acquire/release execution gate và thời gian còn khóa | `[TRADE_GATE][BLOCKED] OPEN pairId=p1 remainingMs=820` | Throttle 10 giây theo subject | Có đầy đủ |
+| System / Execution Logs | `COOLDOWN` | Info/Block | Trading | Deadline cooldown và nguyên nhân bị chặn | `[COOLDOWN][BLOCK] pairId=p1 remainingMs=2500` | Throttle 30 giây theo subject | Có đầy đủ |
+| System / Execution Logs | `MIN_PROFIT` / `TP_CHECK` | Info/Waiting | Trading | Điều kiện lợi nhuận/TP chưa đạt hoặc đang xác nhận | `[SLOT][TP_CHECK] slot=2 profit=8.5 target=12 state=WAITING` | Throttle 10–30 giây theo pattern | Có đầy đủ |
+| System / Execution Logs | `OPPOSITE_OPEN_GUARD` | Info/Warn/Block | Trading | Kiểm tra khoảng cách giá khi Open đảo chiều | `[OPPOSITE_OPEN_GUARD][BLOCK] pairId=p2 reasonCode=DISTANCE_NOT_REACHED` | Throttle 30 giây theo pair | Có đầy đủ |
+| System / Execution Logs | `TRADE_POLICY` / `GUARD` | Info/Warn | Trading | Kết quả authorization và market guard | `[TRADE_POLICY][WARN] Strategic open denied: reason=SIGNAL_EXPIRED` | Theo yêu cầu dispatch | Có |
+| System / Execution Logs | `ROUTER` | Info/Warn/Error | Execution | Policy recheck, mutex và dispatch hai leg | `[ROUTER][ERROR] Open pair failed: pairId=p1 reason=MT5_TIMEOUT` | Theo mỗi dispatch | Có |
+| System / Execution Logs | `MT4` | Info/Warn/Error | Execution | Native click, HWND, row/ticket và kết quả MT4 | `[MT4][INFO] Open leg successful: exchange=A action=Buy` | Theo mỗi leg | Có |
+| System / Execution Logs | `MT5` | Info/Warn/Error | Execution | Manual service/native action và kết quả MT5 | `[MT5][ERROR] Close leg failed: ticket=202` | Theo mỗi leg | Có |
+| System / Execution Logs | `MANUAL` | Info/Warn/Error | Execution | Kết quả thao tác manual per-pair | `[MANUAL][ERROR] Close pair FAILED: pairId=p1` | Theo thao tác người dùng | Có |
+| System / Execution Logs | `HWND_PROFILE` | Info/Open | Execution | Profile HWND nguyên tử được chọn cho slot | `[HWND_PROFILE][OPEN] pairId=p1 profile=2 chartA=... tradeA=...` | Một lần khi Open | Có |
+| System / Execution Logs | `RECOVERY` | Info/Warn/Error | Recovery | Restore DB/MMF, rollback partial và resync | `[RECOVERY][INFO] Recovered tickets from previous session: ticketA=101 ticketB=202` | Theo sự kiện recovery | Có |
+| System / Execution Logs | `WATCHDOG` | Info/Warn/Error | Recovery | Invariant drift, pause và self-heal | `[WATCHDOG][WARN] Invariant violation detected: ... state=PAUSED` | Khi trạng thái watchdog đổi | Có |
+| System / Execution Logs | `PERSIST` | Info/Warn | Recovery | Lưu `current_slots` và quota state | `[PERSIST][INFO] Saved current_slots (open-confirmed): [...]` | Khi state cần persist | Có |
+| System / Execution Logs | `MARKET` | Info/Warn | Market | Latency spike, stale tick và tick resumed | `[MARKET][WARN] Latency spike: exchange=A latencyMs=620 thresholdMs=500` | Spike throttle 10 giây theo exchange | Có đầy đủ |
+| System / Execution Logs | `MMF_TRADES` | Info/Warn/Error | Market | Availability/parse/read trạng thái trade map | `[MMF_TRADES][WARN] Map availability changed: map=... True -> False` | Chủ yếu khi trạng thái đổi | Có |
+| System / Execution Logs | `MMF_HISTORY` | Info/Warn/Error | Market | Availability/parse/read trạng thái history map | `[MMF_HISTORY][INFO] Map parse status changed: map=... False -> True` | Chủ yếu khi trạng thái đổi | Có |
+| System / Execution Logs | `CONN` | Info/Warn/Skip | Connection | Connection kill-switch và thao tác bị skip | `[CONN][WARN] Mất kết nối — chặn thao tác lệnh: ...` | `SKIP` throttle 30 giây | Có đầy đủ |
+| System / Execution Logs | `HWND` | Info/Warn/Error/Skip | Connection | Health-check HWND và thao tác bị skip | `[HWND][SKIP] Bỏ qua auto-open: HWND không hợp lệ` | `SKIP` throttle 30 giây | Có đầy đủ |
+| System / Execution Logs | `CONFIG` | Info/Warn/Error | Application | Load/apply/save cấu hình runtime | `[CONFIG][ERROR] Failed to load runtime config: ...` | Theo thao tác hoặc lỗi config | Có |
+| System / Execution Logs | `UI` | Info/Warn | Application | Toggle, mở log/file/folder và lỗi thao tác UI | `[UI][INFO] Toggle changed: IsOpenGapBuyEnabled=True` | Theo thao tác người dùng | Có |
+| System / Execution Logs | `VM` | Info/Warn/Error | Application | Lỗi orchestration hoặc exception đã suppress | `[VM][ERROR] Auto trade error: ...` | Chỉ khi có sự kiện/lỗi | Có |
+| System / Execution Logs | `NOTIFY` | Info/Warn/Error | Application | Gửi Telegram notification | `[NOTIFY][WARN] Telegram send failed: ...` | Theo notification | Có |
+| System / Execution Logs | `LOGGER` | Warn | Application | File queue đầy và số dòng bị drop | `[LOGGER][WARN] Dropped 120 log lines because the bounded queue was full.` | Chỉ khi queue file quá tải | Có |
+| System / Execution Logs | `GENERAL` | Info | Application | Message chưa có category chuẩn hóa | `Trading logic start confirmed by user` | Nên giảm dần khi chuẩn hóa log | Có |
+
+Lưu ý tài nguyên UI:
+
+- `Debug` không được thêm vào collection System mặc định.
+- System queue tối đa 5.000 dòng, collection tối đa 2.000 dòng, flush tối đa 150 dòng mỗi 200 ms.
+- Signal collection tối đa 500 dòng.
+- Throttle/filter/chặn queue chỉ tác động UI; trừ `LOG_LEVEL` và file queue policy, file log vẫn là nguồn đầy đủ.
 
 ---
 

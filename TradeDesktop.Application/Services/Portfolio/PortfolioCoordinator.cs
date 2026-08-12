@@ -431,6 +431,9 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
     // ===== Slot lifecycle =====
     public PositionSlot? AllocatePendingOpenSlot(string pairId, GapSignalTriggerResult trigger)
+        => AllocatePendingOpenSlotWithReason(pairId, trigger).Slot;
+
+    public SlotAllocationResult AllocatePendingOpenSlotWithReason(string pairId, GapSignalTriggerResult trigger)
     {
         var side = trigger.PrimarySide == GapSignalSide.Buy
             ? TradingPositionSide.Buy
@@ -446,7 +449,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             if (!CanOpenNewSlot(side, out var blockReason))
             {
                 _logger?.Log($"[SLOT][SKIP] Allocate failed: {blockReason}");
-                return null;
+                return new SlotAllocationResult(null, blockReason);
             }
 
             var slot = _state.AllocateNewSlot(pairId, _closeSignalEngineFactory);
@@ -456,7 +459,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             // Reset shared open engine to prevent residual window state.
             _openSignalEngine.Reset();
 
-            return slot;
+            return new SlotAllocationResult(slot, string.Empty);
         }
     }
 

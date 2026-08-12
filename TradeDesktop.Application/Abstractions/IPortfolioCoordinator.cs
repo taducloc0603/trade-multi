@@ -57,6 +57,7 @@ public interface IPortfolioCoordinator
 
     // === Slot lifecycle ===
     PositionSlot? AllocatePendingOpenSlot(string pairId, GapSignalTriggerResult trigger);
+    SlotAllocationResult AllocatePendingOpenSlotWithReason(string pairId, GapSignalTriggerResult trigger);
     void MarkSlotOpenConfirmed(string pairId, ulong ticketA, ulong ticketB, DateTime confirmedAtUtc);
     void MarkSlotCloseTriggered(string pairId, DateTime triggeredAtUtc);
     bool TryClaimSlotClose(string pairId, CloseExecutionOwner owner, DateTime triggeredAtUtc);
@@ -119,6 +120,11 @@ public sealed record RandomQuotaState(
     long CycleNumber,
     int? PreviousMaxBuy = null,
     int? PreviousMaxSell = null);
+
+public sealed record SlotAllocationResult(PositionSlot? Slot, string BlockReason)
+{
+    public bool Success => Slot is not null;
+}
 
 public sealed record TradeActionGateResult(
     bool Acquired,

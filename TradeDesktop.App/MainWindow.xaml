@@ -116,16 +116,6 @@
                                   IsChecked="{Binding AllowTradeOperations, Mode=TwoWay}"
                                   Visibility="{Binding IsTradingLogicEnabled, Converter={StaticResource BoolToVisibilityConverter}}" />
                     -->
-                    <Button Content="Log Folder"
-                            Width="90"
-                            Height="36"
-                            Margin="0,0,8,0"
-                            Command="{Binding OpenLogFolderCommand}" />
-                    <Button Content="Current Log"
-                            Width="96"
-                            Height="36"
-                            Margin="0,0,8,0"
-                            Command="{Binding OpenCurrentLogCommand}" />
                     <TextBox Width="170"
                              Height="36"
                              Margin="0,0,8,0"
@@ -142,6 +132,11 @@
                             Height="36"
                             Margin="0,0,8,0"
                             Command="{Binding ReconnectConfigCommand}" />
+                    <Button Content="Open Log"
+                            Width="88"
+                            Height="36"
+                            Margin="0,0,8,0"
+                            Click="OnOpenLogClick" />
                     <Button Content="Config"
                             Width="82"
                             Height="36"
@@ -295,10 +290,6 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="12" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="10" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="10" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
@@ -395,26 +386,6 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="6" BorderBrush="#EEF1F5" BorderThickness="1" CornerRadius="8" Padding="10" Background="#FAFBFC">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="8" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-
-                            <TextBlock Text="Signal Logs" FontWeight="SemiBold" Foreground="#344054" />
-
-                            <ListBox Grid.Row="2"
-                                     ItemsSource="{Binding SignalLogItems}"
-                                     BorderThickness="0"
-                                     Background="Transparent"
-                                     Foreground="#101828"
-                                     FontFamily="Consolas"
-                                     FontSize="12"
-                                     ScrollViewer.VerticalScrollBarVisibility="Auto" />
-                        </Grid>
-                    </Border>
                 </Grid>
             </Border>
         </Grid>

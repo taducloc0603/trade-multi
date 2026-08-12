@@ -66,6 +66,21 @@ public sealed class PortfolioCoordinatorTests
     }
 
     [Fact]
+    public void AllocatePendingOpenSlotWithReason_WhenQuotaFull_ReturnsReasonAndCountsOnce()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.AllocatePendingOpenSlot("p1", CreateOpenTrigger());
+        var before = coordinator.GetMetrics().QuotaSkipCount;
+
+        var result = coordinator.AllocatePendingOpenSlotWithReason("p2", CreateOpenTrigger());
+
+        Assert.False(result.Success);
+        Assert.Null(result.Slot);
+        Assert.StartsWith("QUOTA_TOTAL_FULL", result.BlockReason);
+        Assert.Equal(before + 1, coordinator.GetMetrics().QuotaSkipCount);
+    }
+
+    [Fact]
     public void MarkSlotOpenConfirmed_TransitionsToLive_AndUpdatesLastOpen()
     {
         var coordinator = CreateCoordinator();
