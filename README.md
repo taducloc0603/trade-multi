@@ -372,14 +372,16 @@ Desktop/trade-log/
 ### 11.4 UI menu
 
 - UI chính có nút **Open Log** nằm sau **Reconnect** để mở cửa sổ Trading Logs.
-- Cửa sổ Trading Logs chia 50:50: **Signal Logs** bên trái và **System / Execution Logs** bên phải.
+- Cửa sổ Trading Logs chia 50:50: **Minimal Signal Logs** bên trái và **System / Execution Logs** bên phải.
+- System filter `All` gồm cả structured Signal Logs; filter `Signal` chỉ hiển thị Signal. Log System
+  thông thường dùng màu mặc định, còn Signal giữ màu lifecycle hiện tại.
 - **Log Folder** và **Current Log** nằm trong cửa sổ Trading Logs; nếu chưa Start session thì Current Log hiện thông báo.
 - Chi tiết kiến trúc, phân nhóm, throttle và giới hạn tài nguyên xem
   [`docs/LOG-UI-ARCHITECTURE-2026-08-12.md`](docs/LOG-UI-ARCHITECTURE-2026-08-12.md).
 
 ### 11.5 Danh mục log hiển thị
 
-#### Signal Logs
+#### Structured Signal Logs trong System
 
 Các event `DETECTED` được ghi một lần khi phát hiện signal. Mỗi signal chỉ ghi một outcome cuối
 `CONFIRMED`, `BLOCKED`, `CANCELLED` hoặc `FAILED`. `signalId` dùng để nối event phát hiện với outcome.
@@ -420,7 +422,7 @@ Các `reasonCode` hiện được chuẩn hóa như sau:
 #### System / Execution Logs
 
 Bảng này gom theo category; từng category có thể có nhiều message cụ thể. Panel chỉ nhận log đã vượt
-`LOG_LEVEL` và được file logger chấp nhận. Category Signal bị loại khỏi panel này.
+`LOG_LEVEL` và được file logger chấp nhận. `All` gồm cả structured Signal; filter `Signal` chỉ xem Signal.
 
 | Panel hiển thị | Category / event | Level thường dùng | Phân nhóm bộ lọc | Giá trị chẩn đoán | Ví dụ rút gọn | Tần suất / tối ưu UI | Ghi file |
 |---|---|---|---|---|---|---|---|

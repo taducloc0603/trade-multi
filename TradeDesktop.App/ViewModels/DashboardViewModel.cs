@@ -477,8 +477,6 @@ public sealed class DashboardViewModel : ObservableObject
             new OrderPanelStatusViewModel("Sàn B", OrderRecordLayoutMode.HistoryTable));
 
         OrderTabs = [TradeTab, HistoryTab];
-        SignalLogItems.CollectionChanged += OnSignalLogItemsCollectionChanged;
-
         _runtimeConfigState.StateChanged += (_, _) => ApplyRuntimeConfig();
         _runtimeConfigState.QualifyingConfigChanged += OnQualifyingConfigChanged;
         _runtimeConfigState.ManualHwndChanged += (_, _) => RunHwndHealthCheck("config-save");
@@ -1091,48 +1089,10 @@ public sealed class DashboardViewModel : ObservableObject
         return Task.CompletedTask;
     }
 
-    private void OnSignalLogItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        if (e.Action is not NotifyCollectionChangedAction.Add || e.NewItems is null || e.NewItems.Count == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            if (e.NewStartingIndex == 0 && e.NewItems.Count > 1)
-            {
-                for (var i = e.NewItems.Count - 1; i >= 0; i--)
-                {
-                    if (e.NewItems[i] is SignalLogItem item)
-                    {
-                        _tradeSessionFileLogger.Log(item.ToString());
-                    }
-                }
-
-                return;
-            }
-
-            foreach (var item in e.NewItems)
-            {
-                if (item is SignalLogItem signalLogItem)
-                {
-                    _tradeSessionFileLogger.Log(signalLogItem.ToString());
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            // Phase A requirement: never break runtime flow because of file logging.
-            SafeVmLog($"[VM][WARN] Suppressed exception at OnSignalLogItemsCollectionChanged: {ex.Message}");
-        }
-    }
-
     private void OnRealtimeLogAccepted(SystemLogItem item)
     {
-        // Structured signal records own the left panel. Keeping them out here also
-        // prevents duplicate collection notifications and duplicate rendering work.
-        if (item.IsSignal || item.Severity == SystemLogSeverity.Debug || ShouldThrottleSystemLog(item))
+        // System / All is the complete realtime view, including structured Signal records.
+        if (item.Severity == SystemLogSeverity.Debug || ShouldThrottleSystemLog(item))
         {
             return;
         }
@@ -8237,7 +8197,14 @@ public sealed class DashboardViewModel : ObservableObject
     {
         try
         {
-            System.Windows.Application.Current.Dispatcher.Invoke(() => SignalLogItems.Insert(0, item));
+            // Structured signal is authoritative in file/System. Minimal Signal uses a separate
+            // dev-4 projection and must not render the long structured line.
+            _tradeSessionFileLogger.Log(item.ToString());
+            // Insert at index 0 in reverse so the visible order remains A then B like dev-4.
+            foreach (var minimal in BuildMinimalSignalProjection(item).Reverse())
+            {
+                System.Windows.Application.Current.Dispatcher.Invoke(() => SignalLogItems.Insert(0, minimal));
+            }
         }
         catch
         {
@@ -8245,6 +8212,93 @@ public sealed class DashboardViewModel : ObservableObject
             // signal evaluation or physical trade execution.
         }
     }
+
+    private static IReadOnlyList<MinimalSignalLogItem> BuildMinimalSignalProjection(SignalLogItem item)
+    {
+        // Detected and confirmed already have precise dev-4 lines at their execution call sites.
+        // Project lifecycle outcomes that otherwise have no minimal representation.
+        if (item.Outcome is "Detected" or "Confirmed")
+        {
+            return [];
+        }
+
+        var fields = ParseSignalDetails(item.Details);
+        var slot = fields.GetValueOrDefault("slot", "-");
+        var action = item.Category == "Close" ? "CLOSE" : "OPEN";
+        var sideA = ResolveMinimalSide(fields, "aType", item.Category, item.Details, isExchangeA: true);
+        var sideB = ResolveMinimalSide(fields, "bType", item.Category, item.Details, isExchangeA: false);
+        var outcome = item.Outcome == "Failed" ? "failed" : item.EventType.EndsWith("_CANCELLED", StringComparison.Ordinal) ? "cancelled" : "blocked";
+        var reason = fields.GetValueOrDefault("reasonCode", "UNKNOWN").Replace('_', ' ');
+        var timestamp = item.Timestamp.ToString("yyyy.MM.dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture);
+        var descriptionA = MinimalVietnameseDescription(item, "A");
+        var descriptionB = MinimalVietnameseDescription(item, "B");
+        var resultA = ResolveMinimalOutcomeText(item, fields, "legA", action, outcome, reason);
+        var resultB = ResolveMinimalOutcomeText(item, fields, "legB", action, outcome, reason);
+        return
+        [
+            new MinimalSignalLogItem(
+                $"{timestamp}> [{slot}:A]. {action} {sideA} {resultA} | Mô tả=\"{descriptionA}\"",
+                item.Category,
+                item.Outcome),
+            new MinimalSignalLogItem(
+                $"{timestamp}> [{slot}:B]. {action} {sideB} {resultB} | Mô tả=\"{descriptionB}\"",
+                item.Category,
+                item.Outcome)
+        ];
+    }
+
+    private static string ResolveMinimalOutcomeText(
+        SignalLogItem item,
+        IReadOnlyDictionary<string, string> fields,
+        string legKey,
+        string action,
+        string outcome,
+        string reason)
+    {
+        if (item.Outcome == "Failed" && fields.TryGetValue(legKey, out var legState))
+        {
+            var succeeded = legState.Equals("opened", StringComparison.OrdinalIgnoreCase)
+                            || legState.Equals("closed", StringComparison.OrdinalIgnoreCase)
+                            || legState.Equals("true", StringComparison.OrdinalIgnoreCase);
+            if (succeeded)
+            {
+                var result = action == "CLOSE" ? "CLOSED" : "OPENED";
+                return $"partial. Result={result}. Reason: {reason}";
+            }
+        }
+
+        return $"{outcome}. Reason: {reason}";
+    }
+
+    private static Dictionary<string, string> ParseSignalDetails(string details)
+        => details.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.Split('=', 2))
+            .Where(parts => parts.Length == 2)
+            .GroupBy(parts => parts[0], StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Last()[1], StringComparer.Ordinal);
+
+    private static string ResolveMinimalSide(
+        IReadOnlyDictionary<string, string> fields,
+        string typeKey,
+        string category,
+        string details,
+        bool isExchangeA)
+    {
+        if (fields.TryGetValue(typeKey, out var type)) return type.ToUpperInvariant();
+        var signalSide = fields.GetValueOrDefault("side", details.Contains("side=Sell", StringComparison.Ordinal) ? "Sell" : "Buy");
+        var buyA = string.Equals(signalSide, "Buy", StringComparison.OrdinalIgnoreCase);
+        if (category == "Close") buyA = string.Equals(signalSide, "Sell", StringComparison.OrdinalIgnoreCase);
+        return (isExchangeA ? buyA : !buyA) ? "BUY" : "SELL";
+    }
+
+    private static string MinimalVietnameseDescription(SignalLogItem item, string exchange)
+        => item.Outcome switch
+        {
+            "Failed" => $"{(item.Category == "Close" ? "Đóng" : "Mở")} chân {exchange} thất bại",
+            "Blocked" when item.EventType.EndsWith("_CANCELLED", StringComparison.Ordinal) => $"Hủy {(item.Category == "Close" ? "đóng" : "mở")} chân {exchange}",
+            "Blocked" => $"Chân {exchange} chưa được phép {(item.Category == "Close" ? "đóng" : "mở")}",
+            _ => item.Description
+        };
 
     private SignalLifecycleContext GetOrCreateSignalContext(GapSignalTriggerResult trigger)
     {

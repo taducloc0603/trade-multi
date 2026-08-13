@@ -85,7 +85,7 @@ public partial class SignalLogWindow : Window
     private bool FilterSignalLog(object item)
     {
         var selected = (SignalFilter.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "All";
-        return item is SignalLogItem logItem
+        return item is MinimalSignalLogItem logItem
                && (selected == "All" || logItem.Category == selected);
     }
 

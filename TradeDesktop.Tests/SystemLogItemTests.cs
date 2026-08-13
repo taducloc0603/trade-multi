@@ -25,13 +25,19 @@ public sealed class SystemLogItemTests
     }
 
     [Fact]
-    public void Parse_RecognizesStructuredSignalForPanelExclusion()
+    public void Parse_ClassifiesStructuredSignalForSystemFilter()
     {
         var item = SystemLogItem.Parse(
             DateTime.Now,
-            "[SIGNAL_HEDGE_BLOCKED][WARN] description=blocked",
+            "[2026-08-13 10:30:01.123] [SIGNAL_HEDGE_BLOCKED][WARN] signalId=abc description=blocked",
             SystemLogSeverity.Warn);
 
         Assert.True(item.IsSignal);
+        Assert.Equal("Signal", item.Domain);
+        Assert.Equal("SIGNAL_HEDGE_BLOCKED", item.Category);
+        Assert.Equal("SIGNAL_HEDGE_BLOCKED", item.EventType);
+        Assert.Equal(
+            "[2026-08-13 10:30:01.123] [SIGNAL_HEDGE_BLOCKED][WARN] signalId=abc description=blocked",
+            item.DisplayText);
     }
 }

@@ -6,8 +6,8 @@ Ngày cập nhật: 2026-08-12
 
 Cửa sổ **Trading Logs** được chia 50:50:
 
-- Bên trái: **Signal Logs**.
-- Bên phải: **System / Execution Logs**.
+- Bên trái: **Minimal Signal Logs**, hiển thị hai dòng A/B giống dev-4 và nối mô tả tiếng Việt ở cuối.
+- Bên phải: **System / Execution Logs**, trong đó `All` gồm toàn bộ structured Signal Logs.
 - `Current Log`, `Log Folder` và `Close` nằm trên thanh công cụ của cửa sổ log.
 - UI chính chỉ giữ nút `Open Log`, đặt sau `Reconnect`.
 
@@ -24,8 +24,9 @@ Trading / infrastructure code
           |              +--> accepted realtime event --> bounded UI queue
           |                                              --> System / Execution panel
           |
-          +--> structured SignalLogItem --> Signal panel
-                                      \--> session log file
+          +--> structured SignalLogItem --> session log file
+                                      |--> System / Execution panel
+                                      \--> Minimal Signal projection (phase sau)
 
 Legacy Signal text ------------------------> session log file only
 ```
@@ -33,9 +34,12 @@ Legacy Signal text ------------------------> session log file only
 File log là nguồn dữ liệu đầy đủ và có thẩm quyền. Hai collection UI chỉ phục vụ quan sát.
 UI không tail file và không đọc lại toàn bộ file log.
 
-## 3. Signal Logs
+## 3. Minimal Signal Logs và structured Signal
 
-Collection Signal chỉ nhận `SignalLogItem` có cấu trúc. Các event chính:
+Structured Signal vẫn dùng `SignalLogItem`; dữ liệu đầy đủ được ghi file và mirror vào System.
+Minimal Signal dùng `MinimalSignalLogItem`, trình bày hai dòng A/B giống dev-4. Phần dev-4 được
+giữ nguyên; mô tả tiếng Việt chỉ nối cuối theo format `| Mô tả="..."`.
+Các structured event chính:
 
 - `SIGNAL_OPEN`
 - `SIGNAL_HEDGE`
@@ -66,6 +70,9 @@ không được đưa vào dòng log.
 | `*_CANCELLED` | reason code + trạng thái động tại call site; không in nhóm execution chưa phát sinh |
 | `*_FAILED` | reason code, trạng thái/error từng chân tại call site, tuổi signal và execution diagnostic của chân đã có record |
 
+Màu Minimal và structured Signal trong System dùng cùng mapping lifecycle: Detected xanh dương,
+Confirmed xanh lá, Blocked/Cancelled cam và Failed đỏ. Hai chân A/B của cùng event cùng màu.
+
 Outcome dùng lại `SignalLifecycleContext` của event phát hiện. Context giữ định danh signal và diagnostic
 từng leg cho tới outcome cuối, sau đó được dọn để không tích lũy bộ nhớ.
 
@@ -86,13 +93,14 @@ Màu Signal được gom theo kết quả:
 
 ## 4. System / Execution Logs
 
-Panel phải chỉ nhận dòng đã vượt qua `LOG_LEVEL` và đã được file logger chấp nhận. Log có
-category bắt đầu bằng `SIGNAL_` bị loại khỏi panel này để tránh render trùng.
+Panel chỉ nhận dòng đã vượt qua `LOG_LEVEL` và đã được file logger chấp nhận. `All` gồm cả
+structured Signal Logs; domain filter có thêm `Signal` để chỉ xem Signal.
 
 ### 4.1 Phân nhóm UI
 
 | Nhóm | Category tiêu biểu |
 |---|---|
+| Signal | `SIGNAL_OPEN`, `SIGNAL_HEDGE`, `SIGNAL_CLOSE_*` và các outcome |
 | Trading | `FLOW`, `CYCLE`, `SLOT`, `CLOSE_SELECT`, `TRADE_GATE`, `OPPOSITE_OPEN_GUARD` |
 | Execution | `ROUTER`, `MT4`, `MT5`, `MANUAL`, `HWND_PROFILE` |
 | Recovery | `RECOVERY`, `WATCHDOG`, `PERSIST` |
@@ -101,7 +109,8 @@ category bắt đầu bằng `SIGNAL_` bị loại khỏi panel này để trán
 | Application | `VM`, `UI`, `LOGGER`, `GENERAL` và category chưa ánh xạ |
 
 UI hỗ trợ lọc theo nhóm và level `All`, `Info`, `Warn`, `Error`. `Debug` không được đưa vào
-collection UI mặc định. Màu System được tối giản: Info trung tính, Warn cam, Error đỏ.
+collection UI mặc định. System/Execution thông thường dùng màu chữ mặc định. Structured Signal
+giữ màu lifecycle: Detected xanh dương, Confirmed xanh lá, Blocked/Cancelled cam và Failed đỏ.
 
 ### 4.2 Giới hạn tài nguyên
 

@@ -79,7 +79,7 @@
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Text="SIGNAL LOGS"
+                            <TextBlock Text="MINIMAL SIGNAL LOGS"
                                        FontWeight="SemiBold"
                                        Foreground="#344054" />
 
@@ -148,6 +148,7 @@
                                           SelectedIndex="0"
                                           SelectionChanged="OnSystemFilterChanged">
                                     <ComboBoxItem Content="All" Tag="All" />
+                                    <ComboBoxItem Content="Signal" Tag="Signal" />
                                     <ComboBoxItem Content="Trading" Tag="Trading" />
                                     <ComboBoxItem Content="Execution" Tag="Execution" />
                                     <ComboBoxItem Content="Recovery" Tag="Recovery" />

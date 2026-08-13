@@ -7,21 +7,11 @@ namespace TradeDesktop.App.Helpers;
 
 public sealed class SystemLogColorConverter : IValueConverter
 {
-    private static readonly Brush DebugBrush = CreateBrush("#667085");
-    private static readonly Brush InfoBrush = CreateBrush("#344054");
-    private static readonly Brush WarnBrush = CreateBrush("#B54708");
-    private static readonly Brush ErrorBrush = CreateBrush("#B42318");
-
+    private static readonly Brush DefaultBrush = CreateBrush("#101828");
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
-        => value is SystemLogItem item
-            ? item.Severity switch
-            {
-                SystemLogSeverity.Debug => DebugBrush,
-                SystemLogSeverity.Warn => WarnBrush,
-                SystemLogSeverity.Error => ErrorBrush,
-                _ => InfoBrush
-            }
-            : InfoBrush;
+        => value is SystemLogItem { IsSignal: true } item
+            ? SignalLifecycleBrushes.Resolve(SignalLifecycleBrushes.ResolveSystemOutcome(item.Category))
+            : DefaultBrush;
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
         => throw new NotSupportedException();

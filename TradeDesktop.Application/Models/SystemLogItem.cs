@@ -17,6 +17,7 @@ public sealed record SystemLogItem(
 {
     public string Domain => Category switch
     {
+        _ when IsSignal => "Signal",
         "SLOT" or "CYCLE" or "FLOW" or "CLOSE_SELECT" or "TRADE_GATE" or "OPPOSITE_OPEN_GUARD"
             or "COOLDOWN" or "MIN_PROFIT" or "TRADE_POLICY" or "GUARD" => "Trading",
         "MT4" or "MT5" or "ROUTER" or "MANUAL" or "HWND_PROFILE" => "Execution",
@@ -28,12 +29,24 @@ public sealed record SystemLogItem(
 
     public bool IsSignal => Category.StartsWith("SIGNAL_", StringComparison.OrdinalIgnoreCase);
 
-    public string DisplayText => $"[{Timestamp:yyyy-MM-dd HH:mm:ss.fff}] {Message}";
+    // Structured SignalLogItem already carries its own timestamp. Avoid rendering a second
+    // logger timestamp when the same line is mirrored into System / All.
+    public string DisplayText => IsSignal
+        ? Message
+        : $"[{Timestamp:yyyy-MM-dd HH:mm:ss.fff}] {Message}";
 
     public static SystemLogItem Parse(DateTime timestamp, string message, SystemLogSeverity severity)
     {
         var category = ReadBracketToken(message, 0);
         var eventType = ReadBracketToken(message, 1);
+
+        // Structured SignalLogItem.ToString() starts with its own [yyyy-MM-dd HH:mm:ss.fff]
+        // before [SIGNAL_*][LEVEL]. Normalize to the signal tokens for domain/filter/color.
+        if (eventType.StartsWith("SIGNAL_", StringComparison.OrdinalIgnoreCase))
+        {
+            category = eventType;
+            eventType = ReadBracketToken(message, 2);
+        }
 
         if (string.IsNullOrWhiteSpace(category))
         {

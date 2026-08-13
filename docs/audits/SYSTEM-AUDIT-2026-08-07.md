@@ -136,7 +136,8 @@ không chịu Auto post-open.
 ## Logging và UI
 
 - File session: `Desktop/trade-log`; coordinator `ISlotLogger` forward vào file logger.
-- UI `SignalLogItems` là collection riêng, không tự nhận mọi dòng file log.
+- UI `SignalLogItems` là collection Minimal riêng; structured Signal được mirror vào System `All`
+  và filter `Signal`, còn diagnostic/system log không tự đi vào Minimal.
 - Schedule sleeping chỉ log khi một Open signal bị block (`[SLOT][SKIP]` throttle 30s); không có
   event log riêng đúng thời điểm schedule bắt đầu/kết thúc.
 - UI phase ưu tiên non-auto barrier, startup/global cooldown, post-close, opposite lock và quota.
