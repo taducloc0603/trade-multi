@@ -186,6 +186,28 @@ public sealed class QuotaRuleTests
     }
 
     [Fact]
+    public void RandomQuota_ManualReroll_StartsNewCycleImmediately()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(maxTotal: 7, maxBuy: 4, maxSell: 3);
+        coordinator.EnableRandomQuota();
+        coordinator.RestoreRandomQuotaState(new(true, 4, 3, 2, 5, 8));
+        var initial = coordinator.RandomQuotaState;
+
+        coordinator.RerollRandomQuota();
+
+        var rerolled = coordinator.RandomQuotaState;
+        Assert.True(rerolled.IsEnabled);
+        Assert.Equal(initial.CycleNumber + 1, rerolled.CycleNumber);
+        Assert.Equal(initial.EffectiveMaxBuy, rerolled.PreviousMaxBuy);
+        Assert.Equal(initial.EffectiveMaxSell, rerolled.PreviousMaxSell);
+        Assert.Equal(0, rerolled.OpenCountSinceRandom);
+        Assert.InRange(rerolled.EffectiveMaxBuy, 1, 4);
+        Assert.InRange(rerolled.EffectiveMaxSell, 1, 3);
+        Assert.InRange(rerolled.RandomAfterOpens, 2, 5);
+    }
+
+    [Fact]
     public void RandomQuota_DuplicateConfirmation_CountsOnlyOnce()
     {
         var coordinator = CreateCoordinator();

@@ -382,6 +382,11 @@
                             <StackPanel Grid.Row="16" Orientation="Horizontal">
                                 <TextBlock Text="Random Quota: " FontWeight="SemiBold" Foreground="#344054" />
                                 <TextBlock Text="{Binding RandomQuotaText, Mode=OneWay}" Foreground="#101828" TextWrapping="Wrap" />
+                                <Button Content="Random lại"
+                                        Margin="10,0,0,0"
+                                        Padding="10,3"
+                                        VerticalAlignment="Center"
+                                        Command="{Binding RandomQuotaCommand}" />
                             </StackPanel>
                         </Grid>
                     </Border>

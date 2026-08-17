@@ -91,6 +91,7 @@ public interface IPortfolioCoordinator
     // === Config sync from RuntimeConfigState (Phase 2) ===
     void UpdateQuotaConfig(int maxTotal, int maxBuy, int maxSell);
     void EnableRandomQuota();
+    void RerollRandomQuota();
     void RestoreRandomQuotaState(RandomQuotaState state);
     void UpdateCooldownConfig(int minSec, int maxSec);
     void UpdateMaxLifeTimeConfig(int maxLifeTimeSec);

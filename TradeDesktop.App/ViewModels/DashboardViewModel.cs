@@ -458,6 +458,7 @@ public sealed class DashboardViewModel : ObservableObject
         OpenCurrentLogCommand = new AsyncRelayCommand(OpenCurrentLogAsync);
         StartTradingLogicCommand = new AsyncRelayCommand(StartTradingLogicAsync, CanStartTradingLogic);
         StopTradingLogicCommand = new AsyncRelayCommand(StopTradingLogicAsync, CanStopTradingLogic);
+        RandomQuotaCommand = new AsyncRelayCommand(RandomQuotaAsync);
         BuyCommand = new AsyncRelayCommand(BuyAsync, CanManualOpen);
         SellCommand = new AsyncRelayCommand(SellAsync, CanManualOpen);
         CloseOrderCommand = new AsyncRelayCommand(CloseOrderAsync, CanManualClose);
@@ -748,6 +749,7 @@ public sealed class DashboardViewModel : ObservableObject
     public AsyncRelayCommand OpenCurrentLogCommand { get; }
     public AsyncRelayCommand StartTradingLogicCommand { get; }
     public AsyncRelayCommand StopTradingLogicCommand { get; }
+    public AsyncRelayCommand RandomQuotaCommand { get; }
     public IAsyncRelayCommand BuyCommand { get; }
     public IAsyncRelayCommand SellCommand { get; }
     public IAsyncRelayCommand CloseOrderCommand { get; }
@@ -1088,6 +1090,13 @@ public sealed class DashboardViewModel : ObservableObject
         LastSignalText = "-";
         _tradeSessionFileLogger.StopSession(DateTimeOffset.Now);
         return Task.CompletedTask;
+    }
+
+    private async Task RandomQuotaAsync()
+    {
+        _portfolioCoordinator.RerollRandomQuota();
+        OnPropertyChanged(nameof(RandomQuotaText));
+        await PersistCurrentSlotsSnapshotAsync("random-quota-manual-reroll");
     }
 
     private void OnRealtimeLogAccepted(SystemLogItem item)

@@ -1094,6 +1094,16 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         StartNewRandomQuotaCycle("INITIALIZED");
     }
 
+    public void RerollRandomQuota()
+    {
+        if (!_state.IsRandomQuotaEnabled)
+        {
+            _state.IsRandomQuotaEnabled = true;
+        }
+
+        StartNewRandomQuotaCycle("MANUAL_REROLL");
+    }
+
     public void RestoreRandomQuotaState(RandomQuotaState state)
     {
         if (!state.IsEnabled) return;
@@ -1354,6 +1364,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 "Khởi tạo chu kỳ quota ngẫu nhiên đầu tiên",
             ("NEW_CYCLE", "OPEN_THRESHOLD_REACHED") =>
                 "Đã đủ số pair Open thành công của chu kỳ trước; bắt đầu chu kỳ quota mới",
+            ("NEW_CYCLE", "MANUAL_REROLL") =>
+                "Người dùng chủ động random lại quota",
             ("RESTORED", "APP_RESTART") =>
                 "Khôi phục quota và tiến độ chu kỳ cũ sau khi ứng dụng khởi động lại",
             _ => "Cập nhật trạng thái quota ngẫu nhiên"
