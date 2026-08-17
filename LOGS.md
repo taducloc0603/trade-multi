@@ -281,6 +281,10 @@ non-auto barrier hoặc ngữ cảnh slot. Gate chạy trước MT4/MT5 executor
 - Request bị gate chặn chưa gọi MT4/MT5 và có `Legs=[]`. Outcome đúng là `*_BLOCKED`, không phải
   `*_FAILED`/`EXECUTION_FAILED`. Chỉ điều tra HWND/native click khi có dòng `[ROUTER] Open pair request`
   và `[MT4]`/`[MT5] Open leg` cùng timestamp.
+- `[FLOW][WAIT] BothFlat observed but Close is not finalized` → Trades A/B đã biến mất nhưng
+  pending close/history chưa finalize. Đây là race window bình thường; flow cố ý giữ WaitingClose để
+  không xóa post-close anchor. Sau đó phải xuất hiện `[SLOT][CLOSE_CONFIRMED]` và
+  `[SLOT][WAITING][POST_CLOSE_LOCK]` trước khi Auto Open được xét lại.
 
 ---
 

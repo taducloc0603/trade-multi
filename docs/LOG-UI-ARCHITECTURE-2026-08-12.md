@@ -163,6 +163,9 @@ Các thay đổi log phải giữ các bất biến sau:
 9. Kết quả `IsDispatchBlocked=true` phải kết thúc bằng outcome `BLOCKED` hoặc `CANCELLED` trước
    khi phân loại execution result. Danh sách leg rỗng của một request chưa dispatch không được ghi
    thành `EXECUTION_FAILED`; reason cụ thể từ trade gate phải được giữ trong `reasonCode`.
+10. `BothFlat` từ Trades không được ép flow về WaitingOpen khi còn PendingClose hoặc close chưa
+    finalize. History A/B có thể đến lệch nhịp; close-finalization phải neo `POST_CLOSE_OPEN_LOCK`
+    trước khi slot được xóa và Open được xét lại.
 
 ## 6. Kiểm chứng
 
@@ -171,7 +174,7 @@ Các thay đổi log phải giữ các bất biến sau:
 - Rà diff các điểm gọi signal, coordinator, router và logger.
 - Build ứng dụng với Windows targeting: 0 error, 0 warning.
 - Build project test: 0 error, 0 warning.
-- Chạy test bằng runtime roll-forward tương thích: 368 pass, 0 fail, 0 skip.
+- Chạy test bằng runtime roll-forward tương thích: 369 pass, 0 fail, 0 skip.
 - Kiểm tra whitespace bằng `git diff --check`.
 
 Smoke test còn cần thực hiện trên Windows production-like:

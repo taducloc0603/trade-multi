@@ -424,6 +424,11 @@ Các `reasonCode` hiện được chuẩn hóa như sau:
 `EXECUTION_FAILED` chỉ vì danh sách `Legs` rỗng. `EXECUTION_FAILED` chỉ hợp lệ khi router đã trả
 về ít nhất một kết quả leg thực thi và không leg nào thành công.
 
+Khi Auto Close đang chờ đủ xác nhận A/B, snapshot Trades có thể tạm báo `BothFlat` trước khi
+History của hai sàn về đủ. Flow phải giữ trạng thái Close và không được gọi `ForceWaitingOpen`/
+`ClearAllSlots` trong khoảng này. Chỉ close-finalization được phép xóa slot; nó phải giữ Auto Close
+dispatch anchor để Open tiếp theo đi qua `POST_CLOSE_OPEN_LOCK`.
+
 #### System / Execution Logs
 
 Bảng này gom theo category; từng category có thể có nhiều message cụ thể. Panel chỉ nhận log đã vượt

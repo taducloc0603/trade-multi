@@ -255,6 +255,14 @@ public sealed class PortfolioCoordinatorAdapter : ITradingFlowEngine
 
     public void ForceWaitingOpen()
     {
+        // Trades MMF can become BothFlat before both History legs confirm. Clearing the
+        // coordinator during that gap removes the PendingClose slot and resets the Auto Close
+        // dispatch anchor, allowing an immediate Open before the post-close lock is established.
+        if (_coordinator.PendingCloseSlots.Count > 0)
+        {
+            return;
+        }
+
         _coordinator.ClearAllSlots();
         _adapterClosedAtUtc = null;
         _adapterClosedAtRuntimeUtc = null;

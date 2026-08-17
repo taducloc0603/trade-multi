@@ -77,6 +77,7 @@ public sealed class DashboardViewModel : ObservableObject
     private readonly Dictionary<string, int> _sttByPairId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PendingOpenPairState> _pendingOpenPairById = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PendingClosePairState> _pendingClosePairById = new(StringComparer.Ordinal);
+    private string? _lastDeferredBothFlatClosePairId;
     private readonly Dictionary<GapSignalTriggerResult, SignalLifecycleContext> _signalContextByTrigger =
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, SignalLifecycleContext> _signalContextByPairId = new(StringComparer.Ordinal);
@@ -3433,6 +3434,7 @@ public sealed class DashboardViewModel : ObservableObject
         _invariantClearStreak = 0;
         _activeAutoCycle = null;
         _activeAutoCloseRecoveryCycle = null;
+        _lastDeferredBothFlatClosePairId = null;
         _signalContextByTrigger.Clear();
         _signalContextByPairId.Clear();
         _closeSignalContextBySlot.Clear();
@@ -4859,6 +4861,32 @@ public sealed class DashboardViewModel : ObservableObject
 
         if (pairState == LivePairTradeState.BothFlat)
         {
+            var unresolvedAutoClose = _pendingClosePairById.Values.FirstOrDefault(state =>
+                state.IsAutoFlow && !state.IsResolved);
+            var pendingCoordinatorClose = _portfolioCoordinator.PendingCloseSlots.FirstOrDefault();
+            var deferredPairId = unresolvedAutoClose?.PairId ?? pendingCoordinatorClose?.PairId;
+            var deferredLogKey = deferredPairId ?? "<unresolved-close>";
+            var closeDispatchInFlight = Volatile.Read(ref _closeDispatchInFlight) != 0;
+            if (deferredPairId is not null
+                || _activeAutoCloseRecoveryCycle is not null
+                || closeDispatchInFlight)
+            {
+                if (!string.Equals(_lastDeferredBothFlatClosePairId, deferredLogKey, StringComparison.Ordinal))
+                {
+                    _lastDeferredBothFlatClosePairId = deferredLogKey;
+                    SafeVmLog(
+                        $"[FLOW][WAIT] BothFlat observed but Close is not finalized: " +
+                        $"pairId={deferredPairId ?? "-"} " +
+                        $"pendingCoordinator={pendingCoordinatorClose is not null} " +
+                        $"pendingState={unresolvedAutoClose is not null} " +
+                        $"recoveryCycle={_activeAutoCloseRecoveryCycle is not null} " +
+                        $"dispatchInFlight={closeDispatchInFlight}");
+                }
+
+                return;
+            }
+
+            _lastDeferredBothFlatClosePairId = null;
             if (_tradingFlowEngine.CurrentPhase != TradingFlowPhase.WaitingOpen)
             {
                 _tradingFlowEngine.ForceWaitingOpen();

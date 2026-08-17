@@ -295,6 +295,54 @@ public sealed class PortfolioCoordinatorAdapterTests
     }
 
     [Fact]
+    public void ForceWaitingOpen_WhenAutoClosePending_DoesNotClearSlotOrDispatchAnchor()
+    {
+        var coordinator = new PortfolioCoordinator(
+            new GapSignalConfirmationEngine(),
+            new CloseSignalEngineFactory(),
+            random: new Random(42));
+        var sut = new PortfolioCoordinatorAdapter(coordinator);
+        var pairId = "AUTO-close-race";
+        var now = DateTime.UtcNow;
+        coordinator.UpdatePostCloseLockConfig(125);
+
+        coordinator.RegisterSyncedSlot(
+            pairId,
+            TradingPositionSide.Buy,
+            TradingOpenMode.GapBuy,
+            ticketA: 100,
+            ticketB: 200,
+            openConfirmedAtUtc: now.AddMinutes(-10),
+            holdingSeconds: 0);
+        Assert.True(coordinator.TryClaimSlotClose(pairId, CloseExecutionOwner.Auto, now));
+        var acquired = coordinator.TryAcquireTradeAction(
+            now,
+            action: "CLOSE",
+            source: "test",
+            origin: TradeActionOrigin.Auto,
+            side: TradingPositionSide.Buy,
+            pairId: pairId);
+        Assert.True(acquired.Acquired);
+
+        // Simulate Trades MMF becoming BothFlat before both History legs arrive.
+        sut.ForceWaitingOpen();
+
+        Assert.NotNull(coordinator.GetSlotByPairId(pairId));
+        Assert.Single(coordinator.PendingCloseSlots);
+        Assert.Equal(TradingFlowPhase.WaitingCloseFromGapBuy, sut.CurrentPhase);
+
+        var immediateOpen = coordinator.TryAcquireTradeAction(
+            now.AddSeconds(2),
+            action: "OPEN",
+            source: "test",
+            origin: TradeActionOrigin.Auto,
+            side: TradingPositionSide.Sell,
+            pairId: null);
+        Assert.False(immediateOpen.Acquired);
+        Assert.Equal("POST_CLOSE_OPEN_LOCK", immediateOpen.Reason);
+    }
+
+    [Fact]
     public void ForceWaitingClose_WhenHoldingSecondsAlreadySet_Preserves()
     {
         var sut = CreateSut();
