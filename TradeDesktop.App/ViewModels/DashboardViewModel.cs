@@ -1926,31 +1926,6 @@ public sealed class DashboardViewModel : ObservableObject
 
             NotifyOpenCloseFailures("OPEN", openResult, pairId);
 
-            var successfulOpenLegs = openResult.Legs.Count(leg => leg.Success);
-            if (!openResult.Success && successfulOpenLegs > 0)
-            {
-                LogSignalOutcome(
-                    signalContext,
-                    "FAILED",
-                    "PARTIAL_OPEN",
-                    pairId,
-                    coordinatorSlot.SlotId,
-                    ("successfulLegs", successfulOpenLegs),
-                    ("totalLegs", openResult.Legs.Count),
-                    ("rollback", "pending"));
-            }
-
-            if (!openResult.Success && openResult.Legs.All(x => !x.Success))
-            {
-                SetLastSignalStatus("FAILED");
-                _lastAutoOpenClickAtLocal = null;
-                if (_pendingOpenPairById.TryGetValue(pairId, out var state))
-                {
-                    state.IsResolved = true;
-                }
-                _portfolioCoordinator.AbortPendingOpen(pairId);
-                LogSignalOutcome(signalContext, "FAILED", "EXECUTION_FAILED", pairId, coordinatorSlot.SlotId);
-            }
             if (openResult.IsDispatchBlocked)
             {
                 SetLastSignalStatus("REJECTED: TRADE GATE");
@@ -1972,6 +1947,31 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
+            var successfulOpenLegs = openResult.Legs.Count(leg => leg.Success);
+            if (!openResult.Success && successfulOpenLegs > 0)
+            {
+                LogSignalOutcome(
+                    signalContext,
+                    "FAILED",
+                    "PARTIAL_OPEN",
+                    pairId,
+                    coordinatorSlot.SlotId,
+                    ("successfulLegs", successfulOpenLegs),
+                    ("totalLegs", openResult.Legs.Count),
+                    ("rollback", "pending"));
+            }
+
+            if (!openResult.Success && openResult.Legs.Count > 0 && openResult.Legs.All(x => !x.Success))
+            {
+                SetLastSignalStatus("FAILED");
+                _lastAutoOpenClickAtLocal = null;
+                if (_pendingOpenPairById.TryGetValue(pairId, out var state))
+                {
+                    state.IsResolved = true;
+                }
+                _portfolioCoordinator.AbortPendingOpen(pairId);
+                LogSignalOutcome(signalContext, "FAILED", "EXECUTION_FAILED", pairId, coordinatorSlot.SlotId);
+            }
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
                 // Phase 1 Auto Open log: A buy, B sell — trigger is OpenByGapBuy
@@ -2157,31 +2157,6 @@ public sealed class DashboardViewModel : ObservableObject
 
             NotifyOpenCloseFailures("OPEN", openResult, pairId);
 
-            var successfulOpenLegs = openResult.Legs.Count(leg => leg.Success);
-            if (!openResult.Success && successfulOpenLegs > 0)
-            {
-                LogSignalOutcome(
-                    signalContext,
-                    "FAILED",
-                    "PARTIAL_OPEN",
-                    pairId,
-                    coordinatorSlot.SlotId,
-                    ("successfulLegs", successfulOpenLegs),
-                    ("totalLegs", openResult.Legs.Count),
-                    ("rollback", "pending"));
-            }
-
-            if (!openResult.Success && openResult.Legs.All(x => !x.Success))
-            {
-                SetLastSignalStatus("FAILED");
-                _lastAutoOpenClickAtLocal = null;
-                if (_pendingOpenPairById.TryGetValue(pairId, out var state))
-                {
-                    state.IsResolved = true;
-                }
-                _portfolioCoordinator.AbortPendingOpen(pairId);
-                LogSignalOutcome(signalContext, "FAILED", "EXECUTION_FAILED", pairId, coordinatorSlot.SlotId);
-            }
             if (openResult.IsDispatchBlocked)
             {
                 SetLastSignalStatus("REJECTED: TRADE GATE");
@@ -2203,6 +2178,31 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
+            var successfulOpenLegs = openResult.Legs.Count(leg => leg.Success);
+            if (!openResult.Success && successfulOpenLegs > 0)
+            {
+                LogSignalOutcome(
+                    signalContext,
+                    "FAILED",
+                    "PARTIAL_OPEN",
+                    pairId,
+                    coordinatorSlot.SlotId,
+                    ("successfulLegs", successfulOpenLegs),
+                    ("totalLegs", openResult.Legs.Count),
+                    ("rollback", "pending"));
+            }
+
+            if (!openResult.Success && openResult.Legs.Count > 0 && openResult.Legs.All(x => !x.Success))
+            {
+                SetLastSignalStatus("FAILED");
+                _lastAutoOpenClickAtLocal = null;
+                if (_pendingOpenPairById.TryGetValue(pairId, out var state))
+                {
+                    state.IsResolved = true;
+                }
+                _portfolioCoordinator.AbortPendingOpen(pairId);
+                LogSignalOutcome(signalContext, "FAILED", "EXECUTION_FAILED", pairId, coordinatorSlot.SlotId);
+            }
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
                 // Phase 1 Auto Open log: A sell, B buy — trigger is OpenByGapSell

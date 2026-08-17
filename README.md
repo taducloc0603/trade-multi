@@ -402,7 +402,7 @@ Các event `DETECTED` được ghi một lần khi phát hiện signal. Mỗi si
 | Signal Logs | `SIGNAL_OPEN_CANCELLED` | Warn | Open signal bị hủy trước dispatch | Signal hết hạn hoặc trạng thái mục tiêu không còn hợp lệ | `[SIGNAL_OPEN_CANCELLED][WARN] reasonCode=SIGNAL_EXPIRED ... description="Hủy tín hiệu vì đã hết hạn trong thời gian chờ"` | Một outcome cuối | Có |
 | Signal Logs | `SIGNAL_HEDGE_CANCELLED` | Warn | Hedge signal bị hủy trước dispatch | Vị thế gốc đã đóng, mất slot hoặc đổi side | `[SIGNAL_HEDGE_CANCELLED][WARN] reasonCode=ORIGINAL_POSITION_CLOSED ... description="Hủy Hedge vì vị thế gốc đã đóng trước khi gửi lệnh"` | Một outcome cuối | Có |
 | Signal Logs | `SIGNAL_CLOSE_CANCELLED` | Warn | Close signal bị hủy trước dispatch | Signal hết hạn hoặc vị thế đã đóng trước đó | `[SIGNAL_CLOSE_CANCELLED][WARN] reasonCode=POSITION_ALREADY_CLOSED ... description="Hủy đóng vì vị thế đã được đóng trước đó"` | Một outcome cuối | Có |
-| Signal Logs | `SIGNAL_OPEN_FAILED` | Error | Thực thi Open thất bại | Cả hai leg fail, partial-open hoặc confirmation timeout | `[SIGNAL_OPEN_FAILED][ERROR] reasonCode=PARTIAL_OPEN rollback=pending ... description="Mở vị thế thất bại vì chỉ một chân thành công"` | Một outcome cuối | Có |
+| Signal Logs | `SIGNAL_OPEN_FAILED` | Error | Thực thi Open thất bại | Router đã dispatch ít nhất một leg và cả hai leg fail, partial-open hoặc confirmation timeout; gate/policy block không thuộc nhóm này | `[SIGNAL_OPEN_FAILED][ERROR] reasonCode=PARTIAL_OPEN rollback=pending ... description="Mở vị thế thất bại vì chỉ một chân thành công"` | Một outcome cuối | Có |
 | Signal Logs | `SIGNAL_HEDGE_FAILED` | Error | Thực thi Hedge thất bại | Cả hai leg fail, partial-open hoặc confirmation timeout | `[SIGNAL_HEDGE_FAILED][ERROR] reasonCode=PARTIAL_OPEN ... description="Mở vị thế Hedge thất bại vì chỉ một chân thành công"` | Một outcome cuối | Có |
 | Signal Logs | `SIGNAL_CLOSE_FAILED` | Error | Thực thi Close thất bại | Cả hai leg fail, partial-close hoặc confirmation timeout | `[SIGNAL_CLOSE_FAILED][ERROR] reasonCode=PARTIAL_CLOSE retry=pending ... description="Đóng vị thế thất bại vì một chân vẫn còn mở"` | Một outcome cuối | Có |
 
@@ -411,13 +411,18 @@ Các `reasonCode` hiện được chuẩn hóa như sau:
 | Nhóm | Reason code | Ý nghĩa |
 |---|---|---|
 | Capacity | `QUOTA_TOTAL_FULL`, `QUOTA_BUY_FULL`, `QUOTA_SELL_FULL`, `NO_AVAILABLE_SLOT` | Hết quota tổng/quota hướng hoặc không còn slot |
-| Cycle / timer | `UNRESOLVED_PENDING_CYCLE`, `COOLDOWN_ACTIVE`, `OPPOSITE_SIDE_LOCK`, `DUPLICATE_SIGNAL`, `QUALIFYING_NOT_REACHED` | Chu kỳ trước chưa xong, timer còn hiệu lực hoặc signal chưa đủ xác nhận |
-| Execution policy | `TRADE_GATE_BLOCKED`, `TRADE_POLICY_BLOCKED`, `SIGNAL_EXPIRED` | Gate/policy từ chối hoặc signal hết hạn khi chờ |
+| Cycle / timer | `UNRESOLVED_PENDING_CYCLE`, `COOLDOWN_ACTIVE`, `GLOBAL_ACTION_COOLDOWN`, `POST_CLOSE_OPEN_LOCK`, `SAME_SIDE_OPEN_RANDOM_LOCK`, `CLOSE_TO_CLOSE_RANDOM_LOCK`, `PER_SLOT_POST_OPEN_LOCK`, `OPPOSITE_SIDE_LOCK`, `DUPLICATE_SIGNAL`, `QUALIFYING_NOT_REACHED` | Chu kỳ trước chưa xong, timer/transition lock còn hiệu lực hoặc signal chưa đủ xác nhận |
+| Execution policy | `TRADE_GATE_BLOCKED`, `TRADE_POLICY_BLOCKED`, `NON_AUTO_CLOSE_IN_FLIGHT`, `AUTO_ACTION_CONTEXT_INVALID`, `AUTO_CLOSE_SLOT_CONTEXT_INVALID`, `SIGNAL_EXPIRED` | Gate/policy từ chối, ngữ cảnh dispatch không hợp lệ hoặc signal hết hạn khi chờ |
 | Market guard | `LATENCY_GUARD`, `MAX_GAP_GUARD`, `SPREAD_GUARD`, `PRICE_FREEZE_GUARD` | Dữ liệu thị trường không đạt điều kiện an toàn |
 | Runtime health | `CONNECTION_UNHEALTHY`, `HWND_INVALID`, `WATCHDOG_PAUSED`, `TRADING_STOPPED`, `SIDE_DISABLED` | Kết nối/UI/runtime không cho phép thực hiện |
 | Close eligibility | `MIN_PROFIT_WAITING`, `POSITION_ALREADY_CLOSED` | Chưa đạt lợi nhuận tối thiểu hoặc vị thế không còn mở |
 | Hedge validity | `ORIGINAL_POSITION_CLOSED`, `ORIGINAL_SLOT_NOT_FOUND`, `ORIGINAL_SIDE_CHANGED` | Trạng thái vị thế gốc không còn hợp lệ cho Hedge |
 | Execution result | `PARTIAL_OPEN`, `PARTIAL_CLOSE`, `CONFIRMATION_TIMEOUT`, `EXECUTION_FAILED` | Thực thi một phần, timeout xác nhận hoặc cả hai leg thất bại |
+
+`BLOCKED` và `FAILED` là hai outcome loại trừ nhau. Kết quả router có `IsDispatchBlocked=true`
+được ghi `*_BLOCKED` với reason cụ thể và `remainingMs`; không được suy diễn thành
+`EXECUTION_FAILED` chỉ vì danh sách `Legs` rỗng. `EXECUTION_FAILED` chỉ hợp lệ khi router đã trả
+về ít nhất một kết quả leg thực thi và không leg nào thành công.
 
 #### System / Execution Logs
 
@@ -430,7 +435,7 @@ Bảng này gom theo category; từng category có thể có nhiều message c�
 | System / Execution Logs | `CYCLE` | Info/Warn/Error | Trading | Vòng đời open/close, pending, resolve, timeout và rollback | `[CYCLE][INFO] Pending open resolved: pairId=p1 ticketA=101 ticketB=202` | Theo transition; không được loại bỏ | Có |
 | System / Execution Logs | `SLOT` | Info/Warn/Skip | Trading | Cấp slot, confirm, timeout, quota và trạng thái slot | `[SLOT][INFO] Slot 2 allocated: pairId=p1 side=Buy mode=GapBuy` | Theo transition; không được loại bỏ | Có |
 | System / Execution Logs | `CLOSE_SELECT` | Info/Warn | Trading | Chọn slot/ticket đóng và lý do bỏ qua candidate | `[CLOSE_SELECT][INFO] Selected slot=2 pairId=p1 profit=15.2` | Mỗi vòng chọn có giá trị; không được loại bỏ | Có |
-| System / Execution Logs | `TRADE_GATE` | Info/Blocked | Trading | Acquire/release execution gate và thời gian còn khóa | `[TRADE_GATE][BLOCKED] OPEN pairId=p1 remainingMs=820` | Throttle 10 giây theo subject | Có đầy đủ |
+| System / Execution Logs | `TRADE_GATE` | Info/Blocked | Trading | Acquire/release execution gate, reason và thời gian còn khóa | `[TRADE_GATE][BLOCKED] action=OPEN reason=POST_CLOSE_OPEN_LOCK remainingMs=820` | Throttle 10 giây theo subject | Có đầy đủ |
 | System / Execution Logs | `COOLDOWN` | Info/Block | Trading | Deadline cooldown và nguyên nhân bị chặn | `[COOLDOWN][BLOCK] pairId=p1 remainingMs=2500` | Throttle 30 giây theo subject | Có đầy đủ |
 | System / Execution Logs | `MIN_PROFIT` / `TP_CHECK` | Info/Waiting | Trading | Điều kiện lợi nhuận/TP chưa đạt hoặc đang xác nhận | `[SLOT][TP_CHECK] slot=2 profit=8.5 target=12 state=WAITING` | Throttle 10–30 giây theo pattern | Có đầy đủ |
 | System / Execution Logs | `OPPOSITE_OPEN_GUARD` | Info/Warn/Block | Trading | Kiểm tra khoảng cách giá khi Open đảo chiều | `[OPPOSITE_OPEN_GUARD][BLOCK] pairId=p2 reasonCode=DISTANCE_NOT_REACHED` | Throttle 30 giây theo pair | Có đầy đủ |

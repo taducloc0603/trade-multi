@@ -1,6 +1,6 @@
 # Kiến trúc Trading Logs UI
 
-Ngày cập nhật: 2026-08-12
+Ngày cập nhật: 2026-08-17
 
 ## 1. Mục tiêu
 
@@ -160,16 +160,18 @@ Các thay đổi log phải giữ các bất biến sau:
 7. Exception từ logger, subscriber realtime hoặc cập nhật Signal collection phải bị cô lập và không
    được thoát ra luồng signal/execution.
 8. Throttle, filter, giới hạn queue và giới hạn collection chỉ áp dụng dữ liệu hiển thị UI.
+9. Kết quả `IsDispatchBlocked=true` phải kết thúc bằng outcome `BLOCKED` hoặc `CANCELLED` trước
+   khi phân loại execution result. Danh sách leg rỗng của một request chưa dispatch không được ghi
+   thành `EXECUTION_FAILED`; reason cụ thể từ trade gate phải được giữ trong `reasonCode`.
 
 ## 6. Kiểm chứng
 
 Đã thực hiện:
 
 - Rà diff các điểm gọi signal, coordinator, router và logger.
-- Build ứng dụng với Windows targeting: 0 error; trên macOS có 3 cảnh báo CA1416 đã biết do API
-  `MemoryMappedFile.OpenExisting` chỉ hỗ trợ Windows.
+- Build ứng dụng với Windows targeting: 0 error, 0 warning.
 - Build project test: 0 error, 0 warning.
-- Test runtime chưa chạy trên máy audit hiện tại vì thiếu .NET 8 Runtime cho `testhost`.
+- Chạy test bằng runtime roll-forward tương thích: 368 pass, 0 fail, 0 skip.
 - Kiểm tra whitespace bằng `git diff --check`.
 
 Smoke test còn cần thực hiện trên Windows production-like:

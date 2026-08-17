@@ -58,6 +58,9 @@ public sealed class SignalLifecycleLogFormatterTests
     [InlineData("QUOTA_BUY_FULL", "quota Buy đã đầy")]
     [InlineData("ORIGINAL_POSITION_CLOSED", "vị thế gốc đã đóng")]
     [InlineData("PARTIAL_CLOSE", "một chân vẫn còn mở")]
+    [InlineData("POST_CLOSE_OPEN_LOCK", "khóa sau khi đóng")]
+    [InlineData("SAME_SIDE_OPEN_RANDOM_LOCK", "vị thế cùng chiều")]
+    [InlineData("GLOBAL_ACTION_COOLDOWN", "cooldown toàn cục")]
     public void DescriptionForReason_ReturnsReadableVietnamese(string reasonCode, string expected)
     {
         Assert.Contains(expected, SignalLifecycleLogFormatter.DescriptionForReason(reasonCode));

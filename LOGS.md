@@ -32,18 +32,19 @@
 5. [[WATCHDOG]](#watchdog--invariant-violation-monitor)
 6. [[GUARD]](#guard--entry-guard-validation)
 7. [[ROUTER]](#router--trade-execution-router)
-8. [[MT4]](#mt4--metatrader-4-executor)
-9. [[MT5]](#mt5--metatrader-5-executor)
-10. [[FLOW]](#flow--trading-flow-state-transitions)
-11. [[MARKET]](#market--market-data--latency)
-12. [[CLOSE_SELECT]](#close_select--close-slot-selection)
-13. [[PERSIST]](#persist--database-slot-persistence)
-14. [[DB]](#db--database-config-load)
-15. [[CONFIG]](#config--runtime-configuration-update)
-16. [[NOTIFY]](#notify--telegram-notifications)
-17. [[MMF_TRADES] / [MMF_HISTORY]](#mmf_trades--mmf_history--shared-memory-change-detection)
-18. [[MANUAL]](#manual--manual-trade-operations)
-19. [Debug by scenario](#debug-by-scenario)
+8. [[TRADE_GATE]](#trade_gate--auto-transition--dispatch-gate)
+9. [[MT4]](#mt4--metatrader-4-executor)
+10. [[MT5]](#mt5--metatrader-5-executor)
+11. [[FLOW]](#flow--trading-flow-state-transitions)
+12. [[MARKET]](#market--market-data--latency)
+13. [[CLOSE_SELECT]](#close_select--close-slot-selection)
+14. [[PERSIST]](#persist--database-slot-persistence)
+15. [[DB]](#db--database-config-load)
+16. [[CONFIG]](#config--runtime-configuration-update)
+17. [[NOTIFY]](#notify--telegram-notifications)
+18. [[MMF_TRADES] / [MMF_HISTORY]](#mmf_trades--mmf_history--shared-memory-change-detection)
+19. [[MANUAL]](#manual--manual-trade-operations)
+20. [Debug by scenario](#debug-by-scenario)
 
 ---
 
@@ -254,6 +255,32 @@
 - `success=false` với 1 leg ok, 1 leg failed → half-open state. Coordinator giữ slot ở PendingOpen chờ timeout
 - `ObjectDisposedException on WindowHandle` → cửa sổ MT4/MT5 bị đóng khi router đang click. Cần restart MT4/MT5
 - `elapsed` > 1000ms thường xuyên → suspect platform lag
+
+---
+
+## [TRADE_GATE] — Auto Transition & Dispatch Gate
+
+**Files:** `TradeDesktop.Application/Services/Portfolio/PortfolioCoordinator.cs` · `TradeDesktop.App/Services/TradeExecutionRouter.cs`
+
+**Dùng để làm gì:** Cho biết request được phép dispatch hay bị chặn bởi cooldown, transition lock,
+non-auto barrier hoặc ngữ cảnh slot. Gate chạy trước MT4/MT5 executor.
+
+**Ví dụ:**
+```
+[TRADE_GATE][BLOCKED] action=OPEN side=Buy reason=POST_CLOSE_OPEN_LOCK remainingMs=18849
+[TRADE_GATE][BLOCKED] action=OPEN side=Buy reason=SAME_SIDE_OPEN_RANDOM_LOCK remainingMs=797
+[TRADE_GATE][ACQUIRED] action=OPEN side=Buy transitionFrom=SAME_SIDE_OPEN_RANDOM_LOCK nextSameTypeRandomSec=6
+[SIGNAL_OPEN_BLOCKED][WARN] reasonCode=POST_CLOSE_OPEN_LOCK remainingMs=18849 description="Chưa thể mở vị thế mới vì đang trong thời gian khóa sau khi đóng"
+```
+
+**Case đặc biệt:**
+- `POST_CLOSE_OPEN_LOCK` → Auto Open đang chờ timer sau Auto Close; đây là hành vi bình thường.
+- `SAME_SIDE_OPEN_RANDOM_LOCK` → hai Auto Open cùng chiều đến quá gần nhau.
+- `GLOBAL_ACTION_COOLDOWN` → startup/recovery cooldown toàn cục còn hiệu lực.
+- `NON_AUTO_CLOSE_IN_FLIGHT` → Auto tạm dừng trong lúc manual/recovery close chưa được MMF xác nhận xong.
+- Request bị gate chặn chưa gọi MT4/MT5 và có `Legs=[]`. Outcome đúng là `*_BLOCKED`, không phải
+  `*_FAILED`/`EXECUTION_FAILED`. Chỉ điều tra HWND/native click khi có dòng `[ROUTER] Open pair request`
+  và `[MT4]`/`[MT5] Open leg` cùng timestamp.
 
 ---
 

@@ -304,7 +304,8 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             Legs: [],
             ErrorMessage: $"{gate.Reason}: còn {remainingMs}ms",
             BlockedByGlobalActionGate: true,
-            GateRemainingMilliseconds: remainingMs);
+            GateRemainingMilliseconds: remainingMs,
+            PolicyBlockCode: gate.Reason);
     }
 
     private static TradeActionOrigin ResolveActionOrigin(TradeExecutionReason reason)
