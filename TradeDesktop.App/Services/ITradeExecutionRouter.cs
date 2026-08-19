@@ -67,7 +67,9 @@ public sealed record TradeOpenLegRequest(
     TradeLegPlatform Platform,
     string ChartHwnd,
     TradeLegAction Action,
-    int DelayMs = 0);
+    int DelayMs = 0,
+    string? Symbol = null,
+    double? Volume = null);
 
 public sealed record TradeCloseLegRequest(
     string Exchange,
@@ -77,7 +79,9 @@ public sealed record TradeCloseLegRequest(
     TradeLegAction Action = TradeLegAction.Close,
     int DelayMs = 0,
     int? RowIndex = null,
-    string? TradeMapName = null);
+    string? TradeMapName = null,
+    string? Symbol = null,
+    double? Volume = null);
 
 public sealed record TradeOpenPairRequest(
     TradeOpenLegRequest LegA,

@@ -37,7 +37,6 @@ public sealed class DashboardViewModel : ObservableObject
     private readonly ITradesSharedMemoryReader _tradesSharedMemoryReader;
     private readonly IHistorySharedMemoryReader _historySharedMemoryReader;
     private readonly ITradeExecutionRouter _tradeExecutionRouter;
-    private readonly IMt5ManualTradeService _mt5ManualTradeService;
     private readonly ITradeSessionFileLogger _tradeSessionFileLogger;
     private readonly ConcurrentQueue<SystemLogItem> _pendingSystemLogs = new();
     private readonly object _systemLogQueueSync = new();
@@ -415,7 +414,6 @@ public sealed class DashboardViewModel : ObservableObject
         ITradesSharedMemoryReader tradesSharedMemoryReader,
         IHistorySharedMemoryReader historySharedMemoryReader,
         ITradeExecutionRouter tradeExecutionRouter,
-        IMt5ManualTradeService mt5ManualTradeService,
         ITradeSessionFileLogger tradeSessionFileLogger,
         ITelegramNotifier telegramNotifier,
         IHwndHealthChecker hwndHealthChecker)
@@ -433,7 +431,6 @@ public sealed class DashboardViewModel : ObservableObject
         _tradesSharedMemoryReader = tradesSharedMemoryReader;
         _historySharedMemoryReader = historySharedMemoryReader;
         _tradeExecutionRouter = tradeExecutionRouter;
-        _mt5ManualTradeService = mt5ManualTradeService;
         _tradeSessionFileLogger = tradeSessionFileLogger;
         SignalLogItems = new SignalLogCollection(MaxSignalLogItems, LogLegacySignalFileOnly);
         SystemLogItems = new CappedObservableCollection<SystemLogItem>(MaxSystemLogItems);
@@ -1265,17 +1262,20 @@ public sealed class DashboardViewModel : ObservableObject
                         Exchange: "A",
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformA),
                         ChartHwnd: hwndColumn.ChartHwndA,
-                        Action: TradeLegAction.Buy),
+                        Action: TradeLegAction.Buy,
+                        Symbol: snapshot?.ExchangeA.Symbol),
                     new TradeOpenLegRequest(
                         Exchange: "B",
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB),
                         ChartHwnd: hwndColumn.ChartHwndB,
-                        Action: TradeLegAction.Sell),
+                        Action: TradeLegAction.Sell,
+                        Symbol: snapshot?.ExchangeB.Symbol),
                     Context: CreateExecutionContext(
                         TradeExecutionReason.ManualOpen,
                         "manual-buy")));
 
             NotifyOpenCloseFailures("OPEN", result, BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: false));
+            ApplyMt5BridgeOpenConfirmations(pairId, result);
             if (result.IsDispatchBlocked)
             {
                 RemovePendingOpenRequests(appOpenRequestRawMs);
@@ -1346,15 +1346,19 @@ public sealed class DashboardViewModel : ObservableObject
                         Exchange: "A",
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformA),
                         ChartHwnd: hwndColumn.ChartHwndA,
-                        Action: TradeLegAction.Sell),
+                        Action: TradeLegAction.Sell,
+                        Symbol: snapshot?.ExchangeA.Symbol),
                     new TradeOpenLegRequest(
                         Exchange: "B",
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB),
                         ChartHwnd: hwndColumn.ChartHwndB,
-                        Action: TradeLegAction.Buy),
+                        Action: TradeLegAction.Buy,
+                        Symbol: snapshot?.ExchangeB.Symbol),
                     Context: CreateExecutionContext(
                         TradeExecutionReason.ManualOpen,
                         "manual-sell")));
+
+            ApplyMt5BridgeOpenConfirmations(pairId, result);
 
             if (result.IsDispatchBlocked)
             {
@@ -1919,13 +1923,15 @@ public sealed class DashboardViewModel : ObservableObject
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformA),
                         ChartHwnd: hwndColumn.ChartHwndA,
                         Action: TradeLegAction.Buy,
-                        DelayMs: delayOpenAMs),
+                        DelayMs: delayOpenAMs,
+                        Symbol: _runtimeConfigState.CurrentDashboardMetrics?.ExchangeA.Symbol),
                     new TradeOpenLegRequest(
                         Exchange: "B",
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB),
                         ChartHwnd: hwndColumn.ChartHwndB,
                         Action: TradeLegAction.Sell,
-                        DelayMs: delayOpenBMs),
+                        DelayMs: delayOpenBMs,
+                        Symbol: _runtimeConfigState.CurrentDashboardMetrics?.ExchangeB.Symbol),
                     Context: CreateStrategicContext(
                         TradeExecutionReason.StrategicOpen,
                         "auto-gap-buy",
@@ -1935,6 +1941,7 @@ public sealed class DashboardViewModel : ObservableObject
                         signalContext.SignalId)));
 
             NotifyOpenCloseFailures("OPEN", openResult, pairId);
+            ApplyMt5BridgeOpenConfirmations(pairId, openResult);
 
             if (openResult.IsDispatchBlocked)
             {
@@ -2150,13 +2157,15 @@ public sealed class DashboardViewModel : ObservableObject
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformA),
                         ChartHwnd: hwndColumn.ChartHwndA,
                         Action: TradeLegAction.Sell,
-                        DelayMs: delayOpenAMs),
+                        DelayMs: delayOpenAMs,
+                        Symbol: _runtimeConfigState.CurrentDashboardMetrics?.ExchangeA.Symbol),
                     new TradeOpenLegRequest(
                         Exchange: "B",
                         Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB),
                         ChartHwnd: hwndColumn.ChartHwndB,
                         Action: TradeLegAction.Buy,
-                        DelayMs: delayOpenBMs),
+                        DelayMs: delayOpenBMs,
+                        Symbol: _runtimeConfigState.CurrentDashboardMetrics?.ExchangeB.Symbol),
                     Context: CreateStrategicContext(
                         TradeExecutionReason.StrategicOpen,
                         "auto-gap-sell",
@@ -2166,6 +2175,7 @@ public sealed class DashboardViewModel : ObservableObject
                         signalContext.SignalId)));
 
             NotifyOpenCloseFailures("OPEN", openResult, pairId);
+            ApplyMt5BridgeOpenConfirmations(pairId, openResult);
 
             if (openResult.IsDispatchBlocked)
             {
@@ -4524,7 +4534,9 @@ public sealed class DashboardViewModel : ObservableObject
                         Ticket: action.Ticket,
                         Action: TradeLegAction.Close,
                         RowIndex: rowIndex,
-                        TradeMapName: action.TradeMapName)
+                        TradeMapName: action.TradeMapName,
+                        Symbol: action.Symbol,
+                        Volume: action.Volume)
                     : null,
                 LegB: isExchangeA
                     ? null
@@ -4535,7 +4547,9 @@ public sealed class DashboardViewModel : ObservableObject
                         Ticket: action.Ticket,
                         Action: TradeLegAction.Close,
                         RowIndex: rowIndex,
-                        TradeMapName: action.TradeMapName),
+                        TradeMapName: action.TradeMapName,
+                        Symbol: action.Symbol,
+                        Volume: action.Volume),
                 Context: CreateRecoveryContext(
                     TradeExecutionReason.OpenPartialRollback,
                     "open-timeout-rollback",
@@ -6192,6 +6206,43 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         _knownTradeTicketsByMap[key] = currentTickets;
+    }
+
+    private void ApplyMt5BridgeOpenConfirmations(string pairId, ManualTradeResult result)
+    {
+        if (!_pendingOpenPairById.TryGetValue(pairId, out var state))
+        {
+            return;
+        }
+
+        foreach (var leg in result.Legs.Where(x => x.Success && x.Ticket.HasValue))
+        {
+            var isA = string.Equals(leg.Exchange, "A", StringComparison.OrdinalIgnoreCase);
+            var platform = ResolveTradeLegPlatform(isA
+                ? _runtimeConfigState.CurrentPlatformA
+                : _runtimeConfigState.CurrentPlatformB);
+            if (platform != TradeLegPlatform.Mt5)
+            {
+                continue;
+            }
+
+            if (isA)
+            {
+                state.OpenConfirmedA = true;
+                state.OpenedTicketA = leg.Ticket;
+                state.VolumeA ??= leg.ExecutedVolume;
+            }
+            else
+            {
+                state.OpenConfirmedB = true;
+                state.OpenedTicketB = leg.Ticket;
+                state.VolumeB ??= leg.ExecutedVolume;
+            }
+
+            SafeVmLog(
+                $"[CYCLE][INFO] MT5 Bridge open acknowledged: pairId={pairId} exchange={leg.Exchange} " +
+                $"ticket={leg.Ticket} status={leg.ExecutionStatus}");
+        }
     }
 
     private void MarkOpenPairLegConfirmed(PendingOpenRequest pendingRequest, ulong ticket, string symbol, double volume)

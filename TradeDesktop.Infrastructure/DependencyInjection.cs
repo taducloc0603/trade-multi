@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Infrastructure.MarketData;
+using TradeDesktop.Infrastructure.Mt5Bridge;
 using TradeDesktop.Infrastructure.Signals;
 using TradeDesktop.Infrastructure.SharedMemory;
 using TradeDesktop.Infrastructure.Supabase;
@@ -21,6 +22,12 @@ public static class DependencyInjection
         services.AddSingleton<IHistorySharedMemoryReader, HistorySharedMemoryReader>();
         services.AddSingleton<MockSharedMemoryMarketDataReader>();
         services.AddSingleton<ISignalEngine, SimpleSignalEngine>();
+        var bridgeOptions = BuildMt5BridgeOptions(configuration);
+        services.AddSingleton(bridgeOptions);
+        services.AddSingleton<IMt5BridgeTransport>(_ =>
+            Mt5BridgeSharedMemoryTransport.Connect(
+                bridgeOptions.RoomId,
+                staleAfter: bridgeOptions.HeartbeatTimeout));
         services.AddHttpClient();
         services.AddSingleton<IConfigRepository>(sp =>
         {
@@ -48,4 +55,39 @@ public static class DependencyInjection
 
         return services;
     }
+
+    private static Mt5BridgeOptions BuildMt5BridgeOptions(IConfiguration configuration)
+    {
+        return new Mt5BridgeOptions
+        {
+            RoomId = ReadString(configuration, "MT5_BRIDGE_ROOM_ID", "Mt5Bridge:RoomId", "OCTBridge"),
+            Account = ReadLong(configuration, "MT5_BRIDGE_ACCOUNT", "Mt5Bridge:Account"),
+            SymbolA = ReadString(configuration, "MT5_BRIDGE_SYMBOL_A", "Mt5Bridge:SymbolA", string.Empty),
+            SymbolB = ReadString(configuration, "MT5_BRIDGE_SYMBOL_B", "Mt5Bridge:SymbolB", string.Empty),
+            VolumeA = ReadDouble(configuration, "MT5_BRIDGE_VOLUME_A", "Mt5Bridge:VolumeA"),
+            VolumeB = ReadDouble(configuration, "MT5_BRIDGE_VOLUME_B", "Mt5Bridge:VolumeB"),
+            AckTimeout = TimeSpan.FromMilliseconds(
+                Math.Max(100, ReadInt(configuration, "MT5_BRIDGE_ACK_TIMEOUT_MS", "Mt5Bridge:AckTimeoutMs", 1000))),
+            ExecutionTimeout = TimeSpan.FromMilliseconds(
+                Math.Max(1000, ReadInt(configuration, "MT5_BRIDGE_EXECUTION_TIMEOUT_MS", "Mt5Bridge:ExecutionTimeoutMs", 15000))),
+            HeartbeatTimeout = TimeSpan.FromMilliseconds(
+                Math.Max(500, ReadInt(configuration, "MT5_BRIDGE_HEARTBEAT_TIMEOUT_MS", "Mt5Bridge:HeartbeatTimeoutMs", 2000)))
+        };
+    }
+
+    private static string ReadString(IConfiguration configuration, string envKey, string sectionKey, string fallback)
+        => configuration[envKey] ?? configuration[sectionKey] ?? fallback;
+
+    private static long ReadLong(IConfiguration configuration, string envKey, string sectionKey)
+        => long.TryParse(configuration[envKey] ?? configuration[sectionKey], out var value) ? value : 0;
+
+    private static double ReadDouble(IConfiguration configuration, string envKey, string sectionKey)
+        => double.TryParse(
+            configuration[envKey] ?? configuration[sectionKey],
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var value) ? value : 0;
+
+    private static int ReadInt(IConfiguration configuration, string envKey, string sectionKey, int fallback)
+        => int.TryParse(configuration[envKey] ?? configuration[sectionKey], out var value) ? value : fallback;
 }

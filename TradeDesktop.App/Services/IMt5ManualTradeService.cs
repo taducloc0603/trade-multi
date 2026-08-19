@@ -17,7 +17,13 @@ public sealed record ManualTradeLegResult(
     string Exchange,
     string Action,
     bool Success,
-    string Detail);
+    string Detail,
+    ulong? Ticket = null,
+    ulong? Deal = null,
+    double? ExecutedPrice = null,
+    double? ExecutedVolume = null,
+    uint? Retcode = null,
+    string? ExecutionStatus = null);
 
 public sealed record ManualTradeResult(
     string Label,

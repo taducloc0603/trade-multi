@@ -1,82 +1,91 @@
-using System.Globalization;
-using TradeDesktop.App.Native;
+using TradeDesktop.Infrastructure.Mt5Bridge;
 
 namespace TradeDesktop.App.Services;
 
 public sealed class Mt5TradeExecutor : ITradePlatformExecutor
 {
-    private readonly IMt5ManualTradeService _mt5ManualTradeService;
+    private readonly IMt5BridgeTransport _transport;
+    private readonly Mt5BridgeOptions _options;
     private readonly ITradeSessionFileLogger _logger;
     private readonly SemaphoreSlim _actionGate = new(1, 1);
 
-    public Mt5TradeExecutor(IMt5ManualTradeService mt5ManualTradeService, ITradeSessionFileLogger logger)
+    public Mt5TradeExecutor(
+        IMt5BridgeTransport transport,
+        Mt5BridgeOptions options,
+        ITradeSessionFileLogger logger)
     {
-        _mt5ManualTradeService = mt5ManualTradeService;
+        _transport = transport;
+        _options = options;
         _logger = logger;
     }
 
     public TradeLegPlatform Platform => TradeLegPlatform.Mt5;
 
-    public async Task<ManualTradeLegResult> OpenLegAsync(TradeOpenLegRequest request, CancellationToken cancellationToken = default)
+    public async Task<ManualTradeLegResult> OpenLegAsync(
+        TradeOpenLegRequest request,
+        CancellationToken cancellationToken = default)
     {
-        if (request is null)
+        ArgumentNullException.ThrowIfNull(request);
+        var action = request.Action.ToString().ToUpperInvariant();
+        if (request.Action is not (TradeLegAction.Buy or TradeLegAction.Sell))
         {
-            throw new ArgumentNullException(nameof(request));
+            return Failure(request.Exchange, action, "invalid", "Unsupported MT5 open action");
+        }
+
+        var symbol = (request.Symbol ?? _options.ResolveSymbol(request.Exchange)).Trim();
+        var volume = request.Volume ?? _options.ResolveVolume(request.Exchange);
+        if (string.IsNullOrWhiteSpace(symbol) || volume <= 0)
+        {
+            return Failure(
+                request.Exchange,
+                action,
+                "invalid",
+                $"MT5 Bridge config missing for exchange {request.Exchange}: symbol/volume");
         }
 
         await _actionGate.WaitAsync(cancellationToken);
         try
         {
-            if (!TryParseHwnd(request.ChartHwnd, out var chartHwnd))
+            var healthError = await EnsureReadyAsync(cancellationToken);
+            if (healthError is not null)
             {
-                SafeLog($"[MT5][WARN] Open leg {request.Exchange} failed: invalid chart hwnd={request.ChartHwnd}");
-                return new ManualTradeLegResult(
-                    Exchange: request.Exchange,
-                    Action: request.Action.ToString().ToUpperInvariant(),
-                    Success: false,
-                    Detail: $"Open {request.Exchange} failed: HWND CHART không hợp lệ");
+                return Failure(request.Exchange, action, "offline", healthError);
             }
 
-            if (!IsValidWindow(chartHwnd))
+            var now = Environment.TickCount64;
+            var requestId = Guid.NewGuid().ToString("N");
+            var command = new Mt5BridgeOpenCommand
             {
-                SafeLog($"[MT5][WARN] Open leg {request.Exchange} failed: chart hwnd not valid ({request.ChartHwnd})");
-                return new ManualTradeLegResult(
-                    Exchange: request.Exchange,
-                    Action: request.Action.ToString().ToUpperInvariant(),
-                    Success: false,
-                    Detail: $"Open {request.Exchange} failed: CHART HWND không còn hợp lệ");
-            }
-
-            var actionText = request.Action.ToString().ToUpperInvariant();
-            var clickResult = request.Action switch
-            {
-                TradeLegAction.Buy => NativeMethodsMt5.ClickBuy(chartHwnd),
-                TradeLegAction.Sell => NativeMethodsMt5.ClickSell(chartHwnd),
-                _ => 0
+                RequestId = requestId,
+                Account = _options.Account,
+                Symbol = symbol,
+                Side = action,
+                Volume = volume,
+                CreatedMilliseconds = now,
+                ExpiresMilliseconds = now + (long)_options.ExecutionTimeout.TotalMilliseconds
             };
 
-            if (request.Action is not (TradeLegAction.Buy or TradeLegAction.Sell))
-            {
-                SafeLog($"[MT5][WARN] Open leg {request.Exchange} failed: unsupported action={request.Action}");
-                return new ManualTradeLegResult(request.Exchange, actionText, false, "Unsupported MT5 open action");
-            }
-
-            var success = clickResult == 1;
-            SafeLog($"[MT5][{(success ? "INFO" : "WARN")}] Open leg {request.Exchange} action={actionText} result={(success ? "ok" : "failed")}");
-            return new ManualTradeLegResult(
-                Exchange: request.Exchange,
-                Action: actionText,
-                Success: success,
-                Detail: success ? "clicked" : "click failed");
+            SafeLog($"[MT5_BRIDGE][OPEN][SEND] exchange={request.Exchange} requestId={requestId} symbol={symbol} side={action} volume={volume}");
+            var response = await _transport.SendAsync(
+                command,
+                requestId,
+                _options.ExecutionTimeout,
+                cancellationToken);
+            return MapResponse(request.Exchange, action, response);
+        }
+        catch (TimeoutException ex)
+        {
+            SafeLog($"[MT5_BRIDGE][OPEN][TIMEOUT] exchange={request.Exchange} detail={ex.Message}");
+            return Failure(request.Exchange, action, Mt5BridgeExecutionStatuses.Timeout, "MT5_BRIDGE_TIMEOUT");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            SafeLog($"[MT5][ERROR] Open leg {request.Exchange} threw: {ex}");
-            return new ManualTradeLegResult(
-                Exchange: request.Exchange,
-                Action: request.Action.ToString().ToUpperInvariant(),
-                Success: false,
-                Detail: ex.Message);
+            SafeLog($"[MT5_BRIDGE][OPEN][ERROR] exchange={request.Exchange} error={ex}");
+            return Failure(request.Exchange, action, Mt5BridgeExecutionStatuses.Unknown, ex.Message);
         }
         finally
         {
@@ -84,109 +93,63 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         }
     }
 
-    public async Task<ManualTradeLegResult> CloseLegAsync(TradeCloseLegRequest request, CancellationToken cancellationToken = default)
+    public async Task<ManualTradeLegResult> CloseLegAsync(
+        TradeCloseLegRequest request,
+        CancellationToken cancellationToken = default)
     {
-        if (request is null)
+        ArgumentNullException.ThrowIfNull(request);
+        var symbol = (request.Symbol ?? _options.ResolveSymbol(request.Exchange)).Trim();
+        if (string.IsNullOrWhiteSpace(symbol))
         {
-            throw new ArgumentNullException(nameof(request));
+            return Failure(request.Exchange, "CLOSE", "invalid",
+                $"MT5 Bridge config missing for exchange {request.Exchange}: symbol");
         }
 
         await _actionGate.WaitAsync(cancellationToken);
         try
         {
-            if (!TryParseHwnd(request.TradeHwnd, out var tradeParentHwnd))
+            var healthError = await EnsureReadyAsync(cancellationToken);
+            if (healthError is not null)
             {
-                SafeLog($"[MT5][WARN] Close leg {request.Exchange} ticket={request.Ticket} failed: invalid trade hwnd={request.TradeHwnd}");
-                return new ManualTradeLegResult(
-                    Exchange: request.Exchange,
-                    Action: "CLOSE",
-                    Success: false,
-                    Detail: $"Close {request.Exchange} failed: ticket={request.Ticket}, error=TRADE HWND không hợp lệ");
+                return Failure(request.Exchange, "CLOSE", "offline", healthError, request.Ticket);
             }
 
-            if (!IsValidWindow(tradeParentHwnd))
+            var now = Environment.TickCount64;
+            var requestId = Guid.NewGuid().ToString("N");
+            var command = new Mt5BridgeCloseCommand
             {
-                SafeLog($"[MT5][WARN] Close leg {request.Exchange} ticket={request.Ticket} failed: trade hwnd not valid ({request.TradeHwnd})");
-                return new ManualTradeLegResult(
-                    Exchange: request.Exchange,
-                    Action: "CLOSE",
-                    Success: false,
-                    Detail: $"Close {request.Exchange} failed: ticket={request.Ticket}, error=TRADE HWND không còn hợp lệ");
-            }
+                RequestId = requestId,
+                Account = _options.Account,
+                Ticket = request.Ticket,
+                Symbol = symbol,
+                Volume = request.Volume ?? 0,
+                CreatedMilliseconds = now,
+                ExpiresMilliseconds = now + (long)_options.ExecutionTimeout.TotalMilliseconds
+            };
 
-            IntPtr ctx = IntPtr.Zero;
-            try
-            {
-                ctx = NativeMethodsMt5.CreateContextFromParent(tradeParentHwnd);
-                if (ctx == IntPtr.Zero)
-                {
-                    SafeLog($"[MT5][WARN] Close leg {request.Exchange} ticket={request.Ticket} failed: create_context_from_parent returned 0");
-                    return new ManualTradeLegResult(
-                        Exchange: request.Exchange,
-                        Action: "CLOSE",
-                        Success: false,
-                        Detail: $"Close {request.Exchange} failed: ticket={request.Ticket}, error=create_context_from_parent failed");
-                }
-
-                var rowCount = NativeMethodsMt5.UpdateRowCount(ctx);
-                if (rowCount <= 0)
-                {
-                    SafeLog($"[MT5][INFO] Close leg {request.Exchange} ticket={request.Ticket} skipped: no open trade");
-                    return new ManualTradeLegResult(
-                        Exchange: request.Exchange,
-                        Action: "CLOSE",
-                        Success: true,
-                        Detail: $"Close {request.Exchange} skipped: no open trade (ticket={request.Ticket})");
-                }
-
-                if (request.RowIndex is null)
-                {
-                    SafeLog($"[MT5][WARN] Close leg {request.Exchange} ticket={request.Ticket} failed: unresolved rowIndex rowCount={rowCount}");
-                    return new ManualTradeLegResult(
-                        Exchange: request.Exchange,
-                        Action: "CLOSE",
-                        Success: false,
-                        Detail: $"Close {request.Exchange} skipped: ticket={request.Ticket} row=unresolved rowCount={rowCount} source=Mt5TradeExecutor");
-                }
-
-                if (request.RowIndex.Value < 0 || request.RowIndex.Value >= rowCount)
-                {
-                    SafeLog($"[MT5][WARN] Close leg {request.Exchange} ticket={request.Ticket} failed: rowIndex={request.RowIndex.Value} outside UI rowCount={rowCount}");
-                    return new ManualTradeLegResult(
-                        Exchange: request.Exchange,
-                        Action: "CLOSE",
-                        Success: false,
-                        Detail: $"Close {request.Exchange} skipped: ticket={request.Ticket} row={request.RowIndex.Value} rowCount={rowCount} error=ROW_INDEX_OUT_OF_RANGE source=Mt5TradeExecutor");
-                }
-
-                var rowIndex = request.RowIndex.Value;
-                var closeResult = NativeMethodsMt5.ClosePositionMt5(ctx, rowIndex);
-                var success = closeResult == 1;
-                SafeLog($"[MT5][{(success ? "INFO" : "WARN")}] Close leg {request.Exchange} ticket={request.Ticket} row={rowIndex} result={(success ? "ok" : "failed")}");
-                return new ManualTradeLegResult(
-                    Exchange: request.Exchange,
-                    Action: "CLOSE",
-                    Success: success,
-                    Detail: success
-                        ? $"Close {request.Exchange} ok: ticket={request.Ticket} row={rowIndex} rowCount={rowCount}"
-                        : $"Close {request.Exchange} failed: ticket={request.Ticket} row={rowIndex} rowCount={rowCount} error=close_position_mt5 source=Mt5TradeExecutor");
-            }
-            finally
-            {
-                if (ctx != IntPtr.Zero)
-                {
-                    NativeMethodsMt5.DestroyContext(ctx);
-                }
-            }
+            SafeLog($"[MT5_BRIDGE][CLOSE][SEND] exchange={request.Exchange} requestId={requestId} ticket={request.Ticket} symbol={symbol}");
+            var response = await _transport.SendAsync(
+                command,
+                requestId,
+                _options.ExecutionTimeout,
+                cancellationToken);
+            return MapResponse(request.Exchange, "CLOSE", response);
+        }
+        catch (TimeoutException ex)
+        {
+            SafeLog($"[MT5_BRIDGE][CLOSE][TIMEOUT] exchange={request.Exchange} ticket={request.Ticket} detail={ex.Message}");
+            return Failure(request.Exchange, "CLOSE", Mt5BridgeExecutionStatuses.Timeout,
+                "MT5_BRIDGE_TIMEOUT", request.Ticket);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            SafeLog($"[MT5][ERROR] Close leg {request.Exchange} ticket={request.Ticket} threw: {ex}");
-            return new ManualTradeLegResult(
-                Exchange: request.Exchange,
-                Action: "CLOSE",
-                Success: false,
-                Detail: $"Close {request.Exchange} failed: ticket={request.Ticket}, error={ex.Message}");
+            SafeLog($"[MT5_BRIDGE][CLOSE][ERROR] exchange={request.Exchange} ticket={request.Ticket} error={ex}");
+            return Failure(request.Exchange, "CLOSE", Mt5BridgeExecutionStatuses.Unknown,
+                ex.Message, request.Ticket);
         }
         finally
         {
@@ -194,28 +157,24 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         }
     }
 
-    public Task<ManualTradeResult> OpenPairAsync(TradeOpenPairRequest request, CancellationToken cancellationToken = default)
+    public Task<ManualTradeResult> OpenPairAsync(
+        TradeOpenPairRequest request,
+        CancellationToken cancellationToken = default)
     {
-        if (request is null)
-        {
-            throw new ArgumentNullException(nameof(request));
-        }
-
+        ArgumentNullException.ThrowIfNull(request);
         return ExecutePairAsync(
-            label: "OPEN_MANUAL",
+            "OPEN_MANUAL",
             () => OpenLegAsync(request.LegA, cancellationToken),
             () => OpenLegAsync(request.LegB, cancellationToken));
     }
 
-    public Task<ManualTradeResult> ClosePairAsync(TradeClosePairRequest request, CancellationToken cancellationToken = default)
+    public Task<ManualTradeResult> ClosePairAsync(
+        TradeClosePairRequest request,
+        CancellationToken cancellationToken = default)
     {
-        if (request is null)
-        {
-            throw new ArgumentNullException(nameof(request));
-        }
-
+        ArgumentNullException.ThrowIfNull(request);
         return ExecutePairAsync(
-            label: "CLOSE_MANUAL",
+            "CLOSE_MANUAL",
             () => request.LegA is null
                 ? Task.FromResult(new ManualTradeLegResult("A", "CLOSE", true, "Close A skipped: no open trade"))
                 : CloseLegAsync(request.LegA, cancellationToken),
@@ -224,48 +183,82 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
                 : CloseLegAsync(request.LegB, cancellationToken));
     }
 
+    private async Task<string?> EnsureReadyAsync(CancellationToken cancellationToken)
+    {
+        if (_options.Account <= 0)
+        {
+            return "MT5 Bridge account is not configured";
+        }
+
+        var health = _transport.Health;
+        if (!health.IsReady)
+        {
+            try
+            {
+                await _transport.PingAsync(_options.AckTimeout, cancellationToken);
+            }
+            catch (Exception ex) when (ex is TimeoutException or InvalidOperationException)
+            {
+                return $"MT5 Bridge is offline: {ex.Message}";
+            }
+            health = _transport.Health;
+        }
+
+        if (!health.IsReady)
+        {
+            return "MT5 Bridge heartbeat is stale";
+        }
+        if (health.Account != _options.Account)
+        {
+            return $"MT5 Bridge account mismatch: expected={_options.Account}, actual={health.Account}";
+        }
+        if (health.GapCount > 0)
+        {
+            return $"MT5 Bridge shared-memory gap detected: {health.GapCount}";
+        }
+        return null;
+    }
+
+    private ManualTradeLegResult MapResponse(
+        string exchange,
+        string action,
+        Mt5BridgeInboundMessage response)
+    {
+        var success = response.Status is
+            Mt5BridgeExecutionStatuses.Confirmed or Mt5BridgeExecutionStatuses.AlreadyClosed;
+        var detail = response.Detail ?? response.Status ?? "unknown";
+        SafeLog(
+            $"[MT5_BRIDGE][{action}][{(success ? "CONFIRMED" : "FAILED")}] exchange={exchange} " +
+            $"status={response.Status} ticket={response.Ticket} deal={response.Deal} " +
+            $"price={response.Price} volume={response.Volume} retcode={response.Retcode} detail={detail}");
+        return new ManualTradeLegResult(
+            exchange,
+            action,
+            success,
+            detail,
+            response.Ticket,
+            response.Deal,
+            response.Price,
+            response.Volume,
+            response.Retcode,
+            response.Status);
+    }
+
+    private static ManualTradeLegResult Failure(
+        string exchange,
+        string action,
+        string status,
+        string detail,
+        ulong? ticket = null) =>
+        new(exchange, action, false, detail, ticket, ExecutionStatus: status);
+
     private static async Task<ManualTradeResult> ExecutePairAsync(
         string label,
         Func<Task<ManualTradeLegResult>> legATaskFactory,
         Func<Task<ManualTradeLegResult>> legBTaskFactory)
     {
-        var legATask = legATaskFactory();
-        var legBTask = legBTaskFactory();
-        var legs = await Task.WhenAll(legATask, legBTask);
-
-        return new ManualTradeResult(
-            Label: label,
-            Success: legs.All(x => x.Success),
-            Legs: legs);
-    }
-
-    private static bool TryParseHwnd(string raw, out ulong hwnd)
-    {
-        hwnd = 0;
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return false;
-        }
-
-        var text = raw.Trim();
-        if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-        {
-            return ulong.TryParse(text[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out hwnd);
-        }
-
-        return ulong.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out hwnd);
-    }
-
-    private static bool IsValidWindow(ulong hwnd)
-    {
-        try
-        {
-            return NativeMethodsMt5.IsValidWindow(hwnd) == 1;
-        }
-        catch
-        {
-            return false;
-        }
+        var legs = await Task.WhenAll(legATaskFactory(), legBTaskFactory());
+        return new ManualTradeResult(label, legs.All(x => x.Success), legs);
     }
 
     private void SafeLog(string message)
@@ -276,7 +269,7 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         }
         catch
         {
-            // ignored by design
+            // Logging must never change execution outcome.
         }
     }
 }

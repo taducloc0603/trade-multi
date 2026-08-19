@@ -262,6 +262,13 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             return true;
         }
 
+        // MT5 closes by position ticket through OCTBridge. It does not depend on
+        // the terminal trade-table row, which is an MT4 UI automation concern.
+        if (source.Platform == TradeLegPlatform.Mt5)
+        {
+            return true;
+        }
+
         if (string.IsNullOrWhiteSpace(source.TradeMapName))
         {
             error = $"Close {source.Exchange} cancelled: missing trade map for ticket={source.Ticket}";
@@ -792,12 +799,16 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
     {
         var executorA = ResolveExecutor(request.LegA.Platform);
         var executorB = ResolveExecutor(request.LegB.Platform);
+        var ticketsBeforeA = CaptureMt5Tickets(request.LegA);
+        var ticketsBeforeB = CaptureMt5Tickets(request.LegB);
 
         Debug.WriteLine($"[TradeRouter][Open] executorA={executorA.GetType().Name}, executorB={executorB.GetType().Name}");
 
         var legATask = OpenLegWithDelayAsync(executorA, request.LegA, cancellationToken);
         var legBTask = OpenLegWithDelayAsync(executorB, request.LegB, cancellationToken);
         var legs = await Task.WhenAll(legATask, legBTask);
+        legs[0] = await ReconcileUncertainOpenAsync(request.LegA, legs[0], ticketsBeforeA, cancellationToken);
+        legs[1] = await ReconcileUncertainOpenAsync(request.LegB, legs[1], ticketsBeforeB, cancellationToken);
 
         return new ManualTradeResult(
             Label: "OPEN_MANUAL",
@@ -846,11 +857,127 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         }
 
         var legs = await Task.WhenAll(tasks);
+        var requestByExchange = new[] { request.LegA, request.LegB }
+            .Where(x => x is not null)
+            .ToDictionary(x => x!.Exchange, StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < legs.Length; index++)
+        {
+            if (requestByExchange.TryGetValue(legs[index].Exchange, out var legRequest))
+            {
+                legs[index] = await ReconcileUncertainCloseAsync(legRequest!, legs[index], cancellationToken);
+            }
+        }
         return new ManualTradeResult(
             Label: "CLOSE_MANUAL",
             Success: legs.All(x => x.Success),
             Legs: legs);
     }
+
+    private HashSet<ulong> CaptureMt5Tickets(TradeOpenLegRequest request)
+    {
+        if (request.Platform != TradeLegPlatform.Mt5)
+        {
+            return [];
+        }
+
+        var read = ReadTrades(request.Exchange, null);
+        return read is { IsMapAvailable: true, IsParseSuccess: true }
+            ? read.Records.Select(x => x.Ticket).ToHashSet()
+            : [];
+    }
+
+    private async Task<ManualTradeLegResult> ReconcileUncertainOpenAsync(
+        TradeOpenLegRequest request,
+        ManualTradeLegResult result,
+        HashSet<ulong> ticketsBefore,
+        CancellationToken cancellationToken)
+    {
+        if (request.Platform != TradeLegPlatform.Mt5 || !IsUncertain(result))
+        {
+            return result;
+        }
+
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var read = ReadTrades(request.Exchange, null);
+            if (read is { IsMapAvailable: true, IsParseSuccess: true })
+            {
+                var expectedType = request.Action == TradeLegAction.Buy ? 0 : 1;
+                var match = read.Records
+                    .Where(x => !ticketsBefore.Contains(x.Ticket) && x.TradeType == expectedType)
+                    .Where(x => string.IsNullOrWhiteSpace(request.Symbol) ||
+                                string.Equals(x.Symbol, request.Symbol, StringComparison.OrdinalIgnoreCase))
+                    .Where(x => !request.Volume.HasValue || Math.Abs(x.Lot - request.Volume.Value) < 0.0000001)
+                    .OrderByDescending(x => x.TimeMsc)
+                    .FirstOrDefault();
+                if (match is not null)
+                {
+                    SafeLog($"[ROUTER][WARN] MT5 open reconciled from trades MMF: exchange={request.Exchange} ticket={match.Ticket}");
+                    return result with
+                    {
+                        Success = true,
+                        Detail = "MT5_BRIDGE_RECONCILED_FROM_TRADES",
+                        Ticket = match.Ticket,
+                        ExecutedPrice = match.Price,
+                        ExecutedVolume = match.Lot,
+                        ExecutionStatus = "confirmed_reconciled"
+                    };
+                }
+            }
+            if (attempt < 2)
+            {
+                await Task.Delay(50, cancellationToken);
+            }
+        }
+        return result;
+    }
+
+    private async Task<ManualTradeLegResult> ReconcileUncertainCloseAsync(
+        TradeCloseLegRequest request,
+        ManualTradeLegResult result,
+        CancellationToken cancellationToken)
+    {
+        if (request.Platform != TradeLegPlatform.Mt5 || !IsUncertain(result))
+        {
+            return result;
+        }
+
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var read = ReadTrades(request.Exchange, request.TradeMapName);
+            if (read is { IsMapAvailable: true, IsParseSuccess: true } &&
+                read.Records.All(x => x.Ticket != request.Ticket))
+            {
+                SafeLog($"[ROUTER][WARN] MT5 close reconciled from trades MMF: exchange={request.Exchange} ticket={request.Ticket}");
+                return result with
+                {
+                    Success = true,
+                    Detail = "MT5_BRIDGE_CLOSE_RECONCILED_FROM_TRADES",
+                    Ticket = request.Ticket,
+                    ExecutionStatus = "already_closed_reconciled"
+                };
+            }
+            if (attempt < 2)
+            {
+                await Task.Delay(50, cancellationToken);
+            }
+        }
+        return result;
+    }
+
+    private SharedMapReadResult<TradeSharedRecord> ReadTrades(string exchange, string? requestedMap)
+    {
+        var mapName = string.IsNullOrWhiteSpace(requestedMap)
+            ? string.Equals(exchange, "A", StringComparison.OrdinalIgnoreCase)
+                ? _runtimeConfig.CurrentMapName1
+                : _runtimeConfig.CurrentMapName2
+            : requestedMap;
+        return _tradesSharedMemoryReader.ReadTrades(mapName);
+    }
+
+    private static bool IsUncertain(ManualTradeLegResult result)
+        => string.Equals(result.ExecutionStatus, "timeout", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(result.ExecutionStatus, "unknown", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<ManualTradeLegResult> CloseLegWithDelayAsync(
         ITradePlatformExecutor executor,
