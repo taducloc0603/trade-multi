@@ -17,6 +17,7 @@ using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
 using TradeDesktop.Application.Services.Portfolio;
 using TradeDesktop.Domain.Models;
+using TradeDesktop.Infrastructure.Mt5Bridge;
 
 namespace TradeDesktop.App.ViewModels;
 
@@ -809,7 +810,22 @@ public sealed class DashboardViewModel : ObservableObject
         IReadOnlyList<HwndIssue> issues;
         try
         {
-            issues = _hwndHealthChecker.Check(_runtimeConfigState.CurrentManualHwndColumns);
+            issues = _hwndHealthChecker
+                .Check(_runtimeConfigState.CurrentManualHwndColumns)
+                .Where(issue => TradePlatformHwndPolicy.IsIssueRelevant(
+                    issue,
+                    _runtimeConfigState.CurrentPlatformA,
+                    _runtimeConfigState.CurrentPlatformB))
+                .ToList();
+
+            if (!TradePlatformHwndPolicy.HasRequiredConfiguration(
+                    _runtimeConfigState.CurrentManualHwndColumns,
+                    _runtimeConfigState.CurrentPlatformA,
+                    _runtimeConfigState.CurrentPlatformB)
+                && issues.Count == 0)
+            {
+                issues = [new HwndIssue("Cấu hình HWND MT4", string.Empty, HwndIssueKind.Empty)];
+            }
         }
         catch (Exception ex)
         {
@@ -911,6 +927,40 @@ public sealed class DashboardViewModel : ObservableObject
     };
 
     private static string Quote(string value) => string.IsNullOrEmpty(value) ? "(trống)" : value;
+
+    private async Task LogConfiguredMt5BridgeHealthAsync()
+    {
+        var provider = _serviceProvider.GetRequiredService<IMt5BridgeTransportProvider>();
+        var options = _serviceProvider.GetRequiredService<Mt5BridgeOptions>();
+        var exchanges = new[]
+        {
+            (Name: "A", Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformA)),
+            (Name: "B", Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB))
+        };
+
+        foreach (var exchange in exchanges.Where(item => item.Platform == TradeLegPlatform.Mt5))
+        {
+            var endpoint = options.ResolveEndpoint(exchange.Name);
+            try
+            {
+                var transport = provider.Resolve(exchange.Name);
+                await transport.PingAsync(options.AckTimeout);
+                var health = transport.Health;
+                var accountMatches = health.Account == endpoint.Account;
+                SafeVmLog(
+                    $"[MT5_BRIDGE_HEALTH][{(health.IsReady && accountMatches ? "INFO" : "WARN")}] " +
+                    $"exchange={exchange.Name} room={endpoint.RoomId} expectedAccount={endpoint.Account} " +
+                    $"actualAccount={health.Account?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
+                    $"ready={health.IsReady} accountMatches={accountMatches} gapCount={health.GapCount}");
+            }
+            catch (Exception ex)
+            {
+                SafeVmLog(
+                    $"[MT5_BRIDGE_HEALTH][WARN] exchange={exchange.Name} room={endpoint.RoomId} " +
+                    $"expectedAccount={endpoint.Account} ready=False error=\"{ex.Message}\"");
+            }
+        }
+    }
 
     // ===== Connection kill-switch =====
 
@@ -1051,9 +1101,9 @@ public sealed class DashboardViewModel : ObservableObject
 
         await ResyncOpenTradesAsync();
 
-        // Kiểm tra HWND ngay khi Start: nếu MT4/MT5 không còn cửa sổ hợp lệ thì vẫn
-        // vào running nhưng bật cờ SKIP (không mở/đóng) + popup cảnh báo.
+        // Chỉ leg MT4 cần HWND. Leg MT5 được kiểm tra bằng bridge health riêng.
         RunHwndHealthCheck("start");
+        await LogConfiguredMt5BridgeHealthAsync();
 
         // Connection kill-switch: bật cho phép lệnh + reset monitor. Từ đây poll order-info
         // sẽ giám sát kết nối liên tục và tự OFF switch nếu 1 trong 2 sàn rớt.
@@ -3667,7 +3717,10 @@ public sealed class DashboardViewModel : ObservableObject
         RuntimeSummary =
             $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  MinProfitToClose: {_runtimeConfigState.CurrentMinProfitToClose}  |  MaxLifeTime: {_runtimeConfigState.CurrentMaxLifeTimeBySecond}s  |  SOS A Distance: {_runtimeConfigState.CurrentSosTriggerAOpenDistancePts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
 
-        HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsComplete);
+        HasManualTradeHwndConfig = TradePlatformHwndPolicy.HasRequiredConfiguration(
+            _runtimeConfigState.CurrentManualHwndColumns,
+            _runtimeConfigState.CurrentPlatformA,
+            _runtimeConfigState.CurrentPlatformB);
         RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict()));
 
         SyncPortfolioCoordinatorConfig();
@@ -7250,7 +7303,7 @@ public sealed class DashboardViewModel : ObservableObject
                 LogSignalOutcome(
                     signalContext,
                     "BLOCKED",
-                    ResolveGuardReasonCode(guardResult.SkipReason),
+                    GuardReasonCodeResolver.Resolve(guardResult.SkipReason),
                     closeTargetSlot?.PairId,
                     closeTargetSlot?.SlotId,
                     ("guardReason", guardResult.SkipReason));
@@ -8703,17 +8756,6 @@ public sealed class DashboardViewModel : ObservableObject
         {
             _closeSignalContextBySlot.Remove(context.SlotId.Value);
         }
-    }
-
-    private static string ResolveGuardReasonCode(string? reason)
-    {
-        if (string.IsNullOrWhiteSpace(reason)) return "TRADE_POLICY_BLOCKED";
-        if (reason.Contains("latency", StringComparison.OrdinalIgnoreCase)) return "LATENCY_GUARD";
-        if (reason.Contains("spread", StringComparison.OrdinalIgnoreCase)) return "SPREAD_GUARD";
-        if (reason.Contains("freeze", StringComparison.OrdinalIgnoreCase)
-            || reason.Contains("price", StringComparison.OrdinalIgnoreCase)) return "PRICE_FREEZE_GUARD";
-        if (reason.Contains("gap", StringComparison.OrdinalIgnoreCase)) return "MAX_GAP_GUARD";
-        return "TRADE_POLICY_BLOCKED";
     }
 
     private static string ResolveCoordinatorBlockReasonCode(string? reason)

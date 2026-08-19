@@ -202,6 +202,12 @@
 - `reason="Gap exceeds max allowed"` → gap quá lớn, thường do spike giá bất thường. Safety filter đúng
 - Nhiều `[GUARD][WARN]` liên tiếp → cần review config `maxGap` / `maxSpread` có còn phù hợp không
 - Latency guard trigger → network/processing lag, cân nhắc tăng threshold hoặc check infrastructure
+- Price Freeze chỉ reject khi có ít nhất 3 tick, lịch sử bao phủ đủ `*_price_freeze_ms`, và cả Bid/Ask
+  của cùng một sàn đều không đổi. Close SOS bỏ qua Price Freeze.
+- `freeze_last_n` chỉ reject Open khi gap bằng nhau và hai giá nguồn tạo gap cũng không đổi; gap đã
+  làm tròn bằng nhau trong khi giá nguồn vẫn chạy không còn bị chặn.
+- Khi Start, mỗi leg MT5 có log `[MT5_BRIDGE_HEALTH][INFO|WARN]` chứa exchange, room, expected/actual
+  account và trạng thái ready. HWND invalid chỉ chặn leg MT4.
 
 ---
 

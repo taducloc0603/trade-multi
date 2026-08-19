@@ -138,10 +138,13 @@ Thứ tự: **Latency → MaxGap → Spread → PriceFreeze → (TpFreeze)**. G�
 | **Latency** | Độ trễ sàn vượt ngưỡng | `latA > ConfirmLatencyMs` hoặc `latB > ...` | L87-104 |
 | **MaxGap** | Gap quá lớn | `|LastGap| > MaxGap` | L106-138 |
 | **Spread** | Spread quá rộng | `(int)(Spread × Point) > MaxSpread` (mỗi sàn) | L140-166 |
-| **PriceFreeze** | Giá đứng yên cả cửa sổ | mọi tick trong `HoldConfirmMs` có Bid/Ask **không đổi** | L168-202 |
+| **PriceFreeze** | Feed một sàn đứng yên đủ cửa sổ | lịch sử bao phủ đủ `PriceFreezeMs`, ≥ 3 tick và Bid/Ask cùng sàn đều không đổi | `SignalEntryGuard.CheckPriceFreeze` |
 | **TpFreeze** | (chỉ close TP) profit đi ngang | mọi profit làm tròn `"0.00"` bằng nhau | L209-222 |
 
-- PriceFreeze cần ≥ 2 tick trong cửa sổ mới đánh giá; kiểm tra riêng BidA/AskA/BidB/AskB.
+- PriceFreeze cần ≥ 3 tick và `observedMs >= PriceFreezeMs`; chỉ một Bid hoặc Ask đứng yên không đủ
+  reject. Close SOS (`CloseGapMode.Sos`) bỏ qua guard này để ưu tiên thoát vị thế.
+- `freeze_last_n` của Open chỉ reject khi N gap cuối bằng nhau **và** hai giá nguồn tạo gap cùng đứng
+  yên; giá nguồn vẫn thay đổi thì cho qua dù gap point sau làm tròn bằng nhau.
 - TpFreeze chỉ áp dụng khi `CloseReason == Tp` và có ≥ 2 mẫu profit; so theo chuỗi `"0.00"` (khớp giá trị log).
 - Sliding window giá giữ tối đa **60.000 ms** (`PriceHistoryCapacityMs`, L15).
 

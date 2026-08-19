@@ -106,8 +106,10 @@ public sealed class SignalEntryGuardTests
     private static SignalEntryGuard.GuardResult CheckOpenGap(
         IReadOnlyList<int> gaps,
         int freezeLastN,
-        GapSignalSide side = GapSignalSide.Buy)
+        GapSignalSide side = GapSignalSide.Buy,
+        bool sourcePricesMove = false)
     {
+        var triggeredAtUtc = new DateTime(2026, 6, 9, 14, 33, 15, DateTimeKind.Utc);
         var trigger = new GapSignalTriggerResult(
             Triggered: true,
             Action: GapSignalAction.Open,
@@ -117,7 +119,7 @@ public sealed class SignalEntryGuardTests
             SellGaps: side == GapSignalSide.Sell ? gaps : [],
             LastBuyGap: side == GapSignalSide.Buy && gaps.Count > 0 ? gaps[^1] : null,
             LastSellGap: side == GapSignalSide.Sell && gaps.Count > 0 ? gaps[^1] : null,
-            TriggeredAtUtc: new DateTime(2026, 6, 9, 14, 33, 15, DateTimeKind.Utc),
+            TriggeredAtUtc: triggeredAtUtc,
             LastABid: null, LastAAsk: null, LastBBid: null, LastBAsk: null,
             GapBuySourceBBid: null, GapBuySourceAAsk: null, GapSellSourceBAsk: null, GapSellSourceABid: null,
             PointMultiplier: 1);
@@ -125,9 +127,21 @@ public sealed class SignalEntryGuardTests
         var config = new SignalEntryGuard.GuardConfig(
             ConfirmLatencyMs: 0, MaxGap: 0, MaxSpread: 0, PointMultiplier: 1, FreezeLastN: freezeLastN);
 
+        var history = new Queue<SignalEntryGuard.PriceHistoryEntry>();
+        for (var i = 0; i < Math.Max(0, freezeLastN); i++)
+        {
+            var movingOffset = sourcePricesMove ? i : 0;
+            history.Enqueue(new SignalEntryGuard.PriceHistoryEntry(
+                triggeredAtUtc.AddMilliseconds(i - freezeLastN),
+                BidA: 100 + movingOffset,
+                AskA: 101 + movingOffset,
+                BidB: 102 + movingOffset,
+                AskB: 103 + movingOffset));
+        }
+
         return SignalEntryGuard.Check(
             trigger, metrics: null, config,
-            new Queue<SignalEntryGuard.PriceHistoryEntry>(),
+            history,
             holdConfirmMs: 0, closeHoldConfirmMs: 0);
     }
 
@@ -158,7 +172,7 @@ public sealed class SignalEntryGuardTests
         var result = CheckOpenGap([1, 3, 4, 5, 5, 5], freezeLastN: 3);
 
         Assert.False(result.CanTrade);
-        Assert.Contains("Gap 3 mẫu cuối bằng nhau", result.SkipReason);
+        Assert.Contains("Gap và giá nguồn 3 mẫu cuối cùng đóng băng", result.SkipReason);
     }
 
     [Fact]
@@ -191,6 +205,117 @@ public sealed class SignalEntryGuardTests
         var result = CheckOpenGap([1, -3, -5, -5, -5], freezeLastN: 3, side: GapSignalSide.Sell);
 
         Assert.False(result.CanTrade);
+    }
+
+    [Fact]
+    public void OpenTrailing_EqualRoundedGapsButSourcePricesMove_Allowed()
+    {
+        var result = CheckOpenGap([5, 5, 5], freezeLastN: 3, sourcePricesMove: true);
+
+        Assert.True(result.CanTrade);
+    }
+
+    [Fact]
+    public void PriceFreeze_InsufficientObservedDuration_Allowed()
+    {
+        var result = CheckPriceFreeze(
+            holdMs: 1000,
+            entries:
+            [
+                (0, 100m, 101m, 200m, 201m),
+                (200, 100m, 101m, 200m, 201m),
+                (500, 100m, 101m, 200m, 201m)
+            ]);
+
+        Assert.True(result.CanTrade);
+    }
+
+    [Fact]
+    public void PriceFreeze_OnlyBidIsConstant_Allowed()
+    {
+        var result = CheckPriceFreeze(
+            holdMs: 1000,
+            entries:
+            [
+                (0, 100m, 101m, 200m, 201m),
+                (500, 100m, 102m, 200m, 202m),
+                (1000, 100m, 103m, 200m, 203m)
+            ]);
+
+        Assert.True(result.CanTrade);
+    }
+
+    [Fact]
+    public void PriceFreeze_BidAndAskOfOneExchangeConstantForFullWindow_Rejected()
+    {
+        var result = CheckPriceFreeze(
+            holdMs: 1000,
+            entries:
+            [
+                (0, 100m, 101m, 200m, 201m),
+                (500, 100m, 101m, 201m, 202m),
+                (1000, 100m, 101m, 202m, 203m)
+            ]);
+
+        Assert.False(result.CanTrade);
+        Assert.Contains("sàn A đóng băng", result.SkipReason);
+        Assert.Contains("observedMs=1000", result.SkipReason);
+        Assert.Contains("ticks=3", result.SkipReason);
+    }
+
+    [Fact]
+    public void PriceFreeze_SosClose_BypassesGuard()
+    {
+        var result = CheckPriceFreeze(
+            holdMs: 1000,
+            closeGapMode: CloseGapMode.Sos,
+            entries:
+            [
+                (0, 100m, 101m, 200m, 201m),
+                (500, 100m, 101m, 200m, 201m),
+                (1000, 100m, 101m, 200m, 201m)
+            ]);
+
+        Assert.True(result.CanTrade);
+    }
+
+    private static SignalEntryGuard.GuardResult CheckPriceFreeze(
+        int holdMs,
+        IReadOnlyList<(int OffsetMs, decimal BidA, decimal AskA, decimal BidB, decimal AskB)> entries,
+        CloseGapMode closeGapMode = CloseGapMode.Normal)
+    {
+        var startedAt = new DateTime(2026, 6, 9, 14, 33, 15, DateTimeKind.Utc);
+        var triggeredAt = startedAt.AddMilliseconds(entries.Max(entry => entry.OffsetMs));
+        var action = closeGapMode == CloseGapMode.Sos ? GapSignalAction.Close : GapSignalAction.Open;
+        var trigger = new GapSignalTriggerResult(
+            Triggered: true,
+            Action: action,
+            TriggerType: action == GapSignalAction.Open
+                ? GapSignalTriggerType.OpenByGapBuy
+                : GapSignalTriggerType.CloseByGapSell,
+            PrimarySide: GapSignalSide.Buy,
+            BuyGaps: [], SellGaps: [], LastBuyGap: null, LastSellGap: null,
+            TriggeredAtUtc: triggeredAt,
+            LastABid: null, LastAAsk: null, LastBBid: null, LastBAsk: null,
+            GapBuySourceBBid: null, GapBuySourceAAsk: null,
+            GapSellSourceBAsk: null, GapSellSourceABid: null,
+            PointMultiplier: 1,
+            CloseGapMode: closeGapMode);
+        var history = new Queue<SignalEntryGuard.PriceHistoryEntry>(entries.Select(entry =>
+            new SignalEntryGuard.PriceHistoryEntry(
+                startedAt.AddMilliseconds(entry.OffsetMs),
+                entry.BidA,
+                entry.AskA,
+                entry.BidB,
+                entry.AskB)));
+
+        return SignalEntryGuard.Check(
+            trigger,
+            metrics: null,
+            DisabledConfig,
+            history,
+            holdConfirmMs: holdMs,
+            closeHoldConfirmMs: 0);
     }
 
     [Fact]

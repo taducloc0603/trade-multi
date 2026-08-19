@@ -741,6 +741,10 @@ manual/recovery; strategic multi-slot close bắt buộc lookup đúng ticket v�
 
 #### 13.8.1 HWND profile theo slot
 
+HWND chỉ là điều kiện thực thi của leg `MT4`. Leg `MT5` gửi lệnh qua shared-memory OCTBridge nên
+không bị chặn bởi Chart/Trade HWND cũ. Với cấu hình hỗn hợp, health-check chỉ xét HWND của sàn đang
+dùng MT4; khi cả A/B dùng MT5, Manual và Auto không yêu cầu `manualHwndColumns` hoàn chỉnh.
+
 Mỗi phần tử trong `manualHwndColumns` là một profile nguyên tử:
 
 ```text

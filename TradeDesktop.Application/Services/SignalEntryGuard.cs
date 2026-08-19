@@ -75,7 +75,9 @@ public static class SignalEntryGuard
         if (!spreadResult.CanTrade) return spreadResult;
 
         // 4. Price freeze
-        var freezeResult = CheckPriceFreeze(trigger.TriggeredAtUtc, priceHistory, holdConfirmMs);
+        var freezeResult = trigger.Action == GapSignalAction.Close && trigger.CloseGapMode == CloseGapMode.Sos
+            ? new GuardResult(true, null)
+            : CheckPriceFreeze(trigger.TriggeredAtUtc, priceHistory, holdConfirmMs);
         if (!freezeResult.CanTrade) return freezeResult;
 
         // 5. TP freeze (chỉ áp dụng close theo TP) — profit đi ngang suốt cửa sổ confirm
@@ -83,7 +85,7 @@ public static class SignalEntryGuard
         if (!tpFreezeResult.CanTrade) return tpFreezeResult;
 
         // 6. Trailing-equal freeze OPEN — N mẫu gap CUỐI bằng nhau (feed đứng/lặp) → skip.
-        var openTrailingResult = CheckOpenGapTrailingEqual(trigger, config.FreezeLastN);
+        var openTrailingResult = CheckOpenGapTrailingEqual(trigger, config.FreezeLastN, priceHistory);
         if (!openTrailingResult.CanTrade) return openTrailingResult;
 
         // 7. Trailing-equal freeze TP — N mẫu profit CUỐI bằng nhau → skip.
@@ -182,30 +184,35 @@ public static class SignalEntryGuard
         if (holdConfirmMs <= 0) return new GuardResult(true, null);
 
         var windowStart = triggeredAtUtc.AddMilliseconds(-holdConfirmMs);
-        var window = priceHistory
-            .Where(e => e.TimestampUtc >= windowStart && e.TimestampUtc <= triggeredAtUtc)
+        var candidates = priceHistory
+            .Where(e => e.TimestampUtc <= triggeredAtUtc)
             .ToList();
+        var anchorIndex = candidates.FindLastIndex(e => e.TimestampUtc <= windowStart);
+        if (anchorIndex < 0) return new GuardResult(true, null);
 
-        // Cần ít nhất 2 ticks để phát hiện freeze
-        if (window.Count < 2) return new GuardResult(true, null);
+        var window = candidates.Skip(anchorIndex).ToList();
+        if (window.Count < 3) return new GuardResult(true, null);
+
+        var observedMs = (window[^1].TimestampUtc - window[0].TimestampUtc).TotalMilliseconds;
+        if (observedMs < holdConfirmMs) return new GuardResult(true, null);
 
         var first = window[0];
+        var freezeA = IsConstant(window, e => e.BidA) && IsConstant(window, e => e.AskA);
+        var freezeB = IsConstant(window, e => e.BidB) && IsConstant(window, e => e.AskB);
 
-        if (first.BidA is decimal bidA0 && window.All(e => e.BidA == first.BidA))
+        if (freezeA && first.BidA is decimal bidA && first.AskA is decimal askA)
             return new GuardResult(false,
-                $"Giá Bid sàn A đóng băng suốt {holdConfirmMs} ms ({bidA0.ToString("0.#####", CultureInfo.InvariantCulture)})");
+                $"Giá Bid/Ask sàn A đóng băng: configuredMs={holdConfirmMs} " +
+                $"observedMs={observedMs.ToString("0", CultureInfo.InvariantCulture)} ticks={window.Count} " +
+                $"bid={bidA.ToString("0.#####", CultureInfo.InvariantCulture)} " +
+                $"ask={askA.ToString("0.#####", CultureInfo.InvariantCulture)}");
 
-        if (first.AskA is decimal askA0 && window.All(e => e.AskA == first.AskA))
+        if (freezeB && first.BidB is decimal bidB && first.AskB is decimal askB)
             return new GuardResult(false,
-                $"Giá Ask sàn A đóng băng suốt {holdConfirmMs} ms ({askA0.ToString("0.#####", CultureInfo.InvariantCulture)})");
-
-        if (first.BidB is decimal bidB0 && window.All(e => e.BidB == first.BidB))
-            return new GuardResult(false,
-                $"Giá Bid sàn B đóng băng suốt {holdConfirmMs} ms ({bidB0.ToString("0.#####", CultureInfo.InvariantCulture)})");
-
-        if (first.AskB is decimal askB0 && window.All(e => e.AskB == first.AskB))
-            return new GuardResult(false,
-                $"Giá Ask sàn B đóng băng suốt {holdConfirmMs} ms ({askB0.ToString("0.#####", CultureInfo.InvariantCulture)})");
+                $"Giá Bid/Ask sàn B đóng băng: configuredMs={holdConfirmMs} " +
+                $"observedMs={observedMs.ToString("0", CultureInfo.InvariantCulture)} ticks={window.Count} " +
+                $"bid={bidB.ToString("0.#####", CultureInfo.InvariantCulture)} " +
+                $"ask={askB.ToString("0.#####", CultureInfo.InvariantCulture)}");
 
         return new GuardResult(true, null);
     }
@@ -235,7 +242,10 @@ public static class SignalEntryGuard
     /// bằng nhau hết → coi feed đứng/lặp → reject. freezeLastN &lt; 2 = tắt; &lt; N mẫu = cho phép.
     /// So sánh int bằng tuyệt đối.
     /// </summary>
-    private static GuardResult CheckOpenGapTrailingEqual(GapSignalTriggerResult trigger, int freezeLastN)
+    private static GuardResult CheckOpenGapTrailingEqual(
+        GapSignalTriggerResult trigger,
+        int freezeLastN,
+        Queue<PriceHistoryEntry> priceHistory)
     {
         if (trigger.Action != GapSignalAction.Open || freezeLastN < 2)
             return new GuardResult(true, null);
@@ -245,11 +255,34 @@ public static class SignalEntryGuard
             return new GuardResult(true, null);
 
         var lastN = series.Skip(series.Count - freezeLastN).ToList();
-        if (lastN.All(v => v == lastN[0]))
+        var quoteWindow = priceHistory
+            .Where(e => e.TimestampUtc <= trigger.TriggeredAtUtc)
+            .TakeLast(freezeLastN)
+            .ToList();
+        if (quoteWindow.Count < freezeLastN)
+            return new GuardResult(true, null);
+
+        var sourcePricesFrozen = trigger.PrimarySide == GapSignalSide.Buy
+            ? IsConstant(quoteWindow, e => e.BidB) && IsConstant(quoteWindow, e => e.AskA)
+            : IsConstant(quoteWindow, e => e.AskB) && IsConstant(quoteWindow, e => e.BidA);
+
+        if (lastN.All(v => v == lastN[0]) && sourcePricesFrozen)
             return new GuardResult(false,
-                $"Gap {freezeLastN} mẫu cuối bằng nhau (freeze): [{string.Join(",", lastN)}]");
+                $"Gap và giá nguồn {freezeLastN} mẫu cuối cùng đóng băng: [{string.Join(",", lastN)}]");
 
         return new GuardResult(true, null);
+    }
+
+    private static bool IsConstant(
+        IReadOnlyList<PriceHistoryEntry> entries,
+        Func<PriceHistoryEntry, decimal?> selector)
+    {
+        if (entries.Count == 0 || selector(entries[0]) is not decimal first)
+        {
+            return false;
+        }
+
+        return entries.All(entry => selector(entry) is decimal value && value == first);
     }
 
     /// <summary>
