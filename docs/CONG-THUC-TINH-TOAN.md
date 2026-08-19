@@ -143,8 +143,9 @@ Thứ tự: **Latency → MaxGap → Spread → PriceFreeze → (TpFreeze)**. G�
 
 - PriceFreeze cần ≥ 3 tick và `observedMs >= PriceFreezeMs`; chỉ một Bid hoặc Ask đứng yên không đủ
   reject. Close SOS (`CloseGapMode.Sos`) bỏ qua guard này để ưu tiên thoát vị thế.
-- `freeze_last_n` của Open chỉ reject khi N gap cuối bằng nhau **và** hai giá nguồn tạo gap cùng đứng
-  yên; giá nguồn vẫn thay đổi thì cho qua dù gap point sau làm tròn bằng nhau.
+- `freeze_last_n` của Open chỉ reject khi N gap cuối bằng nhau, hai giá nguồn tạo gap cùng đứng yên
+  **và** thời gian từ mẫu đầu đến mẫu cuối đạt `PriceFreezeMs`; giá nguồn vẫn thay đổi hoặc chưa đủ
+  thời gian thì cho qua dù gap point sau làm tròn bằng nhau.
 - TpFreeze chỉ áp dụng khi `CloseReason == Tp` và có ≥ 2 mẫu profit; so theo chuỗi `"0.00"` (khớp giá trị log).
 - Sliding window giá giữ tối đa **60.000 ms** (`PriceHistoryCapacityMs`, L15).
 

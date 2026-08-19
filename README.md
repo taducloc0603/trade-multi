@@ -745,6 +745,10 @@ HWND chỉ là điều kiện thực thi của leg `MT4`. Leg `MT5` gửi lệnh
 không bị chặn bởi Chart/Trade HWND cũ. Với cấu hình hỗn hợp, health-check chỉ xét HWND của sàn đang
 dùng MT4; khi cả A/B dùng MT5, Manual và Auto không yêu cầu `manualHwndColumns` hoàn chỉnh.
 
+Minimal Open A/B là log xác nhận dispatch thành công, chỉ được ghi khi kết quả pair thành công và cả
+hai leg đều `Success=true`. Execution timeout, fail cả hai hoặc partial-open không tăng STT Open và
+không được ghi câu `BUY/SELL ... by Gap` như thể vị thế đã mở.
+
 Mỗi phần tử trong `manualHwndColumns` là một profile nguyên tử:
 
 ```text

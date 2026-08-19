@@ -124,6 +124,10 @@ Thay giá trị mẫu bằng thông tin thật:
   XAUUSD.b  -> tên symbol chính xác trên sàn B.
   0.01      -> volume hợp lệ của từng broker.
 
+Symbol từ market snapshot/DataExporter được ưu tiên khi đã có dữ liệu; giá trị
+MT5_BRIDGE_SYMBOL_A/B là fallback. Dù vậy vẫn phải khai báo symbol chính xác để
+Bridge có cấu hình dự phòng hợp lệ. Volume A/B trong .env phải đúng với broker.
+
 Các giá trị phải khớp tuyệt đối:
   Terminal A: InpRoomId=OCTBridge_A
   File .env : MT5_BRIDGE_ROOM_ID_A=OCTBridge_A
@@ -163,6 +167,13 @@ Mỗi terminal chỉ gắn một OCTBridge.
 6. Kiểm tra DataExporter B và OCTBridge_B đang chạy.
 7. Kiểm tra file C:\TradeMulti\.env.
 8. Sau cùng mới khởi động TradeMulti.
+9. Nhấn Start và kiểm tra System / Execution Logs phải có:
+
+   [MT5_BRIDGE_HEALTH][INFO] exchange=A room=OCTBridge_A ... ready=True accountMatches=True
+   [MT5_BRIDGE_HEALTH][INFO] exchange=B room=OCTBridge_B ... ready=True accountMatches=True
+
+Nếu cả A/B đều cấu hình platform=mt5, HWND Chart/Trade cũ không còn là điều kiện
+để Open/Close và không được xuất hiện [HWND][SKIP] chặn lệnh.
 
 
 8. CHECKLIST TRƯỚC KHI TEST LỆNH
@@ -177,6 +188,8 @@ Mỗi terminal chỉ gắn một OCTBridge.
 [ ] Account A và B trong .env chính xác.
 [ ] Symbol có đúng hậu tố của từng broker.
 [ ] Volume hợp lệ với từng broker.
+[ ] DB có platform_a=mt5 và platform_b=mt5 nếu cả hai sàn dùng MT5 Bridge.
+[ ] Log health A/B đều ready=True và accountMatches=True sau khi nhấn Start.
 
 
 9. TEST TRÊN TÀI KHOẢN DEMO

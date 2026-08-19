@@ -204,8 +204,13 @@
 - Latency guard trigger → network/processing lag, cân nhắc tăng threshold hoặc check infrastructure
 - Price Freeze chỉ reject khi có ít nhất 3 tick, lịch sử bao phủ đủ `*_price_freeze_ms`, và cả Bid/Ask
   của cùng một sàn đều không đổi. Close SOS bỏ qua Price Freeze.
-- `freeze_last_n` chỉ reject Open khi gap bằng nhau và hai giá nguồn tạo gap cũng không đổi; gap đã
-  làm tròn bằng nhau trong khi giá nguồn vẫn chạy không còn bị chặn.
+- `freeze_last_n` chỉ reject Open khi gap bằng nhau, hai giá nguồn tạo gap cũng không đổi và cửa sổ
+  N mẫu đã bao phủ đủ `*_price_freeze_ms`; gap đã làm tròn bằng nhau trong khi giá nguồn vẫn chạy
+  hoặc chưa đủ thời gian không còn bị chặn. Log reject có `observedMs`, source Bid/Ask và first/last.
+- Trường `gap` trong `[GUARD]` được chọn theo `TriggerType`: Buy dùng `LastBuyGap`, Sell dùng
+  `LastSellGap`; không fallback chéo hướng.
+- Hai dòng Minimal `OPEN A/B` chỉ được ghi khi cả hai leg thực thi thành công. Timeout, fail cả hai
+  hoặc partial-open chỉ ghi outcome `SIGNAL_OPEN_FAILED`; không hiển thị câu giống lệnh đã mở.
 - Khi Start, mỗi leg MT5 có log `[MT5_BRIDGE_HEALTH][INFO|WARN]` chứa exchange, room, expected/actual
   account và trạng thái ready. HWND invalid chỉ chặn leg MT4.
 

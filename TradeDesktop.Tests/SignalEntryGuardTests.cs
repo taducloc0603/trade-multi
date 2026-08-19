@@ -107,7 +107,9 @@ public sealed class SignalEntryGuardTests
         IReadOnlyList<int> gaps,
         int freezeLastN,
         GapSignalSide side = GapSignalSide.Buy,
-        bool sourcePricesMove = false)
+        bool sourcePricesMove = false,
+        int priceFreezeMs = 0,
+        int sampleSpacingMs = 1)
     {
         var triggeredAtUtc = new DateTime(2026, 6, 9, 14, 33, 15, DateTimeKind.Utc);
         var trigger = new GapSignalTriggerResult(
@@ -132,7 +134,7 @@ public sealed class SignalEntryGuardTests
         {
             var movingOffset = sourcePricesMove ? i : 0;
             history.Enqueue(new SignalEntryGuard.PriceHistoryEntry(
-                triggeredAtUtc.AddMilliseconds(i - freezeLastN),
+                triggeredAtUtc.AddMilliseconds((i - freezeLastN + 1) * sampleSpacingMs),
                 BidA: 100 + movingOffset,
                 AskA: 101 + movingOffset,
                 BidB: 102 + movingOffset,
@@ -142,7 +144,7 @@ public sealed class SignalEntryGuardTests
         return SignalEntryGuard.Check(
             trigger, metrics: null, config,
             history,
-            holdConfirmMs: 0, closeHoldConfirmMs: 0);
+            holdConfirmMs: priceFreezeMs, closeHoldConfirmMs: 0);
     }
 
     private static SignalEntryGuard.GuardResult CheckTpTrailing(IReadOnlyList<double> profits, int freezeLastN)
@@ -213,6 +215,46 @@ public sealed class SignalEntryGuardTests
         var result = CheckOpenGap([5, 5, 5], freezeLastN: 3, sourcePricesMove: true);
 
         Assert.True(result.CanTrade);
+    }
+
+    [Fact]
+    public void OpenTrailing_FrozenSamplesButInsufficientObservedTime_Allowed()
+    {
+        var result = CheckOpenGap(
+            [5, 5, 5],
+            freezeLastN: 3,
+            priceFreezeMs: 1000,
+            sampleSpacingMs: 100);
+
+        Assert.True(result.CanTrade);
+    }
+
+    [Theory]
+    [InlineData(GapSignalTriggerType.OpenByGapBuy, 12)]
+    [InlineData(GapSignalTriggerType.CloseByGapBuy, 12)]
+    [InlineData(GapSignalTriggerType.OpenByGapSell, -7)]
+    [InlineData(GapSignalTriggerType.CloseByGapSell, -7)]
+    public void ResolveTriggerGap_UsesGapMatchingTriggerType(
+        GapSignalTriggerType triggerType,
+        int expected)
+    {
+        var trigger = new GapSignalTriggerResult(
+            Triggered: true,
+            Action: triggerType is GapSignalTriggerType.OpenByGapBuy or GapSignalTriggerType.OpenByGapSell
+                ? GapSignalAction.Open
+                : GapSignalAction.Close,
+            TriggerType: triggerType,
+            PrimarySide: triggerType is GapSignalTriggerType.OpenByGapBuy or GapSignalTriggerType.CloseByGapBuy
+                ? GapSignalSide.Buy
+                : GapSignalSide.Sell,
+            BuyGaps: [12], SellGaps: [-7], LastBuyGap: 12, LastSellGap: -7,
+            TriggeredAtUtc: DateTime.UtcNow,
+            LastABid: null, LastAAsk: null, LastBBid: null, LastBAsk: null,
+            GapBuySourceBBid: null, GapBuySourceAAsk: null,
+            GapSellSourceBAsk: null, GapSellSourceABid: null,
+            PointMultiplier: 1);
+
+        Assert.Equal(expected, SignalEntryGuard.ResolveTriggerGap(trigger));
     }
 
     [Fact]

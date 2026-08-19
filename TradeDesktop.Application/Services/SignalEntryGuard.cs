@@ -85,7 +85,11 @@ public static class SignalEntryGuard
         if (!tpFreezeResult.CanTrade) return tpFreezeResult;
 
         // 6. Trailing-equal freeze OPEN — N mẫu gap CUỐI bằng nhau (feed đứng/lặp) → skip.
-        var openTrailingResult = CheckOpenGapTrailingEqual(trigger, config.FreezeLastN, priceHistory);
+        var openTrailingResult = CheckOpenGapTrailingEqual(
+            trigger,
+            config.FreezeLastN,
+            priceHistory,
+            holdConfirmMs);
         if (!openTrailingResult.CanTrade) return openTrailingResult;
 
         // 7. Trailing-equal freeze TP — N mẫu profit CUỐI bằng nhau → skip.
@@ -245,7 +249,8 @@ public static class SignalEntryGuard
     private static GuardResult CheckOpenGapTrailingEqual(
         GapSignalTriggerResult trigger,
         int freezeLastN,
-        Queue<PriceHistoryEntry> priceHistory)
+        Queue<PriceHistoryEntry> priceHistory,
+        int minimumObservedMs)
     {
         if (trigger.Action != GapSignalAction.Open || freezeLastN < 2)
             return new GuardResult(true, null);
@@ -262,13 +267,24 @@ public static class SignalEntryGuard
         if (quoteWindow.Count < freezeLastN)
             return new GuardResult(true, null);
 
-        var sourcePricesFrozen = trigger.PrimarySide == GapSignalSide.Buy
-            ? IsConstant(quoteWindow, e => e.BidB) && IsConstant(quoteWindow, e => e.AskA)
-            : IsConstant(quoteWindow, e => e.AskB) && IsConstant(quoteWindow, e => e.BidA);
+        var observedMs = (quoteWindow[^1].TimestampUtc - quoteWindow[0].TimestampUtc).TotalMilliseconds;
+        if (minimumObservedMs > 0 && observedMs < minimumObservedMs)
+            return new GuardResult(true, null);
+
+        var isBuy = trigger.PrimarySide == GapSignalSide.Buy;
+        var sourceA = isBuy ? quoteWindow.Select(e => e.AskA).ToList() : quoteWindow.Select(e => e.BidA).ToList();
+        var sourceB = isBuy ? quoteWindow.Select(e => e.BidB).ToList() : quoteWindow.Select(e => e.AskB).ToList();
+        var sourcePricesFrozen = IsConstant(sourceA) && IsConstant(sourceB);
 
         if (lastN.All(v => v == lastN[0]) && sourcePricesFrozen)
             return new GuardResult(false,
-                $"Gap và giá nguồn {freezeLastN} mẫu cuối cùng đóng băng: [{string.Join(",", lastN)}]");
+                $"Gap và giá nguồn {freezeLastN} mẫu cuối cùng đóng băng: " +
+                $"gaps=[{string.Join(",", lastN)}] " +
+                $"observedMs={observedMs.ToString("0", CultureInfo.InvariantCulture)} " +
+                $"sourceA={(isBuy ? "Ask" : "Bid")} " +
+                $"aFirst={FormatPrice(sourceA[0])} aLast={FormatPrice(sourceA[^1])} " +
+                $"sourceB={(isBuy ? "Bid" : "Ask")} " +
+                $"bFirst={FormatPrice(sourceB[0])} bLast={FormatPrice(sourceB[^1])}");
 
         return new GuardResult(true, null);
     }
@@ -284,6 +300,26 @@ public static class SignalEntryGuard
 
         return entries.All(entry => selector(entry) is decimal value && value == first);
     }
+
+    private static bool IsConstant(IReadOnlyList<decimal?> values)
+    {
+        if (values.Count == 0 || values[0] is not decimal first)
+        {
+            return false;
+        }
+
+        return values.All(value => value is decimal current && current == first);
+    }
+
+    private static string FormatPrice(decimal? value) =>
+        value?.ToString("0.#####", CultureInfo.InvariantCulture) ?? "-";
+
+    public static int? ResolveTriggerGap(GapSignalTriggerResult trigger) => trigger.TriggerType switch
+    {
+        GapSignalTriggerType.OpenByGapBuy or GapSignalTriggerType.CloseByGapBuy => trigger.LastBuyGap,
+        GapSignalTriggerType.OpenByGapSell or GapSignalTriggerType.CloseByGapSell => trigger.LastSellGap,
+        _ => null
+    };
 
     /// <summary>
     /// TP: nếu <paramref name="freezeLastN"/> mẫu profit CUỐI trong cửa sổ close-confirm bằng nhau

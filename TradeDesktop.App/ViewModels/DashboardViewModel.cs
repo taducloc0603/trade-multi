@@ -1334,19 +1334,26 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
-            // Phase 1 Manual Open log: A buy, B sell
-            var now = DateTime.Now;
-            var gap = _runtimeConfigState.CurrentDashboardMetrics?.GapBuy;
-            var symbolA = snapshot?.ExchangeA.Symbol ?? "-";
-            var symbolB = snapshot?.ExchangeB.Symbol ?? "-";
-            var priceA = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeA.Bid, snapshot?.ExchangeA.Ask, isBuy: true);
-            var priceB = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeB.Bid, snapshot?.ExchangeB.Ask, isBuy: false);
-            var spreadText = BuildSpreadPtsText(snapshot);
-            var displayStt = ResolveDisplayStt(BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: false), slot);
-            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "B", "SELL", symbolB, priceB, gap, spreadText));
-            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "A", "BUY", symbolA, priceA, gap, spreadText));
+            if (!result.Success && result.Legs.Count > 0 && result.Legs.All(leg => !leg.Success))
+            {
+                RemovePendingOpenRequests(appOpenRequestRawMs);
+            }
 
-            _manualSlot++;
+            if (TradeExecutionLogPolicy.ShouldWritePairOpen(result.Success, result.Legs.Select(leg => leg.Success).ToList()))
+            {
+                // Phase 1 Manual Open log: A buy, B sell
+                var now = DateTime.Now;
+                var gap = _runtimeConfigState.CurrentDashboardMetrics?.GapBuy;
+                var symbolA = snapshot?.ExchangeA.Symbol ?? "-";
+                var symbolB = snapshot?.ExchangeB.Symbol ?? "-";
+                var priceA = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeA.Bid, snapshot?.ExchangeA.Ask, isBuy: true);
+                var priceB = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeB.Bid, snapshot?.ExchangeB.Ask, isBuy: false);
+                var spreadText = BuildSpreadPtsText(snapshot);
+                var displayStt = ResolveDisplayStt(BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: false), slot);
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "B", "SELL", symbolB, priceB, gap, spreadText));
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "A", "BUY", symbolA, priceA, gap, spreadText));
+                _manualSlot++;
+            }
             ShowManualTradeFeedback("BUY", result);
 
             if (result.Success || result.Legs.Any(x => x.Success))
@@ -1418,19 +1425,26 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
-            // Phase 1 Manual Open log: A sell, B buy
-            var now = DateTime.Now;
-            var gap = _runtimeConfigState.CurrentDashboardMetrics?.GapSell;
-            var symbolA = snapshot?.ExchangeA.Symbol ?? "-";
-            var symbolB = snapshot?.ExchangeB.Symbol ?? "-";
-            var priceA = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeA.Bid, snapshot?.ExchangeA.Ask, isBuy: false);
-            var priceB = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeB.Bid, snapshot?.ExchangeB.Ask, isBuy: true);
-            var spreadText = BuildSpreadPtsText(snapshot);
-            var displayStt = ResolveDisplayStt(BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: false), slot);
-            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "B", "BUY", symbolB, priceB, gap, spreadText));
-            SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "A", "SELL", symbolA, priceA, gap, spreadText));
+            if (!result.Success && result.Legs.Count > 0 && result.Legs.All(leg => !leg.Success))
+            {
+                RemovePendingOpenRequests(appOpenRequestRawMs);
+            }
 
-            _manualSlot++;
+            if (TradeExecutionLogPolicy.ShouldWritePairOpen(result.Success, result.Legs.Select(leg => leg.Success).ToList()))
+            {
+                // Phase 1 Manual Open log: A sell, B buy
+                var now = DateTime.Now;
+                var gap = _runtimeConfigState.CurrentDashboardMetrics?.GapSell;
+                var symbolA = snapshot?.ExchangeA.Symbol ?? "-";
+                var symbolB = snapshot?.ExchangeB.Symbol ?? "-";
+                var priceA = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeA.Bid, snapshot?.ExchangeA.Ask, isBuy: false);
+                var priceB = SignalLogFormatter.ResolveOpenPrice(snapshot?.ExchangeB.Bid, snapshot?.ExchangeB.Ask, isBuy: true);
+                var spreadText = BuildSpreadPtsText(snapshot);
+                var displayStt = ResolveDisplayStt(BuildPairId(slot, appOpenRequestRawMs, isAutoFlow: false), slot);
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "B", "BUY", symbolB, priceB, gap, spreadText));
+                SignalLogItems.Insert(0, SignalLogFormatter.FormatManualOpen(now, displayStt, "A", "SELL", symbolA, priceA, gap, spreadText));
+                _manualSlot++;
+            }
             ShowManualTradeFeedback("SELL", result);
 
             if (result.Success || result.Legs.Any(x => x.Success))
@@ -2032,6 +2046,7 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 SetLastSignalStatus("FAILED");
                 _lastAutoOpenClickAtLocal = null;
+                RemovePendingOpenRequests(appOpenRequestRawMs);
                 if (_pendingOpenPairById.TryGetValue(pairId, out var state))
                 {
                     state.IsResolved = true;
@@ -2039,23 +2054,26 @@ public sealed class DashboardViewModel : ObservableObject
                 _portfolioCoordinator.AbortPendingOpen(pairId);
                 LogSignalOutcome(signalContext, "FAILED", "EXECUTION_FAILED", pairId, coordinatorSlot.SlotId);
             }
-            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            if (TradeExecutionLogPolicy.ShouldWritePairOpen(openResult.Success, openResult.Legs.Select(leg => leg.Success).ToList()))
             {
-                // Phase 1 Auto Open log: A buy, B sell — trigger is OpenByGapBuy
-                var now = DateTime.Now;
-                var symbolA = _runtimeConfigState.CurrentDashboardMetrics?.ExchangeA.Symbol ?? "-";
-                var symbolB = _runtimeConfigState.CurrentDashboardMetrics?.ExchangeB.Symbol ?? "-";
-                var priceA = trigger.LastAAsk;
-                var priceB = trigger.LastBBid;
-                var triggerGapLabel = "Gap BUY";
-                var triggerLastGap = trigger.LastBuyGap;
-                var triggerAllGaps = trigger.BuyGaps;
-                var spreadText = BuildSpreadPtsText(_runtimeConfigState.CurrentDashboardMetrics);
-                var displayStt = ResolveDisplayStt(pairId, slot);
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "B", "SELL", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "A", "BUY", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
-                _autoSlot++;
-            });
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                {
+                    // Phase 1 Auto Open log: A buy, B sell — trigger is OpenByGapBuy
+                    var now = DateTime.Now;
+                    var symbolA = _runtimeConfigState.CurrentDashboardMetrics?.ExchangeA.Symbol ?? "-";
+                    var symbolB = _runtimeConfigState.CurrentDashboardMetrics?.ExchangeB.Symbol ?? "-";
+                    var priceA = trigger.LastAAsk;
+                    var priceB = trigger.LastBBid;
+                    var triggerGapLabel = "Gap BUY";
+                    var triggerLastGap = trigger.LastBuyGap;
+                    var triggerAllGaps = trigger.BuyGaps;
+                    var spreadText = BuildSpreadPtsText(_runtimeConfigState.CurrentDashboardMetrics);
+                    var displayStt = ResolveDisplayStt(pairId, slot);
+                    SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "B", "SELL", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                    SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "A", "BUY", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                    _autoSlot++;
+                });
+            }
         }
         catch (Exception ex)
         {
@@ -2266,6 +2284,7 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 SetLastSignalStatus("FAILED");
                 _lastAutoOpenClickAtLocal = null;
+                RemovePendingOpenRequests(appOpenRequestRawMs);
                 if (_pendingOpenPairById.TryGetValue(pairId, out var state))
                 {
                     state.IsResolved = true;
@@ -2273,23 +2292,26 @@ public sealed class DashboardViewModel : ObservableObject
                 _portfolioCoordinator.AbortPendingOpen(pairId);
                 LogSignalOutcome(signalContext, "FAILED", "EXECUTION_FAILED", pairId, coordinatorSlot.SlotId);
             }
-            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            if (TradeExecutionLogPolicy.ShouldWritePairOpen(openResult.Success, openResult.Legs.Select(leg => leg.Success).ToList()))
             {
-                // Phase 1 Auto Open log: A sell, B buy — trigger is OpenByGapSell
-                var now = DateTime.Now;
-                var symbolA = _runtimeConfigState.CurrentDashboardMetrics?.ExchangeA.Symbol ?? "-";
-                var symbolB = _runtimeConfigState.CurrentDashboardMetrics?.ExchangeB.Symbol ?? "-";
-                var priceA = trigger.LastABid;
-                var priceB = trigger.LastBAsk;
-                var triggerGapLabel = "Gap SELL";
-                var triggerLastGap = trigger.LastSellGap;
-                var triggerAllGaps = trigger.SellGaps;
-                var spreadText = BuildSpreadPtsText(_runtimeConfigState.CurrentDashboardMetrics);
-                var displayStt = ResolveDisplayStt(pairId, slot);
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "B", "BUY", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
-                SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "A", "SELL", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
-                _autoSlot++;
-            });
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                {
+                    // Phase 1 Auto Open log: A sell, B buy — trigger is OpenByGapSell
+                    var now = DateTime.Now;
+                    var symbolA = _runtimeConfigState.CurrentDashboardMetrics?.ExchangeA.Symbol ?? "-";
+                    var symbolB = _runtimeConfigState.CurrentDashboardMetrics?.ExchangeB.Symbol ?? "-";
+                    var priceA = trigger.LastABid;
+                    var priceB = trigger.LastBAsk;
+                    var triggerGapLabel = "Gap SELL";
+                    var triggerLastGap = trigger.LastSellGap;
+                    var triggerAllGaps = trigger.SellGaps;
+                    var spreadText = BuildSpreadPtsText(_runtimeConfigState.CurrentDashboardMetrics);
+                    var displayStt = ResolveDisplayStt(pairId, slot);
+                    SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "B", "BUY", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                    SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "A", "SELL", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                    _autoSlot++;
+                });
+            }
         }
         catch (Exception ex)
         {
@@ -7281,7 +7303,7 @@ public sealed class DashboardViewModel : ObservableObject
                 SafeVmLog(
                     "[GUARD][WARN] Auto trade rejected: " +
                     $"trigger={trigger.TriggerType} side={trigger.PrimarySide} action={trigger.Action} " +
-                    $"reason=\"{guardResult.SkipReason}\" gap={(trigger.LastBuyGap ?? trigger.LastSellGap)} " +
+                    $"reason=\"{guardResult.SkipReason}\" gap={SignalEntryGuard.ResolveTriggerGap(trigger)} " +
                     $"confirmLatencyMs={guardConfig.ConfirmLatencyMs} maxGap={guardConfig.MaxGap} maxSpread={guardConfig.MaxSpread}");
 
                 if (trigger.Action == GapSignalAction.Close)
