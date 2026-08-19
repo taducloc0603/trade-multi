@@ -128,6 +128,88 @@ public sealed class CooldownRuleTests
             now.AddSeconds(19), "CLOSE", "ready", side: TradingPositionSide.Sell, pairId: "p2").Acquired);
     }
 
+    [Fact]
+    public void OpenToClose_WaitsConfiguredSameActionInterval_ForAnotherSlot()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateSameActionLockConfig(17, 17);
+        coordinator.UpdatePostOpenLockConfig(0, 0);
+        var now = DateTime.UtcNow;
+        AddLiveSlot(coordinator, "target", TradingPositionSide.Sell, now.AddMinutes(-1));
+
+        Assert.True(coordinator.TryAcquireTradeAction(
+            now, "OPEN", "open", side: TradingPositionSide.Buy).Acquired);
+        var blocked = coordinator.TryAcquireTradeAction(
+            now.AddSeconds(16), "CLOSE", "early",
+            side: TradingPositionSide.Sell, pairId: "target");
+
+        Assert.False(blocked.Acquired);
+        Assert.Equal("OPEN_TO_CLOSE_RANDOM_LOCK", blocked.Reason);
+        Assert.True(coordinator.TryAcquireTradeAction(
+            now.AddSeconds(17), "CLOSE", "ready",
+            side: TradingPositionSide.Sell, pairId: "target").Acquired);
+    }
+
+    [Fact]
+    public void OpenToClose_StillWaitsForTargetSlotPostOpenAfterSameActionInterval()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateSameActionLockConfig(10, 10);
+        coordinator.UpdatePostOpenLockConfig(30, 30);
+        var now = DateTime.UtcNow;
+        AddLiveSlot(coordinator, "young-target", TradingPositionSide.Sell, now);
+
+        Assert.True(coordinator.TryAcquireTradeAction(
+            now, "OPEN", "open", side: TradingPositionSide.Buy).Acquired);
+        var blocked = coordinator.TryAcquireTradeAction(
+            now.AddSeconds(10), "CLOSE", "post-open-still-active",
+            side: TradingPositionSide.Sell, pairId: "young-target");
+
+        Assert.False(blocked.Acquired);
+        Assert.Equal("PER_SLOT_POST_OPEN_LOCK", blocked.Reason);
+        Assert.True(coordinator.TryAcquireTradeAction(
+            now.AddSeconds(30), "CLOSE", "all-locks-ready",
+            side: TradingPositionSide.Sell, pairId: "young-target").Acquired);
+    }
+
+    [Theory]
+    [InlineData(TradeActionOrigin.Manual)]
+    [InlineData(TradeActionOrigin.Recovery)]
+    public void OpenToClose_NonAutoCloseBypassesRandomLock(TradeActionOrigin origin)
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateSameActionLockConfig(20, 20);
+        var now = DateTime.UtcNow;
+        Assert.True(coordinator.TryAcquireTradeAction(
+            now, "OPEN", "auto-open", side: TradingPositionSide.Buy).Acquired);
+
+        var result = coordinator.TryAcquireTradeAction(
+            now.AddMilliseconds(1), "CLOSE", "non-auto-close", origin);
+
+        Assert.True(result.Acquired);
+        Assert.Equal("NON_AUTO_ACQUIRED", result.Reason);
+    }
+
+    [Fact]
+    public void OpenToClose_SosCloseStillWaitsForSameActionInterval()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateSameActionLockConfig(20, 20);
+        coordinator.UpdatePostOpenLockConfig(0, 0);
+        var now = DateTime.UtcNow;
+        AddLiveSlot(coordinator, "sos-target", TradingPositionSide.Sell, now.AddMinutes(-1));
+        coordinator.GetSlotByPairId("sos-target")!.UpdateSosMode(true, "A_OPEN_DISTANCE");
+        Assert.True(coordinator.TryAcquireTradeAction(
+            now, "OPEN", "auto-open", side: TradingPositionSide.Buy).Acquired);
+
+        var result = coordinator.TryAcquireTradeAction(
+            now.AddSeconds(1), "CLOSE", "sos-close",
+            side: TradingPositionSide.Sell, pairId: "sos-target");
+
+        Assert.False(result.Acquired);
+        Assert.Equal("OPEN_TO_CLOSE_RANDOM_LOCK", result.Reason);
+    }
+
     [Theory]
     [InlineData(TradingPositionSide.Buy)]
     [InlineData(TradingPositionSide.Sell)]

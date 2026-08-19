@@ -60,6 +60,7 @@ public sealed class SignalLifecycleLogFormatterTests
     [InlineData("PARTIAL_CLOSE", "một chân vẫn còn mở")]
     [InlineData("POST_CLOSE_OPEN_LOCK", "khóa sau khi đóng")]
     [InlineData("SAME_SIDE_OPEN_RANDOM_LOCK", "vị thế cùng chiều")]
+    [InlineData("OPEN_TO_CLOSE_RANDOM_LOCK", "sau Auto Open gần nhất")]
     [InlineData("GLOBAL_ACTION_COOLDOWN", "cooldown toàn cục")]
     public void DescriptionForReason_ReturnsReadableVietnamese(string reasonCode, string expected)
     {

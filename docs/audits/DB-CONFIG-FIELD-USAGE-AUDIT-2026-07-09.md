@@ -78,7 +78,7 @@
 | `close_pending_time_ms` | Thời gian chờ tối đa để **lệnh đóng khớp**. |
 | `delay_open_a_ms` / `delay_open_b_ms` | Độ trễ khi mở lệnh ở **sàn A** / **sàn B** (bấm 2 sàn hơi lệch nhau để khớp đều hơn). |
 | `delay_close_a_ms` / `delay_close_b_ms` | Tương tự, nhưng cho lúc **đóng** lệnh. |
-| `rd_start_same_action_lock_seconds` / `rd_end_same_action_lock_seconds` | Random chờ cho Open cùng chiều→Open cùng chiều và Close→Close. |
+| `rd_start_same_action_lock_seconds` / `rd_end_same_action_lock_seconds` | Random chờ cho Open cùng chiều→Open cùng chiều, Open→Close và Close→Close. |
 | `rd_start_post_open_lock_seconds` / `rd_end_post_open_lock_seconds` | Random riêng cho từng slot từ Open confirm đến khi slot đó được Auto Close. `0..0` là tắt. |
 | `rd_start_post_close_lock_seconds` / `rd_end_post_close_lock_seconds` | Random sau Auto Close để chặn Auto Open; mỗi đầu không hợp lệ fallback 300 giây. |
 | `opposite_side_lock_seconds` | Chặn Auto Open ngược chiều sau Open confirm; `<=0` fallback 300 giây. |
@@ -142,7 +142,7 @@ Các cột legacy không còn tồn tại. Thời gian chờ được xác đị
 |---|---|---|
 | Open cùng chiều → Open cùng chiều | `rd_start/end_same_action_lock_seconds` | Toàn Auto transition cùng loại; fallback 3..10 |
 | Close → Close | `rd_start/end_same_action_lock_seconds` | Không phụ thuộc side; target vẫn phải hết post-open riêng |
-| Open → Close | `rd_start/end_post_open_lock_seconds` | Riêng slot cần đóng, tính từ Open confirm |
+| Open → Close | `rd_start/end_same_action_lock_seconds` + `rd_start/end_post_open_lock_seconds` | Chờ same-action từ Auto Open gần nhất và post-open riêng của slot cần đóng; deadline muộn nhất thắng |
 | Auto Close → Auto Open | `rd_start/end_post_close_lock_seconds` | Chặn cả Buy và Sell; confirm anchor thường chi phối |
 | Open → Open ngược chiều | `opposite_side_lock_seconds` + `opposite_open_min_distance_pts` | Phải hết time lock và pass price guard |
 

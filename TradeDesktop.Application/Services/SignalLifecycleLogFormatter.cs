@@ -30,6 +30,7 @@ public static class SignalLifecycleLogFormatter
             "GLOBAL_ACTION_COOLDOWN" => $"Không thể {action} vì hệ thống đang trong thời gian cooldown toàn cục",
             "POST_CLOSE_OPEN_LOCK" => "Chưa thể mở vị thế mới vì đang trong thời gian khóa sau khi đóng",
             "SAME_SIDE_OPEN_RANDOM_LOCK" => "Chưa thể mở thêm vị thế cùng chiều trong thời gian khóa ngẫu nhiên",
+            "OPEN_TO_CLOSE_RANDOM_LOCK" => "Chưa thể đóng vị thế vì đang trong thời gian khóa sau Auto Open gần nhất",
             "CLOSE_TO_CLOSE_RANDOM_LOCK" => "Chưa thể đóng vị thế tiếp theo trong thời gian khóa ngẫu nhiên",
             "PER_SLOT_POST_OPEN_LOCK" => "Chưa thể đóng vì vị thế vẫn đang trong thời gian giữ tối thiểu",
             "NON_AUTO_CLOSE_IN_FLIGHT" => $"Không thể {action} khi thao tác đóng lệnh thủ công hoặc khôi phục đang chạy",

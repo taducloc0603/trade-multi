@@ -100,7 +100,7 @@ Lưu ý tên nội bộ: `PositionSlot.LastProfitA/B` là biến động giá th
 |---|---|---|
 | Open same-side → Open same-side | Same-action range | Tính từ Auto dispatch gần nhất |
 | Open opposite-side | Opposite time + price guard | Phải pass cả hai |
-| Open slot X → Close X | Holding + per-slot post-open | Deadline từ Open confirm của X |
+| Open → Close slot X | Same-action + holding + per-slot post-open | Same-action từ Auto Open gần nhất; post-open từ Open confirm của X; deadline muộn nhất thắng |
 | Close → Close | Same-action + post-open của target | Deadline muộn nhất thắng |
 | Auto Close → Auto Open | Post-close dispatch + confirm anchor | Confirm anchor thường muộn hơn |
 | Manual/Recovery Close | Non-auto barrier + physical mutex | Bypass Auto transition timers |

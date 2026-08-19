@@ -633,6 +633,12 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             lockUntil = _state.LastAutoDispatchAtUtc.Value.AddSeconds(_state.LastAutoRandomIntervalSeconds);
             reason = "SAME_SIDE_OPEN_RANDOM_LOCK";
         }
+        else if (_state.LastAutoDispatchType == AutoTradeActionType.Open
+                 && requestedType == AutoTradeActionType.Close)
+        {
+            lockUntil = _state.LastAutoDispatchAtUtc.Value.AddSeconds(_state.LastAutoRandomIntervalSeconds);
+            reason = "OPEN_TO_CLOSE_RANDOM_LOCK";
+        }
         else if (_state.LastAutoDispatchType == AutoTradeActionType.Close
                  && requestedType == AutoTradeActionType.Close)
         {

@@ -269,6 +269,7 @@ non-auto barrier hoặc ngữ cảnh slot. Gate chạy trước MT4/MT5 executor
 ```
 [TRADE_GATE][BLOCKED] action=OPEN side=Buy reason=POST_CLOSE_OPEN_LOCK remainingMs=18849
 [TRADE_GATE][BLOCKED] action=OPEN side=Buy reason=SAME_SIDE_OPEN_RANDOM_LOCK remainingMs=797
+[TRADE_GATE][BLOCKED] action=CLOSE side=Sell reason=OPEN_TO_CLOSE_RANDOM_LOCK remainingMs=7349
 [TRADE_GATE][ACQUIRED] action=OPEN side=Buy transitionFrom=SAME_SIDE_OPEN_RANDOM_LOCK nextSameTypeRandomSec=6
 [SIGNAL_OPEN_BLOCKED][WARN] reasonCode=POST_CLOSE_OPEN_LOCK remainingMs=18849 description="Chưa thể mở vị thế mới vì đang trong thời gian khóa sau khi đóng"
 ```
@@ -276,6 +277,7 @@ non-auto barrier hoặc ngữ cảnh slot. Gate chạy trước MT4/MT5 executor
 **Case đặc biệt:**
 - `POST_CLOSE_OPEN_LOCK` → Auto Open đang chờ timer sau Auto Close; đây là hành vi bình thường.
 - `SAME_SIDE_OPEN_RANDOM_LOCK` → hai Auto Open cùng chiều đến quá gần nhau.
+- `OPEN_TO_CLOSE_RANDOM_LOCK` → Auto Close đang chờ `rd_same` tính từ Auto Open gần nhất.
 - `GLOBAL_ACTION_COOLDOWN` → startup/recovery cooldown toàn cục còn hiệu lực.
 - `NON_AUTO_CLOSE_IN_FLIGHT` → Auto tạm dừng trong lúc manual/recovery close chưa được MMF xác nhận xong.
 - Request bị gate chặn chưa gọi MT4/MT5 và có `Legs=[]`. Outcome đúng là `*_BLOCKED`, không phải
