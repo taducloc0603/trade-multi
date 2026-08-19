@@ -4,17 +4,18 @@ namespace TradeDesktop.App.Services;
 
 public sealed class Mt5TradeExecutor : ITradePlatformExecutor
 {
-    private readonly IMt5BridgeTransport _transport;
+    private readonly IMt5BridgeTransportProvider _transportProvider;
     private readonly Mt5BridgeOptions _options;
     private readonly ITradeSessionFileLogger _logger;
-    private readonly SemaphoreSlim _actionGate = new(1, 1);
+    private readonly SemaphoreSlim _actionGateA = new(1, 1);
+    private readonly SemaphoreSlim _actionGateB = new(1, 1);
 
     public Mt5TradeExecutor(
-        IMt5BridgeTransport transport,
+        IMt5BridgeTransportProvider transportProvider,
         Mt5BridgeOptions options,
         ITradeSessionFileLogger logger)
     {
-        _transport = transport;
+        _transportProvider = transportProvider;
         _options = options;
         _logger = logger;
     }
@@ -32,8 +33,9 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
             return Failure(request.Exchange, action, "invalid", "Unsupported MT5 open action");
         }
 
-        var symbol = (request.Symbol ?? _options.ResolveSymbol(request.Exchange)).Trim();
-        var volume = request.Volume ?? _options.ResolveVolume(request.Exchange);
+        var endpoint = _options.ResolveEndpoint(request.Exchange);
+        var symbol = (request.Symbol ?? endpoint.Symbol).Trim();
+        var volume = request.Volume ?? endpoint.Volume;
         if (string.IsNullOrWhiteSpace(symbol) || volume <= 0)
         {
             return Failure(
@@ -43,10 +45,12 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
                 $"MT5 Bridge config missing for exchange {request.Exchange}: symbol/volume");
         }
 
-        await _actionGate.WaitAsync(cancellationToken);
+        var actionGate = ResolveActionGate(request.Exchange);
+        await actionGate.WaitAsync(cancellationToken);
         try
         {
-            var healthError = await EnsureReadyAsync(cancellationToken);
+            var transport = _transportProvider.Resolve(request.Exchange);
+            var healthError = await EnsureReadyAsync(transport, endpoint, cancellationToken);
             if (healthError is not null)
             {
                 return Failure(request.Exchange, action, "offline", healthError);
@@ -57,7 +61,7 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
             var command = new Mt5BridgeOpenCommand
             {
                 RequestId = requestId,
-                Account = _options.Account,
+                Account = endpoint.Account,
                 Symbol = symbol,
                 Side = action,
                 Volume = volume,
@@ -66,7 +70,7 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
             };
 
             SafeLog($"[MT5_BRIDGE][OPEN][SEND] exchange={request.Exchange} requestId={requestId} symbol={symbol} side={action} volume={volume}");
-            var response = await _transport.SendAsync(
+            var response = await transport.SendAsync(
                 command,
                 requestId,
                 _options.ExecutionTimeout,
@@ -89,7 +93,7 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         }
         finally
         {
-            _actionGate.Release();
+            actionGate.Release();
         }
     }
 
@@ -98,17 +102,20 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var symbol = (request.Symbol ?? _options.ResolveSymbol(request.Exchange)).Trim();
+        var endpoint = _options.ResolveEndpoint(request.Exchange);
+        var symbol = (request.Symbol ?? endpoint.Symbol).Trim();
         if (string.IsNullOrWhiteSpace(symbol))
         {
             return Failure(request.Exchange, "CLOSE", "invalid",
                 $"MT5 Bridge config missing for exchange {request.Exchange}: symbol");
         }
 
-        await _actionGate.WaitAsync(cancellationToken);
+        var actionGate = ResolveActionGate(request.Exchange);
+        await actionGate.WaitAsync(cancellationToken);
         try
         {
-            var healthError = await EnsureReadyAsync(cancellationToken);
+            var transport = _transportProvider.Resolve(request.Exchange);
+            var healthError = await EnsureReadyAsync(transport, endpoint, cancellationToken);
             if (healthError is not null)
             {
                 return Failure(request.Exchange, "CLOSE", "offline", healthError, request.Ticket);
@@ -119,7 +126,7 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
             var command = new Mt5BridgeCloseCommand
             {
                 RequestId = requestId,
-                Account = _options.Account,
+                Account = endpoint.Account,
                 Ticket = request.Ticket,
                 Symbol = symbol,
                 Volume = request.Volume ?? 0,
@@ -128,7 +135,7 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
             };
 
             SafeLog($"[MT5_BRIDGE][CLOSE][SEND] exchange={request.Exchange} requestId={requestId} ticket={request.Ticket} symbol={symbol}");
-            var response = await _transport.SendAsync(
+            var response = await transport.SendAsync(
                 command,
                 requestId,
                 _options.ExecutionTimeout,
@@ -153,7 +160,7 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         }
         finally
         {
-            _actionGate.Release();
+            actionGate.Release();
         }
     }
 
@@ -183,34 +190,37 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
                 : CloseLegAsync(request.LegB, cancellationToken));
     }
 
-    private async Task<string?> EnsureReadyAsync(CancellationToken cancellationToken)
+    private async Task<string?> EnsureReadyAsync(
+        IMt5BridgeTransport transport,
+        Mt5BridgeEndpointOptions endpoint,
+        CancellationToken cancellationToken)
     {
-        if (_options.Account <= 0)
+        if (endpoint.Account <= 0)
         {
             return "MT5 Bridge account is not configured";
         }
 
-        var health = _transport.Health;
+        var health = transport.Health;
         if (!health.IsReady)
         {
             try
             {
-                await _transport.PingAsync(_options.AckTimeout, cancellationToken);
+                await transport.PingAsync(_options.AckTimeout, cancellationToken);
             }
             catch (Exception ex) when (ex is TimeoutException or InvalidOperationException)
             {
                 return $"MT5 Bridge is offline: {ex.Message}";
             }
-            health = _transport.Health;
+            health = transport.Health;
         }
 
         if (!health.IsReady)
         {
             return "MT5 Bridge heartbeat is stale";
         }
-        if (health.Account != _options.Account)
+        if (health.Account != endpoint.Account)
         {
-            return $"MT5 Bridge account mismatch: expected={_options.Account}, actual={health.Account}";
+            return $"MT5 Bridge account mismatch: expected={endpoint.Account}, actual={health.Account}";
         }
         if (health.GapCount > 0)
         {
@@ -251,6 +261,13 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         string detail,
         ulong? ticket = null) =>
         new(exchange, action, false, detail, ticket, ExecutionStatus: status);
+
+    private SemaphoreSlim ResolveActionGate(string exchange) => exchange.Trim().ToUpperInvariant() switch
+    {
+        "A" => _actionGateA,
+        "B" => _actionGateB,
+        _ => throw new ArgumentOutOfRangeException(nameof(exchange), exchange, "Exchange must be A or B.")
+    };
 
     private static async Task<ManualTradeResult> ExecutePairAsync(
         string label,

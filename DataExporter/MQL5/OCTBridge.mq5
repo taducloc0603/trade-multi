@@ -7,7 +7,7 @@
 #property version   "1.20"
 #property strict
 
-#include <SharedMem.mqh>
+#include "SharedMem.mqh"
 
 input string InpRoomId              = "AUTO";
 input bool   InpDebugLog            = false;

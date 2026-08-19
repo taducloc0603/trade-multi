@@ -24,10 +24,7 @@ public static class DependencyInjection
         services.AddSingleton<ISignalEngine, SimpleSignalEngine>();
         var bridgeOptions = BuildMt5BridgeOptions(configuration);
         services.AddSingleton(bridgeOptions);
-        services.AddSingleton<IMt5BridgeTransport>(_ =>
-            Mt5BridgeSharedMemoryTransport.Connect(
-                bridgeOptions.RoomId,
-                staleAfter: bridgeOptions.HeartbeatTimeout));
+        services.AddSingleton<IMt5BridgeTransportProvider, Mt5BridgeTransportProvider>();
         services.AddHttpClient();
         services.AddSingleton<IConfigRepository>(sp =>
         {
@@ -60,12 +57,20 @@ public static class DependencyInjection
     {
         return new Mt5BridgeOptions
         {
-            RoomId = ReadString(configuration, "MT5_BRIDGE_ROOM_ID", "Mt5Bridge:RoomId", "OCTBridge"),
-            Account = ReadLong(configuration, "MT5_BRIDGE_ACCOUNT", "Mt5Bridge:Account"),
-            SymbolA = ReadString(configuration, "MT5_BRIDGE_SYMBOL_A", "Mt5Bridge:SymbolA", string.Empty),
-            SymbolB = ReadString(configuration, "MT5_BRIDGE_SYMBOL_B", "Mt5Bridge:SymbolB", string.Empty),
-            VolumeA = ReadDouble(configuration, "MT5_BRIDGE_VOLUME_A", "Mt5Bridge:VolumeA"),
-            VolumeB = ReadDouble(configuration, "MT5_BRIDGE_VOLUME_B", "Mt5Bridge:VolumeB"),
+            ExchangeA = new Mt5BridgeEndpointOptions
+            {
+                RoomId = ReadString(configuration, "MT5_BRIDGE_ROOM_ID_A", "Mt5Bridge:A:RoomId", "OCTBridge_A"),
+                Account = ReadLong(configuration, "MT5_BRIDGE_ACCOUNT_A", "Mt5Bridge:A:Account"),
+                Symbol = ReadString(configuration, "MT5_BRIDGE_SYMBOL_A", "Mt5Bridge:A:Symbol", string.Empty),
+                Volume = ReadDouble(configuration, "MT5_BRIDGE_VOLUME_A", "Mt5Bridge:A:Volume")
+            },
+            ExchangeB = new Mt5BridgeEndpointOptions
+            {
+                RoomId = ReadString(configuration, "MT5_BRIDGE_ROOM_ID_B", "Mt5Bridge:B:RoomId", "OCTBridge_B"),
+                Account = ReadLong(configuration, "MT5_BRIDGE_ACCOUNT_B", "Mt5Bridge:B:Account"),
+                Symbol = ReadString(configuration, "MT5_BRIDGE_SYMBOL_B", "Mt5Bridge:B:Symbol", string.Empty),
+                Volume = ReadDouble(configuration, "MT5_BRIDGE_VOLUME_B", "Mt5Bridge:B:Volume")
+            },
             AckTimeout = TimeSpan.FromMilliseconds(
                 Math.Max(100, ReadInt(configuration, "MT5_BRIDGE_ACK_TIMEOUT_MS", "Mt5Bridge:AckTimeoutMs", 1000))),
             ExecutionTimeout = TimeSpan.FromMilliseconds(

@@ -1,0 +1,198 @@
+HƯỚNG DẪN CÀI OCTBRIDGE CHO HAI SÀN A VÀ B ĐỀU DÙNG MT5
+========================================================
+
+MÔ HÌNH TRIỂN KHAI
+------------------
+
+Terminal MT5 sàn A:
+  Account A -> OCTBridge với InpRoomId = OCTBridge_A
+
+Terminal MT5 sàn B:
+  Account B -> OCTBridge với InpRoomId = OCTBridge_B
+
+TradeMulti tạo hai kết nối độc lập:
+  Lệnh sàn A chỉ gửi vào OCTBridge_A.
+  Lệnh sàn B chỉ gửi vào OCTBridge_B.
+
+TUYỆT ĐỐI không đặt cùng RoomId cho hai terminal.
+
+
+1. CÀI FILE TRÊN TERMINAL MT5 SÀN A
+-----------------------------------
+
+Trong terminal A chọn File -> Open Data Folder.
+
+Copy hai file vào:
+  MQL5\Experts\OCTBridge.mq5
+  MQL5\Experts\SharedMem.mqh
+
+Trong OCTBridge.mq5, dòng include phải là:
+  #include "SharedMem.mqh"
+
+Mở OCTBridge.mq5 bằng MetaEditor của chính terminal A và nhấn F7.
+Kết quả bắt buộc: 0 errors, 0 warnings.
+
+
+2. CÀI FILE TRÊN TERMINAL MT5 SÀN B
+-----------------------------------
+
+Trong terminal B chọn File -> Open Data Folder.
+Terminal B có Data Folder riêng với terminal A.
+
+Copy hai file vào:
+  MQL5\Experts\OCTBridge.mq5
+  MQL5\Experts\SharedMem.mqh
+
+Trong OCTBridge.mq5, dòng include phải là:
+  #include "SharedMem.mqh"
+
+Mở OCTBridge.mq5 bằng MetaEditor của chính terminal B và nhấn F7.
+Kết quả bắt buộc: 0 errors, 0 warnings.
+
+
+3. GẮN OCTBRIDGE TRÊN TERMINAL A
+--------------------------------
+
+1. Quay lại terminal MT5 sàn A.
+2. Nhấn Ctrl+N để mở Navigator.
+3. Nhấn chuột phải Expert Advisors -> Refresh.
+4. Mở một chart bất kỳ và kéo OCTBridge vào chart.
+5. Tab Common bật Allow Algo Trading và Allow DLL imports.
+6. Tab Inputs đặt:
+
+   InpRoomId             = OCTBridge_A
+   InpDebugLog           = true
+   InpMagicNumber        = 88005001
+   InpMaxDeviationPoints = 20
+   InpPendingTimeoutMs   = 10000
+
+7. Nhấn OK và bật nút Algo Trading của terminal A.
+8. Nhấn Ctrl+T -> Experts. Cần thấy:
+
+   MT5 Bridge ready: room=OCTBridge_A account=<ACCOUNT_A>
+
+
+4. GẮN OCTBRIDGE TRÊN TERMINAL B
+--------------------------------
+
+1. Quay lại terminal MT5 sàn B.
+2. Nhấn Ctrl+N để mở Navigator.
+3. Nhấn chuột phải Expert Advisors -> Refresh.
+4. Mở một chart bất kỳ và kéo OCTBridge vào chart.
+5. Tab Common bật Allow Algo Trading và Allow DLL imports.
+6. Tab Inputs đặt:
+
+   InpRoomId             = OCTBridge_B
+   InpDebugLog           = true
+   InpMagicNumber        = 88005001
+   InpMaxDeviationPoints = 20
+   InpPendingTimeoutMs   = 10000
+
+7. Nhấn OK và bật nút Algo Trading của terminal B.
+8. Nhấn Ctrl+T -> Experts. Cần thấy:
+
+   MT5 Bridge ready: room=OCTBridge_B account=<ACCOUNT_B>
+
+
+5. CẤU HÌNH TRADEMULTI
+----------------------
+
+Tạo hoặc cập nhật file C:\TradeMulti\.env:
+
+  LOG_LEVEL=INFO
+  LOG_MAX_FILE_SIZE_MB=50
+  LOG_QUEUE_CAPACITY=50000
+
+  MT5_BRIDGE_ROOM_ID_A=OCTBridge_A
+  MT5_BRIDGE_ACCOUNT_A=11111111
+  MT5_BRIDGE_SYMBOL_A=XAUUSD.a
+  MT5_BRIDGE_VOLUME_A=0.01
+
+  MT5_BRIDGE_ROOM_ID_B=OCTBridge_B
+  MT5_BRIDGE_ACCOUNT_B=22222222
+  MT5_BRIDGE_SYMBOL_B=XAUUSD.b
+  MT5_BRIDGE_VOLUME_B=0.01
+
+  MT5_BRIDGE_ACK_TIMEOUT_MS=1000
+  MT5_BRIDGE_EXECUTION_TIMEOUT_MS=15000
+  MT5_BRIDGE_HEARTBEAT_TIMEOUT_MS=2000
+
+Thay giá trị mẫu bằng thông tin thật:
+  11111111 -> account đăng nhập trên terminal A.
+  22222222 -> account đăng nhập trên terminal B.
+  XAUUSD.a  -> tên symbol chính xác trên sàn A.
+  XAUUSD.b  -> tên symbol chính xác trên sàn B.
+  0.01      -> volume hợp lệ của từng broker.
+
+Các giá trị phải khớp tuyệt đối:
+  Terminal A: InpRoomId=OCTBridge_A
+  File .env : MT5_BRIDGE_ROOM_ID_A=OCTBridge_A
+
+  Terminal B: InpRoomId=OCTBridge_B
+  File .env : MT5_BRIDGE_ROOM_ID_B=OCTBridge_B
+
+Không sử dụng hai biến cấu hình cũ:
+  MT5_BRIDGE_ROOM_ID
+  MT5_BRIDGE_ACCOUNT
+
+
+6. DATAEXPORTER VÀ OCTBRIDGE
+----------------------------
+
+Mỗi terminal MT5 phải tiếp tục chạy DataExporter.
+
+Terminal A:
+  Chart 1 -> DataExporter A
+  Chart 2 -> OCTBridge, RoomId OCTBridge_A
+
+Terminal B:
+  Chart 1 -> DataExporter B
+  Chart 2 -> OCTBridge, RoomId OCTBridge_B
+
+Mỗi terminal chỉ gắn một OCTBridge.
+
+
+7. THỨ TỰ KHỞI ĐỘNG VPS
+-----------------------
+
+1. Khởi động terminal MT5 sàn A.
+2. Login đúng account A và bật Algo Trading.
+3. Kiểm tra DataExporter A và OCTBridge_A đang chạy.
+4. Khởi động terminal MT5 sàn B.
+5. Login đúng account B và bật Algo Trading.
+6. Kiểm tra DataExporter B và OCTBridge_B đang chạy.
+7. Kiểm tra file C:\TradeMulti\.env.
+8. Sau cùng mới khởi động TradeMulti.
+
+
+8. CHECKLIST TRƯỚC KHI TEST LỆNH
+--------------------------------
+
+[ ] Terminal A báo room=OCTBridge_A và đúng account A.
+[ ] Terminal B báo room=OCTBridge_B và đúng account B.
+[ ] Algo Trading bật trên cả hai terminal.
+[ ] Allow DLL imports bật cho cả hai OCTBridge.
+[ ] DataExporter hoạt động trên cả hai terminal.
+[ ] RoomId A và B khác nhau.
+[ ] Account A và B trong .env chính xác.
+[ ] Symbol có đúng hậu tố của từng broker.
+[ ] Volume hợp lệ với từng broker.
+
+
+9. TEST TRÊN TÀI KHOẢN DEMO
+---------------------------
+
+1. Khởi động TradeMulti sau khi cả hai Bridge đã ready.
+2. Thực hiện Manual Open với volume nhỏ nhất.
+3. Xác nhận đúng một lệnh xuất hiện trên terminal A.
+4. Xác nhận đúng một lệnh đối ứng xuất hiện trên terminal B.
+5. Kiểm tra ticket A/B trong TradeMulti trùng MT5 tương ứng.
+6. Thực hiện Manual Close.
+7. Xác nhận hai position đã đóng đúng terminal.
+8. Chỉ bật auto sau khi manual open/close chạy ổn định.
+
+Không chạy tài khoản thật nếu có lỗi:
+  MT5 Bridge is offline
+  MT5 Bridge heartbeat is stale
+  MT5 Bridge account mismatch
+  MT5 Bridge shared-memory gap detected
