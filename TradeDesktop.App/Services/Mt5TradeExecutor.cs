@@ -9,6 +9,7 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
     private readonly ITradeSessionFileLogger _logger;
     private readonly SemaphoreSlim _actionGateA = new(1, 1);
     private readonly SemaphoreSlim _actionGateB = new(1, 1);
+    private readonly SemaphoreSlim _manualUiGate = new(1, 1);
 
     public Mt5TradeExecutor(
         IMt5BridgeTransportProvider transportProvider,
@@ -47,8 +48,13 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
 
         var actionGate = ResolveActionGate(request.Exchange);
         await actionGate.WaitAsync(cancellationToken);
+        var manualUiGateHeld = false;
         try
         {
+            // Both MT5 terminals share the Windows foreground, keyboard and
+            // clipboard. Manual UI actions must therefore be serialized.
+            await _manualUiGate.WaitAsync(cancellationToken);
+            manualUiGateHeld = true;
             var transport = _transportProvider.Resolve(request.Exchange);
             var healthError = await EnsureReadyAsync(
                 transport, endpoint, requireManualUi: true, cancellationToken);
@@ -94,6 +100,10 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         }
         finally
         {
+            if (manualUiGateHeld)
+            {
+                _manualUiGate.Release();
+            }
             actionGate.Release();
         }
     }

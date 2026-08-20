@@ -4,7 +4,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024"
 #property link      ""
-#property version   "2.00"
+#property version   "2.01"
 #property strict
 
 #include "SharedMem.mqh"
@@ -229,6 +229,10 @@ void OnTimer()
             ProcessRequest(lines[i]);
      }
 
+   // Request handling may perform UI work and update dispatch timestamps.
+   // Refresh now so unsigned elapsed calculations cannot underflow.
+   now = GetTickCount64();
+   ReconcileManualOpenDeals();
    SweepPendingTimeouts(now);
    SweepManualOpenTimeouts(now);
 }
@@ -1245,7 +1249,7 @@ void SweepManualOpenTimeouts(const ulong now)
       ulong started = g_manualOpen[index].click_dispatched
          ? g_manualOpen[index].dispatched_ms
          : g_manualOpen[index].prepared_ms;
-      if(started == 0 || now - started < timeout_ms) continue;
+      if(started == 0 || now < started || now - started < timeout_ms) continue;
       if(InpDebugLog)
          PrintFormat(
             "[MANUAL_UI][OPEN_CANDIDATE] request=%s status=timeout " +
@@ -1373,6 +1377,14 @@ string DispatchPreparedManualOpen(const int index)
       return "manual_click_outside_chart";
 
    long mouse_param = (click_y << 16) | (click_x & 0xFFFF);
+   // Arm confirmation before dispatching the click. A fast broker can emit
+   // OnTradeTransaction before PostMessage returns to this function.
+   g_manualOpen[index].click_x = click_x;
+   g_manualOpen[index].click_y = click_y;
+   g_manualOpen[index].click_dispatched = true;
+   g_manualOpen[index].dispatched_ms = GetTickCount64();
+   g_manualOpen[index].dispatched_server_time = TimeCurrent();
+
    bool moved = PostMessageW(probe.chart_hwnd, WM_MOUSEMOVE, 0, mouse_param);
    bool pressed = PostMessageW(probe.chart_hwnd, WM_LBUTTONDOWN,
                                MK_LBUTTON, mouse_param);
@@ -1381,11 +1393,6 @@ string DispatchPreparedManualOpen(const int index)
    if(!moved || !pressed || !released)
       return "manual_click_dispatch_failed";
 
-   g_manualOpen[index].click_x = click_x;
-   g_manualOpen[index].click_y = click_y;
-   g_manualOpen[index].click_dispatched = true;
-   g_manualOpen[index].dispatched_ms = GetTickCount64();
-   g_manualOpen[index].dispatched_server_time = TimeCurrent();
    if(InpDebugLog)
       PrintFormat(
          "[MANUAL_UI][OPEN_CANDIDATE] request=%s symbol=%s side=%s volume=%.8f " +
@@ -1481,5 +1488,32 @@ bool TryConfirmManualOpenFromDeal(const ulong deal)
       return true;
      }
    return false;
+}
+
+void ReconcileManualOpenDeals()
+{
+   bool has_candidate = false;
+   for(int index = 0; index < BRIDGE_MANUAL_PENDING; index++)
+      if(g_manualOpen[index].active &&
+         g_manualOpen[index].click_dispatched)
+        {
+         has_candidate = true;
+         break;
+        }
+   if(!has_candidate) return;
+
+   datetime now = TimeCurrent();
+   if(!HistorySelect(now - 60, now + 1)) return;
+   int total = HistoryDealsTotal();
+   if(total <= 0) return;
+
+   // HistoryDealSelect changes the selected list on some MT5 builds, so
+   // snapshot tickets before matching them.
+   ulong deals[];
+   ArrayResize(deals, total);
+   for(int deal_index = 0; deal_index < total; deal_index++)
+      deals[deal_index] = HistoryDealGetTicket(deal_index);
+   for(int deal_index = total - 1; deal_index >= 0; deal_index--)
+      if(TryConfirmManualOpenFromDeal(deals[deal_index])) return;
 }
 //+------------------------------------------------------------------+
