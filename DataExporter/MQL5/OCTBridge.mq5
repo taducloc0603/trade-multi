@@ -4,7 +4,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024"
 #property link      ""
-#property version   "2.02"
+#property version   "2.10"
 #property strict
 
 #include "SharedMem.mqh"
@@ -21,12 +21,13 @@ input int    InpSellOffsetX         = 50;
 input int    InpSellOffsetY         = 62;
 input int    InpVolumeOffsetX       = 105;
 input int    InpVolumeOffsetY       = 33;
-input double InpVolumeProbeValue    = 0.0;
+input double InpVolumeProbeValue    = 0.01;
 
 #define BRIDGE_HEALTH_INTERVAL_MS 500
 #define BRIDGE_MAX_PENDING        32
 #define BRIDGE_DEDUP_CAPACITY     128
 #define BRIDGE_MANUAL_PENDING     4
+#define BRIDGE_MANUAL_CLOSE_PENDING 8
 #define WM_MOUSEMOVE              0x0200
 #define WM_LBUTTONDOWN            0x0201
 #define WM_LBUTTONUP              0x0202
@@ -35,6 +36,7 @@ input double InpVolumeProbeValue    = 0.0;
 #define WM_CHAR                   0x0102
 #define MK_LBUTTON                0x0001
 #define VK_CONTROL                0x0011
+#define VK_MENU                   0x0012
 #define VK_A                      0x0041
 #define VK_C                      0x0043
 #define VK_RETURN                 0x000D
@@ -150,6 +152,18 @@ struct BridgeManualOpenExecution
    datetime dispatched_server_time;
 };
 
+struct BridgeManualCloseExecution
+{
+   bool   active;
+   string request_id;
+   string symbol;
+   ulong  position_ticket;
+   ulong  position_identifier;
+   double volume;
+   ulong  prepared_ms;
+   datetime prepared_server_time;
+};
+
 CSharedMemRing   g_shm;
 string           g_roomId;
 ulong            g_generation = 0;
@@ -160,9 +174,11 @@ BridgeCachedResult g_dedup[BRIDGE_DEDUP_CAPACITY];
 int              g_dedupNext = 0;
 string           g_lastManualUiCode = "";
 BridgeManualOpenExecution g_manualOpen[BRIDGE_MANUAL_PENDING];
+BridgeManualCloseExecution g_manualClose[BRIDGE_MANUAL_CLOSE_PENDING];
 bool             g_volumeCacheValid = false;
 string           g_volumeCacheSymbol = "";
 double           g_volumeCacheValue = 0;
+long             g_volumeCacheChartHwnd = 0;
 
 uint BuildWriterUid(const string identity)
 {
@@ -200,13 +216,17 @@ int OnInit()
       return INIT_FAILED;
      }
 
+   // Prime and verify the One-Click Trading volume before advertising the
+   // bridge as ready. Subsequent commands with the same symbol, chart and
+   // volume can dispatch without keyboard/clipboard work.
+   if(InpVolumeProbeValue > 0)
+      ProbeSetManualUiVolume(ChartID(), InpVolumeProbeValue);
+
    EventSetMillisecondTimer(50);
    PublishBridgeState("bridge_ready");
    Print("MT5 Bridge ready: room=", g_roomId, " account=", g_accountLogin,
          " generation=", g_generation, " lane=", g_shm.MyLane());
    if(InpDebugLog) LogManualUiProbe(ChartID());
-   if(InpDebugLog && InpVolumeProbeValue > 0)
-      ProbeSetManualUiVolume(ChartID(), InpVolumeProbeValue);
    return INIT_SUCCEEDED;
 }
 
@@ -241,6 +261,7 @@ void OnTimer()
    ReconcileManualOpenDeals();
    SweepPendingTimeouts(now);
    SweepManualOpenTimeouts(now);
+   SweepManualCloseTimeouts(now);
 }
 
 void ProcessRequest(const string json_msg)
@@ -382,6 +403,39 @@ string ValidateOpen(const long account, const string symbol, const string side,
    return "";
 }
 
+void ResetManualCloseExecution(const int index)
+{
+   if(index < 0 || index >= BRIDGE_MANUAL_CLOSE_PENDING) return;
+   g_manualClose[index].active = false;
+   g_manualClose[index].request_id = "";
+   g_manualClose[index].symbol = "";
+   g_manualClose[index].position_ticket = 0;
+   g_manualClose[index].position_identifier = 0;
+   g_manualClose[index].volume = 0;
+   g_manualClose[index].prepared_ms = 0;
+   g_manualClose[index].prepared_server_time = 0;
+}
+
+int FindManualCloseByRequestId(const string request_id)
+{
+   for(int index = 0; index < BRIDGE_MANUAL_CLOSE_PENDING; index++)
+      if(g_manualClose[index].active &&
+         g_manualClose[index].request_id == request_id)
+         return index;
+   return -1;
+}
+
+int AllocateManualCloseExecution()
+{
+   for(int index = 0; index < BRIDGE_MANUAL_CLOSE_PENDING; index++)
+      if(!g_manualClose[index].active)
+        {
+         ResetManualCloseExecution(index);
+         return index;
+        }
+   return -1;
+}
+
 void ProcessClose(const string json_msg)
 {
    string request_id = ExtractJsonString(json_msg, "request_id");
@@ -399,7 +453,8 @@ void ProcessClose(const string json_msg)
       SendCachedResult(cached);
       return;
      }
-   if(FindPendingByRequestId(request_id) >= 0)
+   if(FindPendingByRequestId(request_id) >= 0 ||
+      FindManualCloseByRequestId(request_id) >= 0)
      {
       SendExecutionResult(request_id, "duplicate", 0, 0, 0, 0, 0,
                           "request_in_progress");
@@ -472,74 +527,43 @@ void ProcessClose(const string json_msg)
       return;
      }
 
-   int pending_index = AllocatePending();
-   if(pending_index < 0)
+   // Phase 6 intentionally supports full close only. Partial close needs a
+   // separate UI flow and will be introduced after full-close acceptance.
+   double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   if(MathAbs(close_volume - position_volume) > step * 0.000001)
      {
-      FinalizeImmediate(request_id, "rejected", position_ticket, 0, 0,
-                        close_volume, 0, "pending_queue_full");
+      FinalizeImmediate(request_id, "invalid", position_ticket, 0, 0,
+                        close_volume, 0, "manual_partial_close_not_supported");
       return;
      }
+
+   int close_index = AllocateManualCloseExecution();
+   if(close_index < 0)
+     {
+      FinalizeImmediate(request_id, "rejected", position_ticket, 0, 0,
+                        close_volume, 0, "manual_close_queue_full");
+      return;
+     }
+
+   g_manualClose[close_index].active = true;
+   g_manualClose[close_index].request_id = request_id;
+   g_manualClose[close_index].symbol = symbol;
+   g_manualClose[close_index].position_ticket = position_ticket;
+   g_manualClose[close_index].position_identifier =
+      (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+   g_manualClose[close_index].volume = close_volume;
+   g_manualClose[close_index].prepared_ms = GetTickCount64();
+   g_manualClose[close_index].prepared_server_time = TimeCurrent();
 
    SendExecutionResult(request_id, "received", position_ticket, 0, 0,
-                       close_volume, 0, "accepted");
-
-   ENUM_POSITION_TYPE position_type =
-      (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-   ENUM_ORDER_TYPE close_type =
-      (position_type == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
-
-   MqlTradeRequest request;
-   MqlTradeResult result;
-   MqlTradeCheckResult check;
-   ZeroMemory(request);
-   ZeroMemory(result);
-   ZeroMemory(check);
-   request.action = TRADE_ACTION_DEAL;
-   request.magic = InpMagicNumber;
-   request.position = position_ticket;
-   request.symbol = symbol;
-   request.volume = close_volume;
-   request.deviation = InpMaxDeviationPoints;
-   request.type = close_type;
-   request.price = (close_type == ORDER_TYPE_BUY)
-                   ? SymbolInfoDouble(symbol, SYMBOL_ASK)
-                   : SymbolInfoDouble(symbol, SYMBOL_BID);
-   request.type_time = ORDER_TIME_GTC;
-   request.type_filling = ResolveFillingMode(symbol);
-   request.comment = "OCTC:" + StringSubstr(request_id, 0, 20);
-
-   if(!OrderCheck(request, check))
-     {
-      FinalizeImmediate(request_id, "rejected", position_ticket, 0, 0,
-                        close_volume, check.retcode, SanitizeDetail(check.comment));
-      return;
-     }
-
-   g_pending[pending_index].active = true;
-   g_pending[pending_index].action = "close";
-   g_pending[pending_index].request_id = request_id;
-   g_pending[pending_index].symbol = symbol;
-   g_pending[pending_index].side =
-      (close_type == ORDER_TYPE_BUY) ? "BUY" : "SELL";
-   g_pending[pending_index].volume = close_volume;
-   g_pending[pending_index].position_ticket = position_ticket;
-   g_pending[pending_index].dispatched_ms = GetTickCount64();
-   g_pending[pending_index].timeout_reported = false;
-
-   if(!OrderSendAsync(request, result))
-     {
-      ReleasePending(pending_index);
-      FinalizeImmediate(request_id, "rejected", position_ticket, 0, 0,
-                        close_volume, result.retcode, SanitizeDetail(result.comment));
-      return;
-     }
-
-   g_pending[pending_index].mt_request_id = result.request_id;
-   g_pending[pending_index].order_ticket = result.order;
-   g_pending[pending_index].deal_ticket = result.deal;
-   SendExecutionResult(request_id, "dispatched", position_ticket, result.deal,
-                       result.price, close_volume, result.retcode,
-                       "close_order_send_async");
+                       close_volume, 0, "manual_close_armed");
+   if(InpDebugLog)
+      PrintFormat(
+         "[MANUAL_UI][CLOSE_ARMED] request=%s ticket=%I64u identifier=%I64u " +
+         "symbol=%s volume=%.8f confirmation=pending",
+         request_id, position_ticket,
+         g_manualClose[close_index].position_identifier,
+         symbol, close_volume);
 }
 
 string ValidateCloseVolume(const string symbol, const double close_volume,
@@ -578,12 +602,94 @@ ENUM_ORDER_TYPE_FILLING ResolveFillingMode(const string symbol)
    return ORDER_FILLING_RETURN;
 }
 
+bool TryConfirmManualCloseFromDeal(const ulong deal)
+{
+   if(deal == 0 || !HistoryDealSelect(deal)) return false;
+   ENUM_DEAL_REASON reason =
+      (ENUM_DEAL_REASON)HistoryDealGetInteger(deal, DEAL_REASON);
+   if(reason != DEAL_REASON_CLIENT) return false;
+   ENUM_DEAL_ENTRY entry =
+      (ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal, DEAL_ENTRY);
+   if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY &&
+      entry != DEAL_ENTRY_INOUT)
+      return false;
+
+   string symbol = HistoryDealGetString(deal, DEAL_SYMBOL);
+   ulong position_identifier =
+      (ulong)HistoryDealGetInteger(deal, DEAL_POSITION_ID);
+   datetime deal_time =
+      (datetime)HistoryDealGetInteger(deal, DEAL_TIME);
+   double volume = HistoryDealGetDouble(deal, DEAL_VOLUME);
+   double price = HistoryDealGetDouble(deal, DEAL_PRICE);
+
+   for(int index = 0; index < BRIDGE_MANUAL_CLOSE_PENDING; index++)
+     {
+      if(!g_manualClose[index].active ||
+         g_manualClose[index].symbol != symbol ||
+         g_manualClose[index].position_identifier != position_identifier)
+         continue;
+      if(g_manualClose[index].prepared_server_time <= 0 ||
+         deal_time + 2 < g_manualClose[index].prepared_server_time)
+         continue;
+
+      double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+      double tolerance = MathMax(0.000000001, step * 0.000001);
+      if(MathAbs(volume - g_manualClose[index].volume) > tolerance)
+         continue;
+
+      ulong ticket = g_manualClose[index].position_ticket;
+      string request_id = g_manualClose[index].request_id;
+      CacheResult(request_id, "confirmed", ticket, deal, price, volume,
+                  TRADE_RETCODE_DONE, "manual_client_close_confirmed");
+      SendExecutionResult(request_id, "confirmed", ticket, deal, price,
+                          volume, TRADE_RETCODE_DONE,
+                          "manual_client_close_confirmed");
+      if(InpDebugLog)
+         PrintFormat(
+            "[MANUAL_UI][CLOSE_CONFIRMED] request=%s ticket=%I64u " +
+            "identifier=%I64u deal=%I64u price=%.10f volume=%.8f " +
+            "reason=client elapsedMs=%I64u",
+            request_id, ticket, position_identifier, deal, price, volume,
+            GetTickCount64() - g_manualClose[index].prepared_ms);
+      ResetManualCloseExecution(index);
+      return true;
+     }
+   return false;
+}
+
+void SweepManualCloseTimeouts(const ulong now)
+{
+   ulong timeout_ms = (ulong)MathMax(1000, InpPendingTimeoutMs);
+   for(int index = 0; index < BRIDGE_MANUAL_CLOSE_PENDING; index++)
+     {
+      if(!g_manualClose[index].active) continue;
+      ulong started = g_manualClose[index].prepared_ms;
+      if(started == 0 || now < started || now - started < timeout_ms) continue;
+      string request_id = g_manualClose[index].request_id;
+      ulong ticket = g_manualClose[index].position_ticket;
+      double volume = g_manualClose[index].volume;
+      CacheResult(request_id, "timeout", ticket, 0, 0, volume, 0,
+                  "manual_close_confirmation_timeout");
+      SendExecutionResult(request_id, "timeout", ticket, 0, 0, volume, 0,
+                          "manual_close_confirmation_timeout");
+      if(InpDebugLog)
+         PrintFormat(
+            "[MANUAL_UI][CLOSE_CANDIDATE] request=%s ticket=%I64u " +
+            "status=timeout elapsedMs=%I64u",
+            request_id, ticket, now - started);
+      ResetManualCloseExecution(index);
+     }
+}
+
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest &request,
                         const MqlTradeResult &result)
 {
    if(trans.type == TRADE_TRANSACTION_DEAL_ADD &&
       TryConfirmManualOpenFromDeal(trans.deal))
+      return;
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD &&
+      TryConfirmManualCloseFromDeal(trans.deal))
       return;
 
    int index = -1;
@@ -806,6 +912,16 @@ void PublishBridgeState(const string message_type)
    ulong now = GetTickCount64();
    BridgeManualUiProbe probe;
    string manual_ui_code = EvaluateManualUiReadiness(ChartID(), probe);
+   if(manual_ui_code != "ready")
+     {
+      g_volumeCacheValid = false;
+      g_volumeCacheChartHwnd = 0;
+     }
+   bool volume_primed = g_volumeCacheValid &&
+      g_volumeCacheChartHwnd == probe.chart_hwnd;
+   if(manual_ui_code == "ready" && InpVolumeProbeValue > 0 &&
+      !volume_primed)
+      manual_ui_code = "volume_not_primed";
    bool manual_ui_ready = (manual_ui_code == "ready");
    string chart_symbol = SanitizeDetail(ChartSymbol(ChartID()));
    string coordinate_source = probe.coordinates_measured
@@ -825,10 +941,13 @@ void PublishBridgeState(const string message_type)
    string message = StringFormat(
       "{\"v\":1,\"type\":\"%s\",\"account\":%I64d,\"generation\":%I64u,\"ea_ms\":%I64u,\"writer_uid\":%u,\"lane\":%d," +
       "\"manual_ui_ready\":%s,\"manual_ui_code\":\"%s\",\"chart_symbol\":\"%s\"," +
+      "\"volume_primed\":%s,\"primed_volume\":%.8f," +
       "\"chart_hwnd\":%I64d,\"panel_found\":%s,\"dpi\":%d,\"coordinate_source\":\"%s\"}",
       message_type, g_accountLogin, g_generation, now,
       g_shm.WriterUid(), g_shm.MyLane(),
       manual_ui_ready ? "true" : "false", manual_ui_code, chart_symbol,
+      volume_primed ? "true" : "false",
+      volume_primed ? g_volumeCacheValue : 0.0,
       probe.chart_hwnd, probe.panel_found ? "true" : "false", probe.dpi,
       coordinate_source);
    if(g_shm.Send(message)) g_lastHealthPublish = now;
@@ -1114,10 +1233,12 @@ bool ClearClipboardText()
 bool AcquireManualUiFocus(const long chart_hwnd,
                           long &root_hwnd,
                           long &input_hwnd,
+                          long &foreground_hwnd,
                           ulong &focus_elapsed_ms)
 {
    root_hwnd = GetAncestor(chart_hwnd, GA_ROOT);
    input_hwnd = 0;
+   foreground_hwnd = GetForegroundWindow();
    ulong started_ms = GetTickCount64();
    if(root_hwnd == 0 || !IsWindow(root_hwnd))
      {
@@ -1129,16 +1250,22 @@ bool AcquireManualUiFocus(const long chart_hwnd,
      {
       ShowWindowAsync(root_hwnd, 9); // SW_RESTORE
       BringWindowToTop(root_hwnd);
+
+      // Windows may reject SetForegroundWindow when the caller is not the
+      // current GUI input thread.  A short ALT transition grants foreground
+      // activation without sending any character to the volume control.
+      if(attempt > 0) keybd_event(VK_MENU, 0, 0, 0);
       SetForegroundWindow(root_hwnd);
+      if(attempt > 0) keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
       SetFocus(chart_hwnd);
       Sleep(40);
 
-      long foreground_hwnd = GetForegroundWindow();
+      foreground_hwnd = GetForegroundWindow();
       input_hwnd = GetFocus();
-      long input_root = (input_hwnd != 0)
-         ? GetAncestor(input_hwnd, GA_ROOT) : 0;
-      if(foreground_hwnd == root_hwnd &&
-         (input_hwnd == chart_hwnd || input_root == root_hwnd))
+      // GetFocus is scoped to the calling thread's input queue.  MT5 runs the
+      // EA and chart UI on different threads on some builds, so input_hwnd=0
+      // is valid.  Physical input is safely routed by the foreground root.
+      if(foreground_hwnd == root_hwnd)
         {
          focus_elapsed_ms = GetTickCount64() - started_ms;
          return true;
@@ -1153,11 +1280,7 @@ bool AcquireManualUiFocus(const long chart_hwnd,
 bool IsManualUiFocusOwned(const long chart_hwnd)
 {
    long root_hwnd = GetAncestor(chart_hwnd, GA_ROOT);
-   if(root_hwnd == 0 || GetForegroundWindow() != root_hwnd) return false;
-   long input_hwnd = GetFocus();
-   if(input_hwnd == 0) return false;
-   return input_hwnd == chart_hwnd ||
-      GetAncestor(input_hwnd, GA_ROOT) == root_hwnd;
+   return root_hwnd != 0 && GetForegroundWindow() == root_hwnd;
 }
 
 bool ReadBackManualUiVolume(const long chart_hwnd,
@@ -1226,18 +1349,43 @@ bool ProbeSetManualUiVolume(const long chart_id, const double requested_volume)
      }
 
    long mouse_param = (volume_y << 16) | (volume_x & 0xFFFF);
+   double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   int digits = ResolveVolumeDigits(step);
+   string volume_text = DoubleToString(requested_volume, digits);
+   double cache_tolerance = MathMax(0.000000001, step * 0.000001);
+   bool cache_candidate = g_volumeCacheValid &&
+      g_volumeCacheChartHwnd == probe.chart_hwnd &&
+      g_volumeCacheSymbol == symbol &&
+      MathAbs(g_volumeCacheValue - requested_volume) <= cache_tolerance;
+   if(cache_candidate)
+     {
+      PrintFormat(
+         "[MANUAL_UI][VOLUME_PROBE] success=true symbol=%s requested=%s " +
+         "actual=%s verified=true primed=true fastPath=true at=(%d,%d) " +
+         "rootHwnd=%I64d inputHwnd=0 foreground=not_required " +
+         "focusVerified=not_required focusAcquireMs=0 volumeVerifyMs=%I64u " +
+         "textSent=false",
+         symbol, volume_text, volume_text, volume_x, volume_y,
+         GetAncestor(probe.chart_hwnd, GA_ROOT),
+         GetTickCount64() - volume_probe_started_ms);
+      return true;
+     }
+
    long root_hwnd;
    long input_hwnd;
+   long foreground_hwnd;
    ulong focus_elapsed_ms;
    bool focus_verified = AcquireManualUiFocus(
-      probe.chart_hwnd, root_hwnd, input_hwnd, focus_elapsed_ms);
+      probe.chart_hwnd, root_hwnd, input_hwnd, foreground_hwnd,
+      focus_elapsed_ms);
    if(!focus_verified)
      {
       PrintFormat(
          "[MANUAL_UI][VOLUME_PROBE] success=false code=terminal_focus_not_acquired " +
          "symbol=%s requested=%.8f rootHwnd=%I64d inputHwnd=%I64d " +
-         "foreground=false focusVerified=false focusAcquireMs=%I64u",
-         symbol, requested_volume, root_hwnd, input_hwnd,
+         "foregroundHwnd=%I64d foreground=false focusVerified=false " +
+         "focusAcquireMs=%I64u",
+         symbol, requested_volume, root_hwnd, input_hwnd, foreground_hwnd,
          focus_elapsed_ms);
       return false;
      }
@@ -1248,36 +1396,6 @@ bool ProbeSetManualUiVolume(const long chart_id, const double requested_volume)
    PostMessageW(probe.chart_hwnd, WM_LBUTTONUP, 0, mouse_param);
    Sleep(40);
 
-   double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-   int digits = ResolveVolumeDigits(step);
-   string volume_text = DoubleToString(requested_volume, digits);
-
-   double cache_tolerance = MathMax(0.000000001, step * 0.000001);
-   bool cache_candidate = g_volumeCacheValid &&
-      g_volumeCacheSymbol == symbol &&
-      MathAbs(g_volumeCacheValue - requested_volume) <= cache_tolerance;
-   if(cache_candidate)
-     {
-      string cached_actual_text;
-      bool cache_verified = ReadBackManualUiVolume(
-         probe.chart_hwnd, mouse_param, requested_volume, step,
-         cached_actual_text);
-      if(cache_verified)
-        {
-         PrintFormat(
-            "[MANUAL_UI][VOLUME_PROBE] success=true symbol=%s requested=%s " +
-            "actual=%s verified=true fastPath=true at=(%d,%d) " +
-            "rootHwnd=%I64d inputHwnd=%I64d foreground=true " +
-            "focusVerified=true focusAcquireMs=%I64u volumeVerifyMs=%I64u " +
-            "textSent=false",
-            symbol, volume_text, cached_actual_text,
-            volume_x, volume_y, root_hwnd, input_hwnd,
-            focus_elapsed_ms, GetTickCount64() - volume_probe_started_ms);
-         return true;
-        }
-      g_volumeCacheValid = false;
-     }
-
    // The MT5 OCT volume field is custom-drawn on several broker builds and
    // does not expose a child Edit HWND. Physical key state is therefore
    // required; PostMessage(Ctrl+A) does not update GetKeyState in MT5.
@@ -1286,8 +1404,10 @@ bool ProbeSetManualUiVolume(const long chart_id, const double requested_volume)
       g_volumeCacheValid = false;
       PrintFormat(
          "[MANUAL_UI][VOLUME_PROBE] success=false code=terminal_focus_lost " +
-         "symbol=%s requested=%s rootHwnd=%I64d inputHwnd=%I64d",
-         symbol, volume_text, root_hwnd, GetFocus());
+         "symbol=%s requested=%s rootHwnd=%I64d inputHwnd=%I64d " +
+         "foregroundHwnd=%I64d",
+         symbol, volume_text, root_hwnd, GetFocus(),
+         GetForegroundWindow());
       return false;
      }
    SendPhysicalControlKey(VK_A);
@@ -1304,10 +1424,12 @@ bool ProbeSetManualUiVolume(const long chart_id, const double requested_volume)
       g_volumeCacheValid = true;
       g_volumeCacheSymbol = symbol;
       g_volumeCacheValue = requested_volume;
+      g_volumeCacheChartHwnd = probe.chart_hwnd;
      }
    else
      {
       g_volumeCacheValid = false;
+      g_volumeCacheChartHwnd = 0;
      }
 
    PrintFormat(

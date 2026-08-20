@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
+using TradeDesktop.App.Native;
 using TradeDesktop.Infrastructure.Mt5Bridge;
 
 namespace TradeDesktop.App.Services;
@@ -166,8 +168,43 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
 
         var actionGate = ResolveActionGate(request.Exchange);
         await actionGate.WaitAsync(cancellationToken);
+        var manualUiGateHeld = false;
+        IntPtr nativeContext = IntPtr.Zero;
         try
         {
+            if (!TryParseHwnd(request.TradeHwnd, out var tradeHwnd) ||
+                NativeMethodsMt5.IsValidWindow(tradeHwnd) != 1)
+            {
+                return Failure(request.Exchange, "CLOSE", "invalid",
+                    $"MT5 Trade HWND is invalid: {request.TradeHwnd}", request.Ticket);
+            }
+            if (!request.RowIndex.HasValue)
+            {
+                return Failure(request.Exchange, "CLOSE", "invalid",
+                    "MT5 close row is unresolved", request.Ticket);
+            }
+
+            nativeContext = NativeMethodsMt5.CreateContextFromParent(tradeHwnd);
+            if (nativeContext == IntPtr.Zero)
+            {
+                return Failure(request.Exchange, "CLOSE", "invalid",
+                    "MT5 close UI context could not be created", request.Ticket);
+            }
+            var rowCount = NativeMethodsMt5.UpdateRowCount(nativeContext);
+            if (rowCount <= 0 || request.RowIndex.Value < 0 ||
+                request.RowIndex.Value >= rowCount)
+            {
+                return Failure(request.Exchange, "CLOSE", "invalid",
+                    $"MT5 close row is invalid: row={request.RowIndex.Value}, rowCount={rowCount}",
+                    request.Ticket);
+            }
+
+            var uiQueuedAt = Stopwatch.GetTimestamp();
+            await _manualUiGate.WaitAsync(cancellationToken);
+            manualUiGateHeld = true;
+            var uiAcquiredAt = Stopwatch.GetTimestamp();
+            var queueWaitMs = (long)Stopwatch
+                .GetElapsedTime(uiQueuedAt, uiAcquiredAt).TotalMilliseconds;
             var transport = _transportProvider.Resolve(request.Exchange);
             var healthError = await EnsureReadyAsync(
                 transport, endpoint, requireManualUi: false, cancellationToken);
@@ -189,12 +226,61 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
                 ExpiresMilliseconds = now + (long)_options.ExecutionTimeout.TotalMilliseconds
             };
 
-            SafeLog($"[MT5_BRIDGE][CLOSE][SEND] exchange={request.Exchange} requestId={requestId} ticket={request.Ticket} symbol={symbol}");
-            var response = await transport.SendAsync(
+            SafeLog($"[MT5_BRIDGE][CLOSE][SEND] exchange={request.Exchange} requestId={requestId} ticket={request.Ticket} symbol={symbol} row={request.RowIndex.Value} queueWaitMs={queueWaitMs}");
+            var armed = new TaskCompletionSource<long>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var responseTask = transport.SendAsync(
                 command,
                 requestId,
                 _options.ExecutionTimeout,
-                cancellationToken);
+                cancellationToken,
+                progress =>
+                {
+                    if (progress.Status == Mt5BridgeExecutionStatuses.Received &&
+                        string.Equals(progress.Detail, "manual_close_armed",
+                            StringComparison.Ordinal))
+                    {
+                        armed.TrySetResult(Stopwatch.GetTimestamp());
+                    }
+                });
+
+            var firstCompleted = await Task.WhenAny(responseTask, armed.Task);
+            if (firstCompleted == responseTask)
+            {
+                return MapResponse(request.Exchange, "CLOSE", await responseTask);
+            }
+
+            var armedAt = await armed.Task;
+            var clickResult = NativeMethodsMt5.ClosePositionMt5(
+                nativeContext, request.RowIndex.Value);
+            var dispatchedAt = Stopwatch.GetTimestamp();
+            var uiDispatchMs = (long)Stopwatch
+                .GetElapsedTime(uiAcquiredAt, dispatchedAt).TotalMilliseconds;
+            SafeLog(
+                $"[MT5_BRIDGE][CLOSE][DISPATCHED] exchange={request.Exchange} " +
+                $"requestId={requestId} ticket={request.Ticket} row={request.RowIndex.Value} " +
+                $"queueWaitMs={queueWaitMs} armMs={(long)Stopwatch.GetElapsedTime(uiAcquiredAt, armedAt).TotalMilliseconds} " +
+                $"uiDispatchMs={uiDispatchMs} clickResult={clickResult}");
+            _manualUiGate.Release();
+            manualUiGateHeld = false;
+
+            if (clickResult != 1)
+            {
+                // Keep awaiting the armed observer: the native engine may
+                // report a conservative click result even when MT5 accepted
+                // the UI event. The bridge remains the source of truth.
+                SafeLog($"[MT5_BRIDGE][CLOSE][WARN] exchange={request.Exchange} requestId={requestId} native click returned {clickResult}; awaiting MT5 client deal");
+            }
+
+            var response = await responseTask;
+            var brokerConfirmMs = (long)Stopwatch
+                .GetElapsedTime(dispatchedAt).TotalMilliseconds;
+            var totalExecutionMs = (long)Stopwatch
+                .GetElapsedTime(uiQueuedAt).TotalMilliseconds;
+            SafeLog(
+                $"[MT5_BRIDGE][CLOSE][TIMING] exchange={request.Exchange} " +
+                $"requestId={requestId} queueWaitMs={queueWaitMs} " +
+                $"brokerConfirmMs={brokerConfirmMs} totalExecutionMs={totalExecutionMs}");
             return MapResponse(request.Exchange, "CLOSE", response);
         }
         catch (TimeoutException ex)
@@ -215,6 +301,14 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         }
         finally
         {
+            if (manualUiGateHeld)
+            {
+                _manualUiGate.Release();
+            }
+            if (nativeContext != IntPtr.Zero)
+            {
+                NativeMethodsMt5.DestroyContext(nativeContext);
+            }
             actionGate.Release();
         }
     }
@@ -328,6 +422,21 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         "B" => _actionGateB,
         _ => throw new ArgumentOutOfRangeException(nameof(exchange), exchange, "Exchange must be A or B.")
     };
+
+    private static bool TryParseHwnd(string raw, out ulong hwnd)
+    {
+        hwnd = 0;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+        var value = raw.Trim();
+        return value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? ulong.TryParse(value[2..], NumberStyles.HexNumber,
+                CultureInfo.InvariantCulture, out hwnd)
+            : ulong.TryParse(value, NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out hwnd);
+    }
 
     private static async Task<ManualTradeResult> ExecutePairAsync(
         string label,
