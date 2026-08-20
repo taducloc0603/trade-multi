@@ -250,6 +250,36 @@ public sealed class Mt5BridgeTransportTests
         Assert.Equal("scaled_chart_property", health.CoordinateSource);
     }
 
+    [Fact]
+    public void ManualUiPolicy_AllowsVolumeNotPrimedToSelfRecoverOnOpen()
+    {
+        var health = Mt5BridgeHealth.Offline with
+        {
+            IsReady = true,
+            ManualUiReady = false,
+            ManualUiCode = "volume_not_primed"
+        };
+
+        Assert.True(Mt5BridgeManualUiPolicy.CanAttemptOpen(health));
+    }
+
+    [Theory]
+    [InlineData("oct_panel_not_found")]
+    [InlineData("chart_invalid")]
+    [InlineData("trading_not_allowed")]
+    [InlineData(null)]
+    public void ManualUiPolicy_KeepsOtherReadinessFailuresBlocked(string? code)
+    {
+        var health = Mt5BridgeHealth.Offline with
+        {
+            IsReady = true,
+            ManualUiReady = false,
+            ManualUiCode = code
+        };
+
+        Assert.False(Mt5BridgeManualUiPolicy.CanAttemptOpen(health));
+    }
+
     private sealed class SharedBuffer
     {
         private readonly byte[] _bytes = new byte[Mt5BridgeLayout.RegionSize];

@@ -282,7 +282,7 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         {
             return $"MT5 Bridge shared-memory gap detected: {health.GapCount}";
         }
-        if (requireManualUi && health.ManualUiReady is not true)
+        if (requireManualUi && !Mt5BridgeManualUiPolicy.CanAttemptOpen(health))
         {
             return $"MT5 manual UI is not ready: {health.ManualUiCode ?? "not_reported"}";
         }
