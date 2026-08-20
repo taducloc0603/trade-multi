@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using TradeDesktop.Infrastructure.Mt5Bridge;
 
 namespace TradeDesktop.App.Services;
@@ -49,12 +50,15 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         var actionGate = ResolveActionGate(request.Exchange);
         await actionGate.WaitAsync(cancellationToken);
         var manualUiGateHeld = false;
+        var uiQueuedAt = Stopwatch.GetTimestamp();
         try
         {
             // Both MT5 terminals share the Windows foreground, keyboard and
             // clipboard. Manual UI actions must therefore be serialized.
             await _manualUiGate.WaitAsync(cancellationToken);
             manualUiGateHeld = true;
+            var uiAcquiredAt = Stopwatch.GetTimestamp();
+            var queueWaitMs = (long)Stopwatch.GetElapsedTime(uiQueuedAt, uiAcquiredAt).TotalMilliseconds;
             var transport = _transportProvider.Resolve(request.Exchange);
             var healthError = await EnsureReadyAsync(
                 transport, endpoint, requireManualUi: true, cancellationToken);
@@ -76,12 +80,51 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
                 ExpiresMilliseconds = now + (long)_options.ExecutionTimeout.TotalMilliseconds
             };
 
-            SafeLog($"[MT5_BRIDGE][OPEN][SEND] exchange={request.Exchange} requestId={requestId} symbol={symbol} side={action} volume={volume}");
-            var response = await transport.SendAsync(
+            SafeLog($"[MT5_BRIDGE][OPEN][SEND] exchange={request.Exchange} requestId={requestId} symbol={symbol} side={action} volume={volume} queueWaitMs={queueWaitMs}");
+            var dispatched = new TaskCompletionSource<long>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var responseTask = transport.SendAsync(
                 command,
                 requestId,
                 _options.ExecutionTimeout,
-                cancellationToken);
+                cancellationToken,
+                progress =>
+                {
+                    if (progress.Status == Mt5BridgeExecutionStatuses.Dispatched)
+                    {
+                        dispatched.TrySetResult(Stopwatch.GetTimestamp());
+                    }
+                });
+
+            var firstCompleted = await Task.WhenAny(responseTask, dispatched.Task);
+            if (firstCompleted == dispatched.Task)
+            {
+                var dispatchedAt = await dispatched.Task;
+                var uiDispatchMs = (long)Stopwatch
+                    .GetElapsedTime(uiAcquiredAt, dispatchedAt)
+                    .TotalMilliseconds;
+                _manualUiGate.Release();
+                manualUiGateHeld = false;
+                SafeLog(
+                    $"[MT5_BRIDGE][OPEN][DISPATCHED] exchange={request.Exchange} " +
+                    $"requestId={requestId} queueWaitMs={queueWaitMs} uiDispatchMs={uiDispatchMs}");
+            }
+
+            var response = await responseTask;
+            if (dispatched.Task.IsCompletedSuccessfully)
+            {
+                var dispatchedAt = await dispatched.Task;
+                var brokerConfirmMs = (long)Stopwatch
+                    .GetElapsedTime(dispatchedAt)
+                    .TotalMilliseconds;
+                var totalExecutionMs = (long)Stopwatch
+                    .GetElapsedTime(uiQueuedAt)
+                    .TotalMilliseconds;
+                SafeLog(
+                    $"[MT5_BRIDGE][OPEN][TIMING] exchange={request.Exchange} " +
+                    $"requestId={requestId} queueWaitMs={queueWaitMs} " +
+                    $"brokerConfirmMs={brokerConfirmMs} totalExecutionMs={totalExecutionMs}");
+            }
             return MapResponse(request.Exchange, action, response);
         }
         catch (TimeoutException ex)

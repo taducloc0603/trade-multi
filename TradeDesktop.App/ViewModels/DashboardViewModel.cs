@@ -1403,6 +1403,15 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
+            if (!result.Success && result.Legs.Count(leg => leg.Success) == 1)
+            {
+                await ExecuteImmediatePartialRollbackAsync(
+                    pairId, slot, result, _orderInfoPollingCts.Token);
+                RemovePendingOpenRequests(appOpenRequestRawMs);
+                ShowManualTradeFeedback("BUY", result);
+                return;
+            }
+
             if (!result.Success && result.Legs.Count > 0 && result.Legs.All(leg => !leg.Success))
             {
                 RemovePendingOpenRequests(appOpenRequestRawMs);
@@ -1490,6 +1499,15 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 RemovePendingOpenRequests(appOpenRequestRawMs);
                 SafeVmLog($"[TRADE_GATE][BLOCKED] manual OPEN remainingMs={result.GateRemainingMilliseconds}");
+                ShowManualTradeFeedback("SELL", result);
+                return;
+            }
+
+            if (!result.Success && result.Legs.Count(leg => leg.Success) == 1)
+            {
+                await ExecuteImmediatePartialRollbackAsync(
+                    pairId, slot, result, _orderInfoPollingCts.Token);
+                RemovePendingOpenRequests(appOpenRequestRawMs);
                 ShowManualTradeFeedback("SELL", result);
                 return;
             }
@@ -2109,6 +2127,12 @@ public sealed class DashboardViewModel : ObservableObject
                     ("successfulLegs", successfulOpenLegs),
                     ("totalLegs", openResult.Legs.Count),
                     ("rollback", "pending"));
+                await ExecuteImmediatePartialRollbackAsync(
+                    pairId, coordinatorSlot.SlotId, openResult,
+                    _orderInfoPollingCts.Token);
+                _lastAutoOpenClickAtLocal = null;
+                RemovePendingOpenRequests(appOpenRequestRawMs);
+                return;
             }
 
             if (!openResult.Success && openResult.Legs.Count > 0 && openResult.Legs.All(x => !x.Success))
@@ -2347,6 +2371,12 @@ public sealed class DashboardViewModel : ObservableObject
                     ("successfulLegs", successfulOpenLegs),
                     ("totalLegs", openResult.Legs.Count),
                     ("rollback", "pending"));
+                await ExecuteImmediatePartialRollbackAsync(
+                    pairId, coordinatorSlot.SlotId, openResult,
+                    _orderInfoPollingCts.Token);
+                _lastAutoOpenClickAtLocal = null;
+                RemovePendingOpenRequests(appOpenRequestRawMs);
+                return;
             }
 
             if (!openResult.Success && openResult.Legs.Count > 0 && openResult.Legs.All(x => !x.Success))
@@ -4598,7 +4628,65 @@ public sealed class DashboardViewModel : ObservableObject
         }
     }
 
-    private async Task<bool> CloseOpenedLegByTimeoutAsync(PendingOpenTimeoutAction action, CancellationToken cancellationToken)
+    private async Task ExecuteImmediatePartialRollbackAsync(
+        string pairId,
+        int slotNumber,
+        ManualTradeResult openResult,
+        CancellationToken cancellationToken)
+    {
+        var openedLeg = openResult.Legs.SingleOrDefault(
+            leg => leg.Success && leg.Ticket is > 0);
+        if (openedLeg?.Ticket is not { } ticket ||
+            !_pendingOpenPairById.TryGetValue(pairId, out var state))
+        {
+            SafeVmLog(
+                $"[ROLLBACK][CRITICAL] Immediate partial rollback lacks ticket/state: " +
+                $"pairId={pairId} successfulLegs={openResult.Legs.Count(x => x.Success)}");
+            AllowTradeOperations = false;
+            return;
+        }
+
+        var isExchangeA = string.Equals(
+            openedLeg.Exchange, "A", StringComparison.OrdinalIgnoreCase);
+        state.TimeoutCloseTriggered = true;
+        var action = new PendingOpenTimeoutAction(
+            PairId: pairId,
+            IsAutoFlow: state.IsAutoFlow,
+            SlotNumber: slotNumber,
+            OpenedExchange: isExchangeA ? "A" : "B",
+            MissingExchange: isExchangeA ? "B" : "A",
+            Ticket: ticket,
+            TradeMapName: isExchangeA
+                ? state.TradeMapNameA ?? TradeTab.LeftPanel.TargetMapName
+                : state.TradeMapNameB ?? TradeTab.RightPanel.TargetMapName,
+            TradeType: isExchangeA ? state.TradeTypeA : state.TradeTypeB,
+            Symbol: openedLeg.Exchange.Equals("A", StringComparison.OrdinalIgnoreCase)
+                ? state.SymbolA : state.SymbolB,
+            Volume: openedLeg.ExecutedVolume ??
+                (isExchangeA ? state.VolumeA : state.VolumeB));
+
+        var rollbackStarted = Stopwatch.GetTimestamp();
+        SafeVmLog(
+            $"[ROLLBACK][IMMEDIATE][BEGIN] pairId={pairId} " +
+            $"openedExchange={action.OpenedExchange} missingExchange={action.MissingExchange} " +
+            $"ticket={ticket}");
+        var dispatched = await CloseOpenedLegByTimeoutAsync(
+            action, cancellationToken, "open-result-partial-rollback");
+        var rollbackMs = (long)Stopwatch.GetElapsedTime(rollbackStarted).TotalMilliseconds;
+        SafeVmLog(
+            $"[ROLLBACK][IMMEDIATE][{(dispatched ? "DISPATCHED" : "DEFERRED")}] " +
+            $"pairId={pairId} ticket={ticket} rollbackMs={rollbackMs}");
+        if (dispatched)
+        {
+            _portfolioCoordinator.AbortPendingOpen(pairId);
+            SafeVmLog($"[SLOT][WARN] Pending open aborted after immediate rollback: pairId={pairId}");
+        }
+    }
+
+    private async Task<bool> CloseOpenedLegByTimeoutAsync(
+        PendingOpenTimeoutAction action,
+        CancellationToken cancellationToken,
+        string recoverySource = "open-timeout-rollback")
     {
         _portfolioCoordinator.BeginNonAutoCloseOperation(action.PairId);
         System.Windows.Application.Current.Dispatcher.Invoke(RaiseNonAutoCloseUiStateChanged);
@@ -4696,7 +4784,7 @@ public sealed class DashboardViewModel : ObservableObject
                         Volume: action.Volume),
                 Context: CreateRecoveryContext(
                     TradeExecutionReason.OpenPartialRollback,
-                    "open-timeout-rollback",
+                    recoverySource,
                     action.PairId,
                     action.SlotNumber,
                     action.Ticket,
@@ -4705,19 +4793,18 @@ public sealed class DashboardViewModel : ObservableObject
 
         if (closeResult.IsDispatchBlocked)
         {
-            _portfolioCoordinator.EndNonAutoCloseOperation(action.PairId);
-            System.Windows.Application.Current.Dispatcher.Invoke(RaiseNonAutoCloseUiStateChanged);
-            RemovePendingCloseRequests(appCloseRequestRawMs);
+            // Fail closed: keep the non-auto barrier and the registered close
+            // request alive. The retry loop owns this ticket until MMF proves
+            // it is flat; no new OPEN may pass meanwhile.
             if (_pendingOpenPairById.TryGetValue(action.PairId, out var openState))
             {
-                openState.IsResolved = false;
-                openState.TimeoutCloseTriggered = false;
+                openState.IsResolved = true;
+                openState.TimeoutCloseTriggered = true;
             }
-            if (_pendingClosePairById.TryGetValue(action.PairId, out var closeState))
-            {
-                closeState.IsResolved = true;
-            }
-            SafeVmLog($"[TRADE_GATE][BLOCKED] rollback CLOSE pairId={action.PairId} remainingMs={closeResult.GateRemainingMilliseconds}");
+            SafeVmLog(
+                $"[TRADE_GATE][BLOCKED] rollback CLOSE deferred to retry; " +
+                $"OPEN remains blocked pairId={action.PairId} " +
+                $"remainingMs={closeResult.GateRemainingMilliseconds}");
             return false;
         }
 

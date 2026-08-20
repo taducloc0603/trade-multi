@@ -7,7 +7,11 @@ internal sealed class Mt5BridgeResponsePump : IAsyncDisposable
 {
     private readonly Mt5BridgeSharedMemoryRing _ring;
     private readonly Mt5BridgeHealthMonitor _health;
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<Mt5BridgeInboundMessage>> _pending = new();
+    private sealed record PendingResponse(
+        TaskCompletionSource<Mt5BridgeInboundMessage> Completion,
+        Action<Mt5BridgeInboundMessage>? Progress);
+
+    private readonly ConcurrentDictionary<string, PendingResponse> _pending = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _pumpTask;
 
@@ -18,12 +22,14 @@ internal sealed class Mt5BridgeResponsePump : IAsyncDisposable
         _pumpTask = Task.Run(PumpAsync);
     }
 
-    public TaskCompletionSource<Mt5BridgeInboundMessage> Register(string requestId)
+    public TaskCompletionSource<Mt5BridgeInboundMessage> Register(
+        string requestId,
+        Action<Mt5BridgeInboundMessage>? onProgress = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(requestId);
         var source = new TaskCompletionSource<Mt5BridgeInboundMessage>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_pending.TryAdd(requestId, source))
+        if (!_pending.TryAdd(requestId, new PendingResponse(source, onProgress)))
         {
             throw new InvalidOperationException($"MT5 Bridge request '{requestId}' is already pending.");
         }
@@ -57,11 +63,22 @@ internal sealed class Mt5BridgeResponsePump : IAsyncDisposable
 
                     _health.Observe(message, _ring.GapCount);
                     if (!string.IsNullOrWhiteSpace(message.RequestId) &&
-                        _pending.TryGetValue(message.RequestId, out var waiter) &&
-                        IsTerminalResponse(message))
+                        _pending.TryGetValue(message.RequestId, out var pending))
                     {
-                        _pending.TryRemove(message.RequestId, out _);
-                        waiter.TrySetResult(message);
+                        try
+                        {
+                            pending.Progress?.Invoke(message);
+                        }
+                        catch
+                        {
+                            // Progress reporting must never stop response delivery.
+                        }
+
+                        if (IsTerminalResponse(message))
+                        {
+                            _pending.TryRemove(message.RequestId, out _);
+                            pending.Completion.TrySetResult(message);
+                        }
                     }
                 }
 
@@ -74,9 +91,10 @@ internal sealed class Mt5BridgeResponsePump : IAsyncDisposable
         }
         finally
         {
-            foreach (var waiter in _pending.Values)
+            foreach (var pending in _pending.Values)
             {
-                waiter.TrySetException(new ObjectDisposedException(nameof(Mt5BridgeResponsePump)));
+                pending.Completion.TrySetException(
+                    new ObjectDisposedException(nameof(Mt5BridgeResponsePump)));
             }
             _pending.Clear();
         }

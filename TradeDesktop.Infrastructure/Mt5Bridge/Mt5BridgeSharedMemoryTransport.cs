@@ -53,7 +53,8 @@ public sealed class Mt5BridgeSharedMemoryTransport : IMt5BridgeTransport
         Mt5BridgeMessage message,
         string requestId,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<Mt5BridgeInboundMessage>? onProgress = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(requestId);
@@ -62,7 +63,7 @@ public sealed class Mt5BridgeSharedMemoryTransport : IMt5BridgeTransport
             throw new ArgumentOutOfRangeException(nameof(timeout));
         }
 
-        var waiter = _pump.Register(requestId);
+        var waiter = _pump.Register(requestId, onProgress);
         try
         {
             var json = Mt5BridgeProtocol.Serialize(message);

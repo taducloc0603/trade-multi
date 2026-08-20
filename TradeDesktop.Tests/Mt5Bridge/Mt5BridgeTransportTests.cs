@@ -116,6 +116,49 @@ public sealed class Mt5BridgeTransportTests
     }
 
     [Fact]
+    public async Task Transport_ReportsDispatchedProgressBeforeFinalResult()
+    {
+        var buffer = new SharedBuffer();
+        await using var transport = Mt5BridgeSharedMemoryTransport.ConnectForTest(
+            buffer.Open(), 101, 1);
+        using var ea = new Mt5BridgeSharedMemoryRing(buffer.Open(), 202, 2);
+        var command = new Mt5BridgeOpenCommand
+        {
+            RequestId = "open-progress-1",
+            Account = 12345,
+            Symbol = "XAUUSD",
+            Side = "BUY",
+            Volume = 0.1,
+            CreatedMilliseconds = 100,
+            ExpiresMilliseconds = 1_000
+        };
+        var dispatched = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var resultTask = transport.SendAsync(
+            command,
+            command.RequestId,
+            TimeSpan.FromSeconds(1),
+            onProgress: message =>
+            {
+                if (message.Status == Mt5BridgeExecutionStatuses.Dispatched)
+                {
+                    dispatched.TrySetResult();
+                }
+            });
+        Assert.True(ea.TryWrite(
+            "{\"v\":1,\"type\":\"execution_result\",\"request_id\":\"open-progress-1\",\"status\":\"dispatched\"}"));
+
+        await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.False(resultTask.IsCompleted);
+
+        Assert.True(ea.TryWrite(
+            "{\"v\":1,\"type\":\"execution_result\",\"request_id\":\"open-progress-1\",\"status\":\"confirmed\",\"ticket\":43}"));
+        var result = await resultTask;
+        Assert.Equal(43UL, result.Ticket);
+    }
+
+    [Fact]
     public async Task Transport_CompletesCloseOnAlreadyClosed()
     {
         var buffer = new SharedBuffer();

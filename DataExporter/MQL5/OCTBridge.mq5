@@ -4,7 +4,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024"
 #property link      ""
-#property version   "2.01"
+#property version   "2.02"
 #property strict
 
 #include "SharedMem.mqh"
@@ -83,6 +83,9 @@ long SendMessageW(long hWnd, uint Msg, ulong wParam, long lParam);
 long SendMessageW(long hWnd, uint Msg, ulong wParam, string lParam);
 long GetAncestor(long hWnd, uint gaFlags);
 bool SetForegroundWindow(long hWnd);
+long GetForegroundWindow();
+bool BringWindowToTop(long hWnd);
+bool ShowWindowAsync(long hWnd, int nCmdShow);
 long SetFocus(long hWnd);
 short VkKeyScanW(ushort ch);
 void keybd_event(uchar virtualKey, uchar scanCode, uint flags, ulong extraInfo);
@@ -157,6 +160,9 @@ BridgeCachedResult g_dedup[BRIDGE_DEDUP_CAPACITY];
 int              g_dedupNext = 0;
 string           g_lastManualUiCode = "";
 BridgeManualOpenExecution g_manualOpen[BRIDGE_MANUAL_PENDING];
+bool             g_volumeCacheValid = false;
+string           g_volumeCacheSymbol = "";
+double           g_volumeCacheValue = 0;
 
 uint BuildWriterUid(const string identity)
 {
@@ -1105,6 +1111,55 @@ bool ClearClipboardText()
    return cleared;
 }
 
+bool AcquireManualUiFocus(const long chart_hwnd,
+                          long &root_hwnd,
+                          long &input_hwnd,
+                          ulong &focus_elapsed_ms)
+{
+   root_hwnd = GetAncestor(chart_hwnd, GA_ROOT);
+   input_hwnd = 0;
+   ulong started_ms = GetTickCount64();
+   if(root_hwnd == 0 || !IsWindow(root_hwnd))
+     {
+      focus_elapsed_ms = GetTickCount64() - started_ms;
+      return false;
+     }
+
+   for(int attempt = 0; attempt < 5; attempt++)
+     {
+      ShowWindowAsync(root_hwnd, 9); // SW_RESTORE
+      BringWindowToTop(root_hwnd);
+      SetForegroundWindow(root_hwnd);
+      SetFocus(chart_hwnd);
+      Sleep(40);
+
+      long foreground_hwnd = GetForegroundWindow();
+      input_hwnd = GetFocus();
+      long input_root = (input_hwnd != 0)
+         ? GetAncestor(input_hwnd, GA_ROOT) : 0;
+      if(foreground_hwnd == root_hwnd &&
+         (input_hwnd == chart_hwnd || input_root == root_hwnd))
+        {
+         focus_elapsed_ms = GetTickCount64() - started_ms;
+         return true;
+        }
+      Sleep(20);
+     }
+
+   focus_elapsed_ms = GetTickCount64() - started_ms;
+   return false;
+}
+
+bool IsManualUiFocusOwned(const long chart_hwnd)
+{
+   long root_hwnd = GetAncestor(chart_hwnd, GA_ROOT);
+   if(root_hwnd == 0 || GetForegroundWindow() != root_hwnd) return false;
+   long input_hwnd = GetFocus();
+   if(input_hwnd == 0) return false;
+   return input_hwnd == chart_hwnd ||
+      GetAncestor(input_hwnd, GA_ROOT) == root_hwnd;
+}
+
 bool ReadBackManualUiVolume(const long chart_hwnd,
                             const long mouse_param,
                             const double expected_volume,
@@ -1117,6 +1172,7 @@ bool ReadBackManualUiVolume(const long chart_hwnd,
    Sleep(40);
    PostMessageW(chart_hwnd, WM_LBUTTONUP, 0, mouse_param);
    Sleep(60);
+   if(!IsManualUiFocusOwned(chart_hwnd)) return false;
    SendPhysicalControlKey(VK_A);
    if(!ClearClipboardText())
      {
@@ -1141,6 +1197,7 @@ bool ReadBackManualUiVolume(const long chart_hwnd,
 
 bool ProbeSetManualUiVolume(const long chart_id, const double requested_volume)
 {
+   ulong volume_probe_started_ms = GetTickCount64();
    BridgeManualUiProbe probe;
    string readiness = EvaluateManualUiReadiness(chart_id, probe);
    if(readiness != "ready")
@@ -1169,11 +1226,22 @@ bool ProbeSetManualUiVolume(const long chart_id, const double requested_volume)
      }
 
    long mouse_param = (volume_y << 16) | (volume_x & 0xFFFF);
-   long root_hwnd = GetAncestor(probe.chart_hwnd, GA_ROOT);
-   bool foreground_result =
-      (root_hwnd != 0) ? SetForegroundWindow(root_hwnd) : false;
-   SetFocus(probe.chart_hwnd);
-   Sleep(60);
+   long root_hwnd;
+   long input_hwnd;
+   ulong focus_elapsed_ms;
+   bool focus_verified = AcquireManualUiFocus(
+      probe.chart_hwnd, root_hwnd, input_hwnd, focus_elapsed_ms);
+   if(!focus_verified)
+     {
+      PrintFormat(
+         "[MANUAL_UI][VOLUME_PROBE] success=false code=terminal_focus_not_acquired " +
+         "symbol=%s requested=%.8f rootHwnd=%I64d inputHwnd=%I64d " +
+         "foreground=false focusVerified=false focusAcquireMs=%I64u",
+         symbol, requested_volume, root_hwnd, input_hwnd,
+         focus_elapsed_ms);
+      return false;
+     }
+
    PostMessageW(probe.chart_hwnd, WM_MOUSEMOVE, 0, mouse_param);
    PostMessageW(probe.chart_hwnd, WM_LBUTTONDOWN, MK_LBUTTON, mouse_param);
    Sleep(40);
@@ -1183,12 +1251,45 @@ bool ProbeSetManualUiVolume(const long chart_id, const double requested_volume)
    double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
    int digits = ResolveVolumeDigits(step);
    string volume_text = DoubleToString(requested_volume, digits);
-   long input_hwnd = GetFocus();
-   if(input_hwnd == 0 || !IsWindow(input_hwnd)) input_hwnd = probe.chart_hwnd;
+
+   double cache_tolerance = MathMax(0.000000001, step * 0.000001);
+   bool cache_candidate = g_volumeCacheValid &&
+      g_volumeCacheSymbol == symbol &&
+      MathAbs(g_volumeCacheValue - requested_volume) <= cache_tolerance;
+   if(cache_candidate)
+     {
+      string cached_actual_text;
+      bool cache_verified = ReadBackManualUiVolume(
+         probe.chart_hwnd, mouse_param, requested_volume, step,
+         cached_actual_text);
+      if(cache_verified)
+        {
+         PrintFormat(
+            "[MANUAL_UI][VOLUME_PROBE] success=true symbol=%s requested=%s " +
+            "actual=%s verified=true fastPath=true at=(%d,%d) " +
+            "rootHwnd=%I64d inputHwnd=%I64d foreground=true " +
+            "focusVerified=true focusAcquireMs=%I64u volumeVerifyMs=%I64u " +
+            "textSent=false",
+            symbol, volume_text, cached_actual_text,
+            volume_x, volume_y, root_hwnd, input_hwnd,
+            focus_elapsed_ms, GetTickCount64() - volume_probe_started_ms);
+         return true;
+        }
+      g_volumeCacheValid = false;
+     }
 
    // The MT5 OCT volume field is custom-drawn on several broker builds and
    // does not expose a child Edit HWND. Physical key state is therefore
    // required; PostMessage(Ctrl+A) does not update GetKeyState in MT5.
+   if(!IsManualUiFocusOwned(probe.chart_hwnd))
+     {
+      g_volumeCacheValid = false;
+      PrintFormat(
+         "[MANUAL_UI][VOLUME_PROBE] success=false code=terminal_focus_lost " +
+         "symbol=%s requested=%s rootHwnd=%I64d inputHwnd=%I64d",
+         symbol, volume_text, root_hwnd, GetFocus());
+      return false;
+     }
    SendPhysicalControlKey(VK_A);
    bool text_result = SendPhysicalText(volume_text);
    SendPhysicalKey(VK_RETURN);
@@ -1198,15 +1299,27 @@ bool ProbeSetManualUiVolume(const long chart_id, const double requested_volume)
    bool verified = text_result &&
       ReadBackManualUiVolume(probe.chart_hwnd, mouse_param,
                              requested_volume, step, actual_text);
+   if(verified)
+     {
+      g_volumeCacheValid = true;
+      g_volumeCacheSymbol = symbol;
+      g_volumeCacheValue = requested_volume;
+     }
+   else
+     {
+      g_volumeCacheValid = false;
+     }
 
    PrintFormat(
       "[MANUAL_UI][VOLUME_PROBE] success=%s symbol=%s requested=%s actual=%s " +
-      "verified=%s at=(%d,%d) rootHwnd=%I64d inputHwnd=%I64d " +
-      "foreground=%s textSent=%s",
+      "verified=%s fastPath=false at=(%d,%d) rootHwnd=%I64d inputHwnd=%I64d " +
+      "foreground=true focusVerified=true focusAcquireMs=%I64u " +
+      "volumeVerifyMs=%I64u textSent=%s",
       verified ? "true" : "false",
       symbol, volume_text, actual_text, verified ? "true" : "false",
-      volume_x, volume_y, root_hwnd, input_hwnd,
-      foreground_result ? "true" : "false", text_result ? "true" : "false");
+      volume_x, volume_y, root_hwnd, input_hwnd, focus_elapsed_ms,
+      GetTickCount64() - volume_probe_started_ms,
+      text_result ? "true" : "false");
    return verified;
 }
 

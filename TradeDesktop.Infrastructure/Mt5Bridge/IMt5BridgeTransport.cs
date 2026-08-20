@@ -8,7 +8,8 @@ public interface IMt5BridgeTransport : IAsyncDisposable
         Mt5BridgeMessage message,
         string requestId,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        Action<Mt5BridgeInboundMessage>? onProgress = null);
 
     Task<Mt5BridgeInboundMessage> PingAsync(
         TimeSpan timeout,
