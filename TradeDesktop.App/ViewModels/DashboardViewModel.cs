@@ -928,7 +928,7 @@ public sealed class DashboardViewModel : ObservableObject
 
     private static string Quote(string value) => string.IsNullOrEmpty(value) ? "(trống)" : value;
 
-    private async Task LogConfiguredMt5BridgeHealthAsync()
+    private async Task<bool> WaitForConfiguredMt5BridgeHealthAsync()
     {
         var provider = _serviceProvider.GetRequiredService<IMt5BridgeTransportProvider>();
         var options = _serviceProvider.GetRequiredService<Mt5BridgeOptions>();
@@ -938,33 +938,91 @@ public sealed class DashboardViewModel : ObservableObject
             (Name: "B", Platform: ResolveTradeLegPlatform(_runtimeConfigState.CurrentPlatformB))
         };
 
-        foreach (var exchange in exchanges.Where(item => item.Platform == TradeLegPlatform.Mt5))
+        var mt5Exchanges = exchanges
+            .Where(item => item.Platform == TradeLegPlatform.Mt5)
+            .ToArray();
+        if (mt5Exchanges.Length == 0)
+        {
+            return true;
+        }
+
+        foreach (var exchange in mt5Exchanges)
         {
             var endpoint = options.ResolveEndpoint(exchange.Name);
             try
             {
                 var transport = provider.Resolve(exchange.Name);
                 await transport.PingAsync(options.AckTimeout);
-                var health = transport.Health;
-                var accountMatches = health.Account == endpoint.Account;
-                SafeVmLog(
-                    $"[MT5_BRIDGE_HEALTH][{(health.IsReady && accountMatches ? "INFO" : "WARN")}] " +
-                    $"exchange={exchange.Name} room={endpoint.RoomId} expectedAccount={endpoint.Account} " +
-                    $"actualAccount={health.Account?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
-                    $"ready={health.IsReady} accountMatches={accountMatches} gapCount={health.GapCount} " +
-                    $"manualUiReady={health.ManualUiReady?.ToString() ?? "-"} " +
-                    $"manualUiCode={health.ManualUiCode ?? "-"} chartSymbol={health.ChartSymbol ?? "-"} " +
-                    $"chartHwnd={health.ChartHwnd?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
-                    $"panelFound={health.PanelFound?.ToString() ?? "-"} dpi={health.Dpi?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
-                    $"coordinateSource={health.CoordinateSource ?? "-"}");
             }
             catch (Exception ex)
             {
                 SafeVmLog(
-                    $"[MT5_BRIDGE_HEALTH][WARN] exchange={exchange.Name} room={endpoint.RoomId} " +
-                    $"expectedAccount={endpoint.Account} ready=False error=\"{ex.Message}\"");
+                    $"[MT5_BRIDGE_HEALTH][WAIT] exchange={exchange.Name} room={endpoint.RoomId} " +
+                    $"expectedAccount={endpoint.Account} pingError=\"{ex.Message}\"");
             }
         }
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        bool allReady;
+        do
+        {
+            allReady = mt5Exchanges.All(exchange =>
+            {
+                var endpoint = options.ResolveEndpoint(exchange.Name);
+                var health = provider.Resolve(exchange.Name).Health;
+                return health.IsReady &&
+                       health.Account == endpoint.Account &&
+                       health.GapCount == 0 &&
+                       health.ManualUiReady is true;
+            });
+            if (allReady)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        } while (DateTime.UtcNow < deadline);
+
+        var failures = new List<string>();
+        foreach (var exchange in mt5Exchanges)
+        {
+            var endpoint = options.ResolveEndpoint(exchange.Name);
+            var health = provider.Resolve(exchange.Name).Health;
+            var accountMatches = health.Account == endpoint.Account;
+            var ready = health.IsReady && accountMatches &&
+                        health.GapCount == 0 && health.ManualUiReady is true;
+            SafeVmLog(
+                $"[MT5_BRIDGE_HEALTH][{(ready ? "INFO" : "WARN")}] " +
+                $"exchange={exchange.Name} room={endpoint.RoomId} expectedAccount={endpoint.Account} " +
+                $"actualAccount={health.Account?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
+                $"ready={health.IsReady} accountMatches={accountMatches} gapCount={health.GapCount} " +
+                $"manualUiReady={health.ManualUiReady?.ToString() ?? "-"} " +
+                $"manualUiCode={health.ManualUiCode ?? "-"} chartSymbol={health.ChartSymbol ?? "-"} " +
+                $"chartHwnd={health.ChartHwnd?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
+                $"panelFound={health.PanelFound?.ToString() ?? "-"} dpi={health.Dpi?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
+                $"coordinateSource={health.CoordinateSource ?? "-"}");
+            if (!ready)
+            {
+                failures.Add(
+                    $"{exchange.Name}: ready={health.IsReady}, accountMatches={accountMatches}, " +
+                    $"gapCount={health.GapCount}, manualUi={health.ManualUiCode ?? "not_reported"}");
+            }
+        }
+
+        if (failures.Count == 0)
+        {
+            return true;
+        }
+
+        var reason = string.Join("; ", failures);
+        SafeVmLog($"[MT5_BRIDGE_START][BLOCKED] {reason}");
+        System.Windows.MessageBox.Show(
+            "Không thể bắt đầu Auto Trading vì MT5 Bridge chưa sẵn sàng." +
+            Environment.NewLine + Environment.NewLine + reason,
+            "MT5 Bridge chưa sẵn sàng",
+            System.Windows.MessageBoxButton.OK,
+            System.Windows.MessageBoxImage.Warning);
+        return false;
     }
 
     // ===== Connection kill-switch =====
@@ -1087,6 +1145,13 @@ public sealed class DashboardViewModel : ObservableObject
 
         _tradeSessionFileLogger.StartSession(DateTimeOffset.Now, _normalizedHostName);
         _tradeSessionFileLogger.Log("Trading logic start confirmed by user");
+        AllowTradeOperations = false;
+
+        if (!await WaitForConfiguredMt5BridgeHealthAsync())
+        {
+            _tradeSessionFileLogger.StopSession(DateTimeOffset.Now);
+            return;
+        }
 
         ResetTradingLogicState();
         // Wipe display state on Start only — Stop giữ nguyên để xem P&L cuối session
@@ -1108,7 +1173,6 @@ public sealed class DashboardViewModel : ObservableObject
 
         // Chỉ leg MT4 cần HWND. Leg MT5 được kiểm tra bằng bridge health riêng.
         RunHwndHealthCheck("start");
-        await LogConfiguredMt5BridgeHealthAsync();
 
         // Connection kill-switch: bật cho phép lệnh + reset monitor. Từ đây poll order-info
         // sẽ giám sát kết nối liên tục và tự OFF switch nếu 1 trong 2 sàn rớt.
