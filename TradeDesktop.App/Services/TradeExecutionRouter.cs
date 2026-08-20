@@ -262,13 +262,6 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             return true;
         }
 
-        // MT5 closes by position ticket through OCTBridge. It does not depend on
-        // the terminal trade-table row, which is an MT4 UI automation concern.
-        if (source.Platform == TradeLegPlatform.Mt5)
-        {
-            return true;
-        }
-
         if (string.IsNullOrWhiteSpace(source.TradeMapName))
         {
             error = $"Close {source.Exchange} cancelled: missing trade map for ticket={source.Ticket}";

@@ -741,9 +741,10 @@ manual/recovery; strategic multi-slot close bắt buộc lookup đúng ticket v�
 
 #### 13.8.1 HWND profile theo slot
 
-HWND chỉ là điều kiện thực thi của leg `MT4`. Leg `MT5` gửi lệnh qua shared-memory OCTBridge nên
-không bị chặn bởi Chart/Trade HWND cũ. Với cấu hình hỗn hợp, health-check chỉ xét HWND của sàn đang
-dùng MT4; khi cả A/B dùng MT5, Manual và Auto không yêu cầu `manualHwndColumns` hoàn chỉnh.
+MT5 Open dùng OCTBridge để arm/xác nhận deal và dùng Chart HWND để click One-Click Trading. MT5
+Close dùng OCTBridge để arm/xác nhận deal nhưng vẫn cần Trade HWND + row hiện tại để phát lệnh đóng
+qua UI. Vì vậy cả Chart/Trade HWND phải hợp lệ cho luồng MT5 đầy đủ; Trade HWND có thể stale khi MT5
+tạo lại cửa sổ và phải được cập nhật trong cấu hình.
 
 Minimal Open A/B là log xác nhận dispatch thành công, chỉ được ghi khi kết quả pair thành công và cả
 hai leg đều `Success=true`. Execution timeout, fail cả hai hoặc partial-open không tăng STT Open và
@@ -767,7 +768,14 @@ c3 -> t3
 
 Không được ghép chéo như `c1 -> t2`. Auto Close, Manual Close theo pair, legacy Close đã resolve
 được ticket, pending-close retry, partial-open rollback và external-partial recovery đều phải resolve
-Trade HWND từ slot/profile mở. Việc reload hoặc sửa config không đổi profile của slot đang chạy.
+Trade HWND từ slot/profile mở. Riêng pending-close recovery, nếu runtime config đã được sửa sang HWND
+mới thì retry được phép rebind sang HWND hiện hành và ghi `[MT5_HWND][REFRESHED]`. Row luôn được đọc
+lại theo ticket từ MMF ngay trước mỗi dispatch; không dùng row cũ và không fallback row 0.
+
+Khi một chân đã đóng, pending-close polling là owner duy nhất của ticket còn lại.
+`ExternalPartialCloseRecovery` không dispatch trùng. Retry dùng backoff `1, 2, 4, 8, 16, 30...` giây
+(cap 30 giây) cho tới khi MMF xác nhận ticket đã biến mất. Nếu HWND stale, người vận hành cập nhật
+Trade HWND trong config; lần retry kế tiếp tự lấy giá trị mới mà không cần restart ứng dụng.
 
 `current_slots` persist thêm `hwndProfileIndex`, `chartHwndA/B` và `tradeHwndA/B`; vì vậy slot mới
 giữ đúng mapping qua restart. Snapshot legacy tạo trước khi có các field này vẫn deserialize được,

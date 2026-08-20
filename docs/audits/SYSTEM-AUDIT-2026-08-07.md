@@ -109,6 +109,11 @@ Post-open được check ở close scan và re-check tại router bằng cùng d
 Partial-open rollback khoảng 2 giây với default open timeout 1 giây + recheck 1 giây là Recovery,
 không chịu Auto post-open.
 
+Partial-close recovery dùng pending-close polling làm owner duy nhất cho ticket còn lại; external
+partial reconcile phải nhường khi owner này tồn tại. Trước mỗi retry, row được resolve lại theo ticket
+từ MMF. Retry dùng exponential backoff 1..30 giây và có thể rebind sang Trade HWND runtime mới nếu
+người vận hành đã cập nhật cấu hình sau khi HWND cũ bị stale.
+
 ## Signal và close selection
 
 - Open: `GapSignalConfirmationEngine`, toggle, qualifying count, quota/schedule/opposite checks,

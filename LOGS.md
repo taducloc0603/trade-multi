@@ -212,7 +212,11 @@
 - Hai dòng Minimal `OPEN A/B` chỉ được ghi khi cả hai leg thực thi thành công. Timeout, fail cả hai
   hoặc partial-open chỉ ghi outcome `SIGNAL_OPEN_FAILED`; không hiển thị câu giống lệnh đã mở.
 - Khi Start, mỗi leg MT5 có log `[MT5_BRIDGE_HEALTH][INFO|WARN]` chứa exchange, room, expected/actual
-  account và trạng thái ready. HWND invalid chỉ chặn leg MT4.
+  account và trạng thái ready. MT5 Open cần Chart HWND; MT5 Close manual-UI cần thêm Trade HWND.
+- Partial Close chỉ có một owner là pending-close recovery. `[EXTERNAL CLOSE] ... Guard7` cho biết
+  external reconcile đã nhường ticket cho owner này. Retry refresh row theo ticket, dùng backoff tối
+  đa 30 giây và có `[CLOSE_RECOVERY][BACKOFF]`. Nếu config được cập nhật từ HWND stale sang HWND mới,
+  log có `[MT5_HWND][REFRESHED]` và retry kế tiếp dùng HWND mới.
 
 ---
 

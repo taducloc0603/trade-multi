@@ -233,6 +233,8 @@ public sealed class DashboardViewModel : ObservableObject
         public DateTimeOffset LastCheckedAtLocal { get; set; }
         public int ClosePendingTimeoutMs { get; set; }
         public int RetryChecks { get; set; }
+        public bool RetryInFlight { get; set; }
+        public DateTimeOffset NextRetryAtLocal { get; set; }
         public bool ExhaustedLogged { get; set; }
         public bool IsResolved { get; set; }
 
@@ -4838,7 +4840,7 @@ public sealed class DashboardViewModel : ObservableObject
 
         foreach (var state in _pendingClosePairById.Values)
         {
-            if (state.IsResolved)
+            if (state.IsResolved || state.RetryInFlight || now < state.NextRetryAtLocal)
             {
                 continue;
             }
@@ -4899,6 +4901,7 @@ public sealed class DashboardViewModel : ObservableObject
                             TradeType: state.TradeTypeA,
                             Symbol: state.SymbolA,
                             Volume: state.VolumeA));
+                        state.RetryInFlight = true;
                     }
                 }
                 else if (!string.IsNullOrWhiteSpace(state.TradeMapNameA) &&
@@ -4917,10 +4920,13 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeType: state.TradeTypeA,
                         Symbol: state.SymbolA,
                         Volume: state.VolumeA));
+                    state.RetryInFlight = true;
                 }
             }
 
-            if (needCheckB)
+            // Dispatch at most one recovery leg for a pair per polling cycle.
+            // This keeps ownership deterministic if both legs still need a retry.
+            if (!state.RetryInFlight && needCheckB)
             {
                 if (TryIsTicketStillOpen(state.TradeMapNameB, state.TicketB!.Value, out var isStillOpenB))
                 {
@@ -4944,6 +4950,7 @@ public sealed class DashboardViewModel : ObservableObject
                             TradeType: state.TradeTypeB,
                             Symbol: state.SymbolB,
                             Volume: state.VolumeB));
+                        state.RetryInFlight = true;
                     }
                 }
                 else if (!string.IsNullOrWhiteSpace(state.TradeMapNameB) &&
@@ -4962,6 +4969,7 @@ public sealed class DashboardViewModel : ObservableObject
                         TradeType: state.TradeTypeB,
                         Symbol: state.SymbolB,
                         Volume: state.VolumeB));
+                    state.RetryInFlight = true;
                 }
             }
 
@@ -5636,6 +5644,17 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
+        // Pending-close polling is the single owner once a close request has
+        // been registered. Do not let external reconciliation dispatch a
+        // second close for the same surviving ticket.
+        if (HasPendingCloseOwner(remainingTicket.Value))
+        {
+            _externalPartialCloseStreak = 0;
+            LogExternalCloseGuardBlockOnce(
+                $"Guard7: ticket={remainingTicket.Value} already owned by pending-close recovery");
+            return;
+        }
+
         // Reset log throttle khi tất cả guards đã pass
         _lastExternalCloseGuardBlockReason = string.Empty;
 
@@ -5940,10 +5959,28 @@ public sealed class DashboardViewModel : ObservableObject
 
         if (ShouldSkipTradeOp($"recovery-retry-close pairId={action.PairId}"))
         {
+            state.RetryInFlight = false;
+            state.NextRetryAtLocal = DateTimeOffset.Now.AddSeconds(1);
             return;
         }
 
         state.RetryChecks++;
+        var retryNumber = state.RetryChecks;
+        var tradeHwnd = ResolveCurrentRecoveryTradeHwnd(action);
+        if (!string.Equals(tradeHwnd, action.TradeHwnd, StringComparison.OrdinalIgnoreCase))
+        {
+            SafeVmLog(
+                $"[MT5_HWND][REFRESHED] exchange={action.Exchange} ticket={action.Ticket} " +
+                $"oldHwnd={action.TradeHwnd} newHwnd={tradeHwnd} source=runtime-config");
+            if (string.Equals(action.Exchange, "A", StringComparison.OrdinalIgnoreCase))
+            {
+                state.TradeHwndA = tradeHwnd;
+            }
+            else
+            {
+                state.TradeHwndB = tradeHwnd;
+            }
+        }
 
         var appCloseRequestTimeLocal = DateTimeOffset.Now;
         var appCloseRequestRawMs = Environment.TickCount64;
@@ -5953,7 +5990,7 @@ public sealed class DashboardViewModel : ObservableObject
             var expectedClose = ResolveExpectedClosePrice(_runtimeConfigState.CurrentDashboardMetrics, isExchangeA, action.TradeType.Value);
             RegisterPendingCloseRequest(
                 tradeMapName: action.TradeMapName,
-                tradeHwnd: action.TradeHwnd,
+                tradeHwnd: tradeHwnd,
                 ticket: action.Ticket,
                 tradeType: action.TradeType.Value,
                 expectedPrice: expectedClose,
@@ -5968,13 +6005,16 @@ public sealed class DashboardViewModel : ObservableObject
 
         var rowIndex = FindRowIndexForTicket(action.TradeMapName, action.Ticket);
 
-        var closeResult = await _tradeExecutionRouter.ClosePairAsync(
-            new TradeClosePairRequest(
+        ManualTradeResult closeResult;
+        try
+        {
+            closeResult = await _tradeExecutionRouter.ClosePairAsync(
+                new TradeClosePairRequest(
                 LegA: string.Equals(action.Exchange, "A", StringComparison.OrdinalIgnoreCase)
                     ? new TradeCloseLegRequest(
                         Exchange: "A",
                         Platform: action.Platform,
-                        TradeHwnd: action.TradeHwnd,
+                        TradeHwnd: tradeHwnd,
                         Ticket: action.Ticket,
                         Action: TradeLegAction.Close,
                         RowIndex: rowIndex,
@@ -5984,7 +6024,7 @@ public sealed class DashboardViewModel : ObservableObject
                     ? new TradeCloseLegRequest(
                         Exchange: "B",
                         Platform: action.Platform,
-                        TradeHwnd: action.TradeHwnd,
+                        TradeHwnd: tradeHwnd,
                         Ticket: action.Ticket,
                         Action: TradeLegAction.Close,
                         RowIndex: rowIndex,
@@ -5996,8 +6036,19 @@ public sealed class DashboardViewModel : ObservableObject
                     action.PairId,
                     action.SlotNumber,
                     action.Ticket,
-                    $"retry-check-{state.RetryChecks}")),
-            cancellationToken);
+                    $"retry-check-{retryNumber}")),
+                cancellationToken);
+        }
+        finally
+        {
+            state.RetryInFlight = false;
+            var backoff = PendingCloseRetryPolicy.GetBackoff(retryNumber);
+            state.NextRetryAtLocal = DateTimeOffset.Now.Add(backoff);
+            SafeVmLog(
+                $"[CLOSE_RECOVERY][BACKOFF] pairId={action.PairId} " +
+                $"exchange={action.Exchange} ticket={action.Ticket} " +
+                $"attempt={retryNumber} nextRetryMs={(long)backoff.TotalMilliseconds}");
+        }
 
         if (closeResult.IsDispatchBlocked)
         {
@@ -6015,6 +6066,20 @@ public sealed class DashboardViewModel : ObservableObject
         });
 
         Debug.WriteLine($"[ExecClose][PendingRetry] pairId={action.PairId}, exchange={action.Exchange}, retryChecks={state.RetryChecks}, success={closeResult.Success}");
+    }
+
+    private bool HasPendingCloseOwner(ulong ticket)
+        => _pendingClosePairById.Values.Any(state =>
+            !state.IsResolved &&
+            ((state.TicketA == ticket && !state.CloseConfirmedA) ||
+             (state.TicketB == ticket && !state.CloseConfirmedB)));
+
+    private string ResolveCurrentRecoveryTradeHwnd(PendingCloseRetryAction action)
+    {
+        var current = string.Equals(action.Exchange, "A", StringComparison.OrdinalIgnoreCase)
+            ? _runtimeConfigState.CurrentTradeHwndA
+            : _runtimeConfigState.CurrentTradeHwndB;
+        return string.IsNullOrWhiteSpace(current) ? action.TradeHwnd : current.Trim();
     }
 
     private bool TryIsTicketStillOpen(string? tradeMapName, ulong ticket, out bool isStillOpen)

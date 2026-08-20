@@ -175,8 +175,11 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
             if (!TryParseHwnd(request.TradeHwnd, out var tradeHwnd) ||
                 NativeMethodsMt5.IsValidWindow(tradeHwnd) != 1)
             {
+                SafeLog(
+                    $"[MT5_HWND][STALE] exchange={request.Exchange} " +
+                    $"ticket={request.Ticket} tradeHwnd={request.TradeHwnd}");
                 return Failure(request.Exchange, "CLOSE", "invalid",
-                    $"MT5 Trade HWND is invalid: {request.TradeHwnd}", request.Ticket);
+                    $"MT5_TRADE_HWND_STALE: {request.TradeHwnd}", request.Ticket);
             }
             if (!request.RowIndex.HasValue)
             {
