@@ -182,6 +182,27 @@ public sealed record Mt5BridgeInboundMessage : Mt5BridgeMessage
     [JsonPropertyName("lane")]
     public int? Lane { get; init; }
 
+    [JsonPropertyName("manual_ui_ready")]
+    public bool? ManualUiReady { get; init; }
+
+    [JsonPropertyName("manual_ui_code")]
+    public string? ManualUiCode { get; init; }
+
+    [JsonPropertyName("chart_symbol")]
+    public string? ChartSymbol { get; init; }
+
+    [JsonPropertyName("chart_hwnd")]
+    public long? ChartHwnd { get; init; }
+
+    [JsonPropertyName("panel_found")]
+    public bool? PanelFound { get; init; }
+
+    [JsonPropertyName("dpi")]
+    public int? Dpi { get; init; }
+
+    [JsonPropertyName("coordinate_source")]
+    public string? CoordinateSource { get; init; }
+
     [JsonPropertyName("ticket")]
     public ulong? Ticket { get; init; }
 

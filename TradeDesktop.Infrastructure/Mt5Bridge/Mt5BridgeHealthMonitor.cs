@@ -9,10 +9,18 @@ public sealed record Mt5BridgeHealth(
     uint? WriterUid,
     int? Lane,
     long GapCount,
-    long RestartCount)
+    long RestartCount,
+    bool? ManualUiReady,
+    string? ManualUiCode,
+    string? ChartSymbol,
+    long? ChartHwnd,
+    bool? PanelFound,
+    int? Dpi,
+    string? CoordinateSource)
 {
     public static Mt5BridgeHealth Offline { get; } =
-        new(false, null, null, null, null, null, null, 0, 0);
+        new(false, null, null, null, null, null, null, 0, 0,
+            null, null, null, null, null, null, null);
 }
 
 public sealed class Mt5BridgeHealthMonitor
@@ -69,7 +77,14 @@ public sealed class Mt5BridgeHealthMonitor
                 WriterUid: message.WriterUid ?? _health.WriterUid,
                 Lane: message.Lane ?? _health.Lane,
                 GapCount: gapCount,
-                RestartCount: restartCount);
+                RestartCount: restartCount,
+                ManualUiReady: message.ManualUiReady ?? _health.ManualUiReady,
+                ManualUiCode: message.ManualUiCode ?? _health.ManualUiCode,
+                ChartSymbol: message.ChartSymbol ?? _health.ChartSymbol,
+                ChartHwnd: message.ChartHwnd ?? _health.ChartHwnd,
+                PanelFound: message.PanelFound ?? _health.PanelFound,
+                Dpi: message.Dpi ?? _health.Dpi,
+                CoordinateSource: message.CoordinateSource ?? _health.CoordinateSource);
         }
     }
 

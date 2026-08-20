@@ -179,6 +179,34 @@ public sealed class Mt5BridgeTransportTests
         Assert.Equal(1, monitor.Current.RestartCount);
     }
 
+    [Fact]
+    public void Health_TracksManualUiReadinessFromHeartbeat()
+    {
+        var monitor = new Mt5BridgeHealthMonitor();
+        monitor.Observe(new Mt5BridgeInboundMessage
+        {
+            Type = "heartbeat",
+            Account = 9611185,
+            ManualUiReady = true,
+            ManualUiCode = "ready",
+            ChartSymbol = "XAUUSD",
+            ChartHwnd = 591424,
+            PanelFound = true,
+            Dpi = 96,
+            CoordinateSource = "scaled_chart_property"
+        }, 0);
+
+        var health = monitor.Current;
+        Assert.True(health.IsReady);
+        Assert.True(health.ManualUiReady);
+        Assert.Equal("ready", health.ManualUiCode);
+        Assert.Equal("XAUUSD", health.ChartSymbol);
+        Assert.Equal(591424, health.ChartHwnd);
+        Assert.True(health.PanelFound);
+        Assert.Equal(96, health.Dpi);
+        Assert.Equal("scaled_chart_property", health.CoordinateSource);
+    }
+
     private sealed class SharedBuffer
     {
         private readonly byte[] _bytes = new byte[Mt5BridgeLayout.RegionSize];

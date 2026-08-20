@@ -951,7 +951,12 @@ public sealed class DashboardViewModel : ObservableObject
                     $"[MT5_BRIDGE_HEALTH][{(health.IsReady && accountMatches ? "INFO" : "WARN")}] " +
                     $"exchange={exchange.Name} room={endpoint.RoomId} expectedAccount={endpoint.Account} " +
                     $"actualAccount={health.Account?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
-                    $"ready={health.IsReady} accountMatches={accountMatches} gapCount={health.GapCount}");
+                    $"ready={health.IsReady} accountMatches={accountMatches} gapCount={health.GapCount} " +
+                    $"manualUiReady={health.ManualUiReady?.ToString() ?? "-"} " +
+                    $"manualUiCode={health.ManualUiCode ?? "-"} chartSymbol={health.ChartSymbol ?? "-"} " +
+                    $"chartHwnd={health.ChartHwnd?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
+                    $"panelFound={health.PanelFound?.ToString() ?? "-"} dpi={health.Dpi?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
+                    $"coordinateSource={health.CoordinateSource ?? "-"}");
             }
             catch (Exception ex)
             {

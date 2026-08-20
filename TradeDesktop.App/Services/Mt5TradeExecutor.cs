@@ -50,7 +50,8 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         try
         {
             var transport = _transportProvider.Resolve(request.Exchange);
-            var healthError = await EnsureReadyAsync(transport, endpoint, cancellationToken);
+            var healthError = await EnsureReadyAsync(
+                transport, endpoint, requireManualUi: true, cancellationToken);
             if (healthError is not null)
             {
                 return Failure(request.Exchange, action, "offline", healthError);
@@ -115,7 +116,8 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         try
         {
             var transport = _transportProvider.Resolve(request.Exchange);
-            var healthError = await EnsureReadyAsync(transport, endpoint, cancellationToken);
+            var healthError = await EnsureReadyAsync(
+                transport, endpoint, requireManualUi: false, cancellationToken);
             if (healthError is not null)
             {
                 return Failure(request.Exchange, "CLOSE", "offline", healthError, request.Ticket);
@@ -193,6 +195,7 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
     private async Task<string?> EnsureReadyAsync(
         IMt5BridgeTransport transport,
         Mt5BridgeEndpointOptions endpoint,
+        bool requireManualUi,
         CancellationToken cancellationToken)
     {
         if (endpoint.Account <= 0)
@@ -225,6 +228,10 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         if (health.GapCount > 0)
         {
             return $"MT5 Bridge shared-memory gap detected: {health.GapCount}";
+        }
+        if (requireManualUi && health.ManualUiReady is not true)
+        {
+            return $"MT5 manual UI is not ready: {health.ManualUiCode ?? "not_reported"}";
         }
         return null;
     }

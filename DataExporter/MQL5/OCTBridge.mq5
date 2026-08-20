@@ -4,7 +4,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024"
 #property link      ""
-#property version   "1.20"
+#property version   "2.00"
 #property strict
 
 #include "SharedMem.mqh"
@@ -14,10 +14,89 @@ input bool   InpDebugLog            = false;
 input ulong  InpMagicNumber         = 88005001;
 input uint   InpMaxDeviationPoints  = 20;
 input int    InpPendingTimeoutMs     = 10000;
+input bool   InpAutoDpiScale        = true;
+input int    InpBuyOffsetX          = 160;
+input int    InpBuyOffsetY          = 62;
+input int    InpSellOffsetX         = 50;
+input int    InpSellOffsetY         = 62;
+input int    InpVolumeOffsetX       = 105;
+input int    InpVolumeOffsetY       = 33;
+input double InpVolumeProbeValue    = 0.0;
 
 #define BRIDGE_HEALTH_INTERVAL_MS 500
 #define BRIDGE_MAX_PENDING        32
 #define BRIDGE_DEDUP_CAPACITY     128
+#define BRIDGE_MANUAL_PENDING     4
+#define WM_MOUSEMOVE              0x0200
+#define WM_LBUTTONDOWN            0x0201
+#define WM_LBUTTONUP              0x0202
+#define WM_KEYDOWN                0x0100
+#define WM_KEYUP                  0x0101
+#define WM_CHAR                   0x0102
+#define MK_LBUTTON                0x0001
+#define VK_CONTROL                0x0011
+#define VK_A                      0x0041
+#define VK_C                      0x0043
+#define VK_RETURN                 0x000D
+#define VK_ESCAPE                 0x001B
+#define WM_SETTEXT                0x000C
+#define EM_SETSEL                 0x00B1
+#define KEYEVENTF_KEYUP           0x0002
+#define GA_ROOT                   2
+#define CF_UNICODETEXT            13
+
+struct BridgeWindowRect
+{
+   int left;
+   int top;
+   int right;
+   int bottom;
+};
+
+struct BridgeManualUiProbe
+{
+   bool panel_found;
+   bool coordinates_measured;
+   long chart_id;
+   long chart_hwnd;
+   long panel_hwnd;
+   int dpi;
+   int panel_width;
+   int panel_height;
+   int chart_width;
+   int chart_height;
+   int buy_x;
+   int buy_y;
+   int sell_x;
+   int sell_y;
+};
+
+#import "user32.dll"
+bool PostMessageW(long hWnd, uint Msg, ulong wParam, long lParam);
+long FindWindowExW(long hwndParent, long hwndChildAfter,
+                   string lpszClass, string lpszWindow);
+bool GetWindowRect(long hWnd, BridgeWindowRect &lpRect);
+bool ScreenToClient(long hWnd, int &lpPoint[]);
+bool IsWindow(long hWnd);
+long GetFocus();
+long SendMessageW(long hWnd, uint Msg, ulong wParam, long lParam);
+long SendMessageW(long hWnd, uint Msg, ulong wParam, string lParam);
+long GetAncestor(long hWnd, uint gaFlags);
+bool SetForegroundWindow(long hWnd);
+long SetFocus(long hWnd);
+short VkKeyScanW(ushort ch);
+void keybd_event(uchar virtualKey, uchar scanCode, uint flags, ulong extraInfo);
+bool OpenClipboard(long hWndNewOwner);
+long GetClipboardData(uint format);
+bool EmptyClipboard();
+bool CloseClipboard();
+#import
+
+#import "kernel32.dll"
+ulong GlobalLock(long memoryHandle);
+bool GlobalUnlock(long memoryHandle);
+int lstrlenW(ulong value);
+#import
 
 struct BridgePendingExecution
 {
@@ -48,6 +127,26 @@ struct BridgeCachedResult
    string detail;
 };
 
+struct BridgeManualOpenExecution
+{
+   bool   active;
+   bool   click_dispatched;
+   string request_id;
+   string symbol;
+   string side;
+   double volume;
+   long   chart_id;
+   long   chart_hwnd;
+   int    click_x;
+   int    click_y;
+   int    baseline_count;
+   double baseline_volume;
+   ulong  baseline_hash;
+   ulong  prepared_ms;
+   ulong  dispatched_ms;
+   datetime dispatched_server_time;
+};
+
 CSharedMemRing   g_shm;
 string           g_roomId;
 ulong            g_generation = 0;
@@ -56,6 +155,8 @@ long             g_accountLogin = 0;
 BridgePendingExecution g_pending[BRIDGE_MAX_PENDING];
 BridgeCachedResult g_dedup[BRIDGE_DEDUP_CAPACITY];
 int              g_dedupNext = 0;
+string           g_lastManualUiCode = "";
+BridgeManualOpenExecution g_manualOpen[BRIDGE_MANUAL_PENDING];
 
 uint BuildWriterUid(const string identity)
 {
@@ -97,6 +198,9 @@ int OnInit()
    PublishBridgeState("bridge_ready");
    Print("MT5 Bridge ready: room=", g_roomId, " account=", g_accountLogin,
          " generation=", g_generation, " lane=", g_shm.MyLane());
+   if(InpDebugLog) LogManualUiProbe(ChartID());
+   if(InpDebugLog && InpVolumeProbeValue > 0)
+      ProbeSetManualUiVolume(ChartID(), InpVolumeProbeValue);
    return INIT_SUCCEEDED;
 }
 
@@ -126,6 +230,7 @@ void OnTimer()
      }
 
    SweepPendingTimeouts(now);
+   SweepManualOpenTimeouts(now);
 }
 
 void ProcessRequest(const string json_msg)
@@ -196,7 +301,8 @@ void ProcessOpen(const string json_msg)
       return;
      }
 
-   if(FindPendingByRequestId(request_id) >= 0)
+   if(FindPendingByRequestId(request_id) >= 0 ||
+      FindManualOpenByRequestId(request_id) >= 0)
      {
       SendExecutionResult(request_id, "duplicate", 0, 0, 0, 0, 0,
                           "request_in_progress");
@@ -209,7 +315,9 @@ void ProcessOpen(const string json_msg)
    double volume = StringToDouble(ExtractJsonString(json_msg, "volume"));
    ulong expires_ms = (ulong)StringToInteger(ExtractJsonString(json_msg, "expires_ms"));
 
-   string error = ValidateOpen(account, symbol, side, volume, expires_ms);
+   int manual_index = -1;
+   string error = PrepareManualOpenExecution(
+      request_id, account, symbol, side, volume, expires_ms, manual_index);
    if(StringLen(error) > 0)
      {
       string status = (error == "request_expired") ? "expired" : "invalid";
@@ -217,68 +325,17 @@ void ProcessOpen(const string json_msg)
       return;
      }
 
-   int pending_index = AllocatePending();
-   if(pending_index < 0)
-     {
-      FinalizeImmediate(request_id, "rejected", 0, 0, 0, volume, 0,
-                        "pending_queue_full");
-      return;
-     }
-
    SendExecutionResult(request_id, "received", 0, 0, 0, volume, 0, "accepted");
-
-   MqlTradeRequest request;
-   MqlTradeResult result;
-   MqlTradeCheckResult check;
-   ZeroMemory(request);
-   ZeroMemory(result);
-   ZeroMemory(check);
-
-   request.action = TRADE_ACTION_DEAL;
-   request.magic = InpMagicNumber;
-   request.symbol = symbol;
-   request.volume = volume;
-   request.deviation = InpMaxDeviationPoints;
-   request.type = (side == "BUY") ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   request.price = (side == "BUY")
-                   ? SymbolInfoDouble(symbol, SYMBOL_ASK)
-                   : SymbolInfoDouble(symbol, SYMBOL_BID);
-   request.type_time = ORDER_TIME_GTC;
-   request.type_filling = ResolveFillingMode(symbol);
-   request.comment = "OCTB:" + StringSubstr(request_id, 0, 20);
-
-   if(!OrderCheck(request, check))
+   error = DispatchPreparedManualOpen(manual_index);
+   if(StringLen(error) > 0)
      {
-      ReleasePending(pending_index);
-      FinalizeImmediate(request_id, "rejected", 0, 0, 0, volume,
-                        check.retcode, SanitizeDetail(check.comment));
+      ResetManualOpenExecution(manual_index);
+      FinalizeImmediate(request_id, "rejected", 0, 0, 0, volume, 0, error);
       return;
      }
 
-   g_pending[pending_index].active = true;
-   g_pending[pending_index].action = "open";
-   g_pending[pending_index].request_id = request_id;
-   g_pending[pending_index].symbol = symbol;
-   g_pending[pending_index].side = side;
-   g_pending[pending_index].volume = volume;
-   g_pending[pending_index].position_ticket = 0;
-   g_pending[pending_index].dispatched_ms = GetTickCount64();
-   g_pending[pending_index].timeout_reported = false;
-
-   if(!OrderSendAsync(request, result))
-     {
-      ReleasePending(pending_index);
-      FinalizeImmediate(request_id, "rejected", 0, 0, 0, volume,
-                        result.retcode, SanitizeDetail(result.comment));
-      return;
-     }
-
-   g_pending[pending_index].mt_request_id = result.request_id;
-   g_pending[pending_index].order_ticket = result.order;
-   g_pending[pending_index].deal_ticket = result.deal;
-
-   SendExecutionResult(request_id, "dispatched", result.order, result.deal,
-                       result.price, volume, result.retcode, "order_send_async");
+   SendExecutionResult(request_id, "dispatched", 0, 0, 0, volume, 0,
+                       "manual_ui_click_dispatched");
 }
 
 string ValidateOpen(const long account, const string symbol, const string side,
@@ -515,6 +572,10 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest &request,
                         const MqlTradeResult &result)
 {
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD &&
+      TryConfirmManualOpenFromDeal(trans.deal))
+      return;
+
    int index = -1;
    if(result.request_id > 0)
       index = FindPendingByMtRequestId(result.request_id);
@@ -733,10 +794,33 @@ void PublishBridgeState(const string message_type)
 {
    if(!g_shm.IsReady()) return;
    ulong now = GetTickCount64();
+   BridgeManualUiProbe probe;
+   string manual_ui_code = EvaluateManualUiReadiness(ChartID(), probe);
+   bool manual_ui_ready = (manual_ui_code == "ready");
+   string chart_symbol = SanitizeDetail(ChartSymbol(ChartID()));
+   string coordinate_source = probe.coordinates_measured
+      ? "measured_child_window"
+      : (probe.panel_found ? "scaled_chart_property" : "unavailable");
+   if(InpDebugLog && manual_ui_code != g_lastManualUiCode)
+     {
+      PrintFormat(
+         "[MANUAL_UI][HEALTH] ready=%s code=%s symbol=%s chartHwnd=%I64d " +
+         "panelFound=%s dpi=%d source=%s",
+         manual_ui_ready ? "true" : "false", manual_ui_code,
+         chart_symbol, probe.chart_hwnd,
+         probe.panel_found ? "true" : "false", probe.dpi,
+         coordinate_source);
+      g_lastManualUiCode = manual_ui_code;
+     }
    string message = StringFormat(
-      "{\"v\":1,\"type\":\"%s\",\"account\":%I64d,\"generation\":%I64u,\"ea_ms\":%I64u,\"writer_uid\":%u,\"lane\":%d}",
+      "{\"v\":1,\"type\":\"%s\",\"account\":%I64d,\"generation\":%I64u,\"ea_ms\":%I64u,\"writer_uid\":%u,\"lane\":%d," +
+      "\"manual_ui_ready\":%s,\"manual_ui_code\":\"%s\",\"chart_symbol\":\"%s\"," +
+      "\"chart_hwnd\":%I64d,\"panel_found\":%s,\"dpi\":%d,\"coordinate_source\":\"%s\"}",
       message_type, g_accountLogin, g_generation, now,
-      g_shm.WriterUid(), g_shm.MyLane());
+      g_shm.WriterUid(), g_shm.MyLane(),
+      manual_ui_ready ? "true" : "false", manual_ui_code, chart_symbol,
+      probe.chart_hwnd, probe.panel_found ? "true" : "false", probe.dpi,
+      coordinate_source);
    if(g_shm.Send(message)) g_lastHealthPublish = now;
 }
 
@@ -797,5 +881,605 @@ string ExtractJsonString(const string json, const string key)
    StringTrimLeft(value);
    StringTrimRight(value);
    return value;
+}
+
+long FindChartBySymbol(const string symbol)
+{
+   long chart_id = ChartFirst();
+   while(chart_id >= 0)
+     {
+      if(ChartSymbol(chart_id) == symbol) return chart_id;
+      chart_id = ChartNext(chart_id);
+     }
+   return 0;
+}
+
+int ScaleManualUiOffset(const int value, const int dpi)
+{
+   if(!InpAutoDpiScale || dpi <= 0) return value;
+   return (int)MathRound((double)value * (double)dpi / 96.0);
+}
+
+bool ProbeManualUi(const long chart_id, BridgeManualUiProbe &probe)
+{
+   ZeroMemory(probe);
+   probe.chart_id = chart_id;
+   probe.dpi = (int)TerminalInfoInteger(TERMINAL_SCREEN_DPI);
+   probe.chart_hwnd = ChartGetInteger(chart_id, CHART_WINDOW_HANDLE);
+   if(probe.chart_hwnd == 0 || !IsWindow(probe.chart_hwnd)) return false;
+   probe.chart_width = (int)ChartGetInteger(chart_id, CHART_WIDTH_IN_PIXELS);
+   probe.chart_height = (int)ChartGetInteger(chart_id, CHART_HEIGHT_IN_PIXELS);
+
+   probe.panel_hwnd = FindWindowExW(probe.chart_hwnd, 0, "#32770", NULL);
+   if(probe.panel_hwnd != 0 && IsWindow(probe.panel_hwnd))
+     {
+      BridgeWindowRect rect;
+      if(GetWindowRect(probe.panel_hwnd, rect))
+        {
+         int point[2];
+         point[0] = rect.left;
+         point[1] = rect.top;
+         if(ScreenToClient(probe.chart_hwnd, point))
+           {
+            probe.panel_width = rect.right - rect.left;
+            probe.panel_height = rect.bottom - rect.top;
+            int panel_left = (point[0] > 0) ? point[0] : 0;
+            int panel_top = (point[1] > 0) ? point[1] : 0;
+            probe.sell_x = panel_left + (int)MathRound(probe.panel_width * 0.15);
+            probe.buy_x = panel_left + (int)MathRound(probe.panel_width * 0.82);
+            probe.sell_y = panel_top + (int)MathRound(probe.panel_height * 0.65);
+            probe.buy_y = probe.sell_y;
+            probe.panel_found = true;
+            probe.coordinates_measured = true;
+            return true;
+           }
+        }
+     }
+
+   // Diagnostic fallback only. No trading action uses these coordinates in
+   // phase 1; later phases must fail closed unless readiness is verified.
+   probe.buy_x = ScaleManualUiOffset(InpBuyOffsetX, probe.dpi);
+   probe.buy_y = ScaleManualUiOffset(InpBuyOffsetY, probe.dpi);
+   probe.sell_x = ScaleManualUiOffset(InpSellOffsetX, probe.dpi);
+   probe.sell_y = ScaleManualUiOffset(InpSellOffsetY, probe.dpi);
+   probe.panel_found = (bool)ChartGetInteger(chart_id, CHART_SHOW_ONE_CLICK);
+
+   bool coordinates_inside_chart =
+      probe.buy_x >= 0 && probe.buy_y >= 0 &&
+      probe.sell_x >= 0 && probe.sell_y >= 0 &&
+      probe.buy_x < probe.chart_width && probe.sell_x < probe.chart_width &&
+      probe.buy_y < probe.chart_height && probe.sell_y < probe.chart_height;
+   return probe.panel_found && coordinates_inside_chart;
+}
+
+string EvaluateManualUiReadiness(const long chart_id, BridgeManualUiProbe &probe)
+{
+   bool geometry_ready = ProbeManualUi(chart_id, probe);
+   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ||
+      !AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
+      return "trading_not_allowed";
+   if(!MQLInfoInteger(MQL_TRADE_ALLOWED))
+      return "algo_trading_not_allowed";
+   if(!MQLInfoInteger(MQL_DLLS_ALLOWED))
+      return "dll_not_allowed";
+   if(probe.chart_hwnd == 0 || !IsWindow(probe.chart_hwnd))
+      return "chart_invalid";
+   if(!probe.panel_found)
+      return "oct_panel_not_found";
+   if(!geometry_ready)
+      return "coordinates_outside_chart";
+   return "ready";
+}
+
+void LogManualUiProbe(const long chart_id)
+{
+   BridgeManualUiProbe probe;
+   bool chart_ready = ProbeManualUi(chart_id, probe);
+   PrintFormat(
+      "[MANUAL_UI][PROBE] chart=%I64d symbol=%s chartHwnd=%I64d valid=%s " +
+      "panelFound=%s panelHwnd=%I64d panel=%dx%d chart=%dx%d dpi=%d " +
+      "buy=(%d,%d) sell=(%d,%d) source=%s",
+      chart_id, ChartSymbol(chart_id), probe.chart_hwnd,
+      chart_ready ? "true" : "false",
+      probe.panel_found ? "true" : "false", probe.panel_hwnd,
+      probe.panel_width, probe.panel_height,
+      probe.chart_width, probe.chart_height, probe.dpi,
+      probe.buy_x, probe.buy_y, probe.sell_x, probe.sell_y,
+      probe.coordinates_measured ? "measured_child_window" :
+         (probe.panel_found ? "scaled_chart_property" : "fallback_diagnostic"));
+}
+
+int ResolveVolumeDigits(const double step)
+{
+   for(int digits = 0; digits <= 8; digits++)
+      if(MathAbs(step - NormalizeDouble(step, digits)) < 0.000000001)
+         return digits;
+   return 8;
+}
+
+string ValidateManualUiVolume(const string symbol, const double volume)
+{
+   if(StringLen(symbol) == 0 || !SymbolSelect(symbol, true))
+      return "invalid_symbol";
+   double min_volume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double max_volume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   if(volume <= 0 || step <= 0 || volume < min_volume || volume > max_volume)
+      return "invalid_volume";
+   double steps = MathRound((volume - min_volume) / step);
+   double normalized = min_volume + steps * step;
+   if(MathAbs(normalized - volume) > step * 0.000001)
+      return "invalid_volume_step";
+   return "";
+}
+
+void PostManualUiKey(const long hwnd, const uint message, const uint key)
+{
+   PostMessageW(hwnd, message, key, 0);
+}
+
+void SendPhysicalKey(const uchar virtual_key)
+{
+   keybd_event(virtual_key, 0, 0, 0);
+   keybd_event(virtual_key, 0, KEYEVENTF_KEYUP, 0);
+}
+
+void SendPhysicalControlKey(const uchar virtual_key)
+{
+   keybd_event(VK_CONTROL, 0, 0, 0);
+   SendPhysicalKey(virtual_key);
+   keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+}
+
+bool SendPhysicalText(const string value)
+{
+   for(int index = 0; index < StringLen(value); index++)
+     {
+      short mapped = VkKeyScanW(StringGetCharacter(value, index));
+      if(mapped == -1) return false;
+      uchar virtual_key = (uchar)(mapped & 0xFF);
+      uchar modifiers = (uchar)((mapped >> 8) & 0xFF);
+      if((modifiers & 1) != 0) keybd_event(0x10, 0, 0, 0); // SHIFT
+      SendPhysicalKey(virtual_key);
+      if((modifiers & 1) != 0) keybd_event(0x10, 0, KEYEVENTF_KEYUP, 0);
+     }
+   return true;
+}
+
+bool ReadClipboardUnicodeText(string &value)
+{
+   value = "";
+   bool opened = false;
+   for(int attempt = 0; attempt < 5 && !opened; attempt++)
+     {
+      opened = OpenClipboard(0);
+      if(!opened) Sleep(20);
+     }
+   if(!opened) return false;
+
+   bool success = false;
+   long memory_handle = GetClipboardData(CF_UNICODETEXT);
+   if(memory_handle != 0)
+     {
+      ulong pointer = GlobalLock(memory_handle);
+      if(pointer != 0)
+        {
+         int length = lstrlenW(pointer);
+         if(length >= 0 && length <= 64)
+           {
+            uchar bytes[];
+            ArrayResize(bytes, length * 2);
+            if(length > 0)
+               kernel32::RtlMoveMemory(bytes, pointer, length * 2);
+            for(int index = 0; index < length; index++)
+              {
+               ushort character =
+                  (ushort)((uint)bytes[index * 2] |
+                           ((uint)bytes[index * 2 + 1] << 8));
+               value += ShortToString(character);
+              }
+            success = true;
+           }
+         GlobalUnlock(memory_handle);
+        }
+     }
+   CloseClipboard();
+   return success;
+}
+
+bool ClearClipboardText()
+{
+   bool opened = false;
+   for(int attempt = 0; attempt < 5 && !opened; attempt++)
+     {
+      opened = OpenClipboard(0);
+      if(!opened) Sleep(20);
+     }
+   if(!opened) return false;
+   bool cleared = EmptyClipboard();
+   CloseClipboard();
+   return cleared;
+}
+
+bool ReadBackManualUiVolume(const long chart_hwnd,
+                            const long mouse_param,
+                            const double expected_volume,
+                            const double volume_step,
+                            string &actual_text)
+{
+   actual_text = "";
+   PostMessageW(chart_hwnd, WM_MOUSEMOVE, 0, mouse_param);
+   PostMessageW(chart_hwnd, WM_LBUTTONDOWN, MK_LBUTTON, mouse_param);
+   Sleep(40);
+   PostMessageW(chart_hwnd, WM_LBUTTONUP, 0, mouse_param);
+   Sleep(60);
+   SendPhysicalControlKey(VK_A);
+   if(!ClearClipboardText())
+     {
+      SendPhysicalKey(VK_ESCAPE);
+      return false;
+     }
+   SendPhysicalControlKey(VK_C);
+   Sleep(60);
+   bool copied = ReadClipboardUnicodeText(actual_text);
+   SendPhysicalKey(VK_ESCAPE);
+   if(!copied) return false;
+
+   StringTrimLeft(actual_text);
+   StringTrimRight(actual_text);
+   string normalized_text = actual_text;
+   StringReplace(normalized_text, ",", ".");
+   double actual_volume = StringToDouble(normalized_text);
+   double tolerance = MathMax(0.000000001, volume_step * 0.000001);
+   return actual_volume > 0 &&
+          MathAbs(actual_volume - expected_volume) <= tolerance;
+}
+
+bool ProbeSetManualUiVolume(const long chart_id, const double requested_volume)
+{
+   BridgeManualUiProbe probe;
+   string readiness = EvaluateManualUiReadiness(chart_id, probe);
+   if(readiness != "ready")
+     {
+      PrintFormat("[MANUAL_UI][VOLUME_PROBE] success=false code=%s", readiness);
+      return false;
+     }
+
+   string symbol = ChartSymbol(chart_id);
+   string validation = ValidateManualUiVolume(symbol, requested_volume);
+   if(StringLen(validation) > 0)
+     {
+      PrintFormat(
+         "[MANUAL_UI][VOLUME_PROBE] success=false code=%s symbol=%s requested=%.8f",
+         validation, symbol, requested_volume);
+      return false;
+     }
+
+   int volume_x = ScaleManualUiOffset(InpVolumeOffsetX, probe.dpi);
+   int volume_y = ScaleManualUiOffset(InpVolumeOffsetY, probe.dpi);
+   if(volume_x < 0 || volume_y < 0 ||
+      volume_x >= probe.chart_width || volume_y >= probe.chart_height)
+     {
+      Print("[MANUAL_UI][VOLUME_PROBE] success=false code=coordinates_outside_chart");
+      return false;
+     }
+
+   long mouse_param = (volume_y << 16) | (volume_x & 0xFFFF);
+   long root_hwnd = GetAncestor(probe.chart_hwnd, GA_ROOT);
+   bool foreground_result =
+      (root_hwnd != 0) ? SetForegroundWindow(root_hwnd) : false;
+   SetFocus(probe.chart_hwnd);
+   Sleep(60);
+   PostMessageW(probe.chart_hwnd, WM_MOUSEMOVE, 0, mouse_param);
+   PostMessageW(probe.chart_hwnd, WM_LBUTTONDOWN, MK_LBUTTON, mouse_param);
+   Sleep(40);
+   PostMessageW(probe.chart_hwnd, WM_LBUTTONUP, 0, mouse_param);
+   Sleep(40);
+
+   double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   int digits = ResolveVolumeDigits(step);
+   string volume_text = DoubleToString(requested_volume, digits);
+   long input_hwnd = GetFocus();
+   if(input_hwnd == 0 || !IsWindow(input_hwnd)) input_hwnd = probe.chart_hwnd;
+
+   // The MT5 OCT volume field is custom-drawn on several broker builds and
+   // does not expose a child Edit HWND. Physical key state is therefore
+   // required; PostMessage(Ctrl+A) does not update GetKeyState in MT5.
+   SendPhysicalControlKey(VK_A);
+   bool text_result = SendPhysicalText(volume_text);
+   SendPhysicalKey(VK_RETURN);
+   Sleep(80);
+
+   string actual_text;
+   bool verified = text_result &&
+      ReadBackManualUiVolume(probe.chart_hwnd, mouse_param,
+                             requested_volume, step, actual_text);
+
+   PrintFormat(
+      "[MANUAL_UI][VOLUME_PROBE] success=%s symbol=%s requested=%s actual=%s " +
+      "verified=%s at=(%d,%d) rootHwnd=%I64d inputHwnd=%I64d " +
+      "foreground=%s textSent=%s",
+      verified ? "true" : "false",
+      symbol, volume_text, actual_text, verified ? "true" : "false",
+      volume_x, volume_y, root_hwnd, input_hwnd,
+      foreground_result ? "true" : "false", text_result ? "true" : "false");
+   return verified;
+}
+
+void ResetManualOpenExecution(const int index)
+{
+   if(index < 0 || index >= BRIDGE_MANUAL_PENDING) return;
+   g_manualOpen[index].active = false;
+   g_manualOpen[index].click_dispatched = false;
+   g_manualOpen[index].request_id = "";
+   g_manualOpen[index].symbol = "";
+   g_manualOpen[index].side = "";
+   g_manualOpen[index].volume = 0;
+   g_manualOpen[index].chart_id = 0;
+   g_manualOpen[index].chart_hwnd = 0;
+   g_manualOpen[index].click_x = 0;
+   g_manualOpen[index].click_y = 0;
+   g_manualOpen[index].baseline_count = 0;
+   g_manualOpen[index].baseline_volume = 0;
+   g_manualOpen[index].baseline_hash = 0;
+   g_manualOpen[index].prepared_ms = 0;
+   g_manualOpen[index].dispatched_ms = 0;
+   g_manualOpen[index].dispatched_server_time = 0;
+}
+
+int FindManualOpenByRequestId(const string request_id)
+{
+   for(int index = 0; index < BRIDGE_MANUAL_PENDING; index++)
+      if(g_manualOpen[index].active &&
+         g_manualOpen[index].request_id == request_id)
+         return index;
+   return -1;
+}
+
+void SweepManualOpenTimeouts(const ulong now)
+{
+   ulong timeout_ms = (ulong)MathMax(1000, InpPendingTimeoutMs);
+   for(int index = 0; index < BRIDGE_MANUAL_PENDING; index++)
+     {
+      if(!g_manualOpen[index].active) continue;
+      ulong started = g_manualOpen[index].click_dispatched
+         ? g_manualOpen[index].dispatched_ms
+         : g_manualOpen[index].prepared_ms;
+      if(started == 0 || now - started < timeout_ms) continue;
+      if(InpDebugLog)
+         PrintFormat(
+            "[MANUAL_UI][OPEN_CANDIDATE] request=%s status=timeout " +
+            "clickDispatched=%s elapsedMs=%I64u",
+            g_manualOpen[index].request_id,
+            g_manualOpen[index].click_dispatched ? "true" : "false",
+            now - started);
+      CacheResult(g_manualOpen[index].request_id, "timeout", 0, 0, 0,
+                  g_manualOpen[index].volume, 0,
+                  "manual_trade_confirmation_timeout");
+      SendExecutionResult(g_manualOpen[index].request_id, "timeout", 0, 0, 0,
+                          g_manualOpen[index].volume, 0,
+                          "manual_trade_confirmation_timeout");
+      ResetManualOpenExecution(index);
+     }
+}
+
+int AllocateManualOpenExecution()
+{
+   // UI actions on one terminal must never overlap. Capacity is retained for
+   // future completed-result correlation, but only one active action is
+   // allowed during dispatch.
+   for(int index = 0; index < BRIDGE_MANUAL_PENDING; index++)
+      if(g_manualOpen[index].active) return -1;
+   for(int index = 0; index < BRIDGE_MANUAL_PENDING; index++)
+     {
+      ResetManualOpenExecution(index);
+      return index;
+     }
+   return -1;
+}
+
+void CaptureManualOpenBaseline(const string symbol,
+                               int &position_count,
+                               double &total_volume,
+                               ulong &ticket_hash)
+{
+   position_count = 0;
+   total_volume = 0;
+   ticket_hash = 1469598103934665603;
+   int total = PositionsTotal();
+   for(int position_index = 0; position_index < total; position_index++)
+     {
+      ulong ticket = PositionGetTicket(position_index);
+      if(ticket == 0 || PositionGetString(POSITION_SYMBOL) != symbol) continue;
+      position_count++;
+      total_volume += PositionGetDouble(POSITION_VOLUME);
+      ticket_hash ^= ticket;
+      ticket_hash *= 1099511628211;
+     }
+}
+
+string PrepareManualOpenExecution(const string request_id,
+                                  const long account,
+                                  const string symbol,
+                                  const string side,
+                                  const double volume,
+                                  const ulong expires_ms,
+                                  int &execution_index)
+{
+   execution_index = -1;
+   if(!IsSafeIdentifier(request_id)) return "invalid_request_id";
+   if(FindManualOpenByRequestId(request_id) >= 0) return "duplicate_request";
+
+   string validation = ValidateOpen(account, symbol, side, volume, expires_ms);
+   if(StringLen(validation) > 0) return validation;
+
+   long chart_id = FindChartBySymbol(symbol);
+   if(chart_id == 0) return "chart_not_found";
+   BridgeManualUiProbe probe;
+   string readiness = EvaluateManualUiReadiness(chart_id, probe);
+   if(readiness != "ready") return readiness;
+
+   int index = AllocateManualOpenExecution();
+   if(index < 0) return "manual_ui_busy";
+
+   g_manualOpen[index].active = true;
+   g_manualOpen[index].request_id = request_id;
+   g_manualOpen[index].symbol = symbol;
+   g_manualOpen[index].side = side;
+   g_manualOpen[index].volume = volume;
+   g_manualOpen[index].chart_id = chart_id;
+   g_manualOpen[index].chart_hwnd = probe.chart_hwnd;
+   g_manualOpen[index].click_x = (side == "BUY") ? probe.buy_x : probe.sell_x;
+   g_manualOpen[index].click_y = (side == "BUY") ? probe.buy_y : probe.sell_y;
+   g_manualOpen[index].prepared_ms = GetTickCount64();
+   CaptureManualOpenBaseline(
+      symbol,
+      g_manualOpen[index].baseline_count,
+      g_manualOpen[index].baseline_volume,
+      g_manualOpen[index].baseline_hash);
+   execution_index = index;
+   return "";
+}
+
+string DispatchPreparedManualOpen(const int index)
+{
+   if(index < 0 || index >= BRIDGE_MANUAL_PENDING ||
+      !g_manualOpen[index].active)
+      return "manual_request_not_found";
+   if(g_manualOpen[index].click_dispatched)
+      return "manual_click_already_dispatched";
+
+   BridgeManualUiProbe probe;
+   string readiness =
+      EvaluateManualUiReadiness(g_manualOpen[index].chart_id, probe);
+   if(readiness != "ready") return readiness;
+   if(probe.chart_hwnd != g_manualOpen[index].chart_hwnd)
+      return "chart_hwnd_changed";
+
+   if(!ProbeSetManualUiVolume(g_manualOpen[index].chart_id,
+                              g_manualOpen[index].volume))
+      return "oct_volume_not_verified";
+
+   // Volume verification may take focus; resolve geometry again immediately
+   // before the single allowed BUY/SELL click.
+   readiness = EvaluateManualUiReadiness(g_manualOpen[index].chart_id, probe);
+   if(readiness != "ready") return readiness;
+   int click_x = (g_manualOpen[index].side == "BUY")
+      ? probe.buy_x : probe.sell_x;
+   int click_y = (g_manualOpen[index].side == "BUY")
+      ? probe.buy_y : probe.sell_y;
+   if(click_x < 0 || click_y < 0 ||
+      click_x >= probe.chart_width || click_y >= probe.chart_height)
+      return "manual_click_outside_chart";
+
+   long mouse_param = (click_y << 16) | (click_x & 0xFFFF);
+   bool moved = PostMessageW(probe.chart_hwnd, WM_MOUSEMOVE, 0, mouse_param);
+   bool pressed = PostMessageW(probe.chart_hwnd, WM_LBUTTONDOWN,
+                               MK_LBUTTON, mouse_param);
+   Sleep(40);
+   bool released = PostMessageW(probe.chart_hwnd, WM_LBUTTONUP, 0, mouse_param);
+   if(!moved || !pressed || !released)
+      return "manual_click_dispatch_failed";
+
+   g_manualOpen[index].click_x = click_x;
+   g_manualOpen[index].click_y = click_y;
+   g_manualOpen[index].click_dispatched = true;
+   g_manualOpen[index].dispatched_ms = GetTickCount64();
+   g_manualOpen[index].dispatched_server_time = TimeCurrent();
+   if(InpDebugLog)
+      PrintFormat(
+         "[MANUAL_UI][OPEN_CANDIDATE] request=%s symbol=%s side=%s volume=%.8f " +
+         "baselineCount=%d baselineVolume=%.8f baselineHash=%I64u " +
+         "click=(%d,%d) dispatched=true confirmation=pending",
+         g_manualOpen[index].request_id, g_manualOpen[index].symbol,
+         g_manualOpen[index].side, g_manualOpen[index].volume,
+         g_manualOpen[index].baseline_count,
+         g_manualOpen[index].baseline_volume,
+         g_manualOpen[index].baseline_hash,
+         click_x, click_y);
+   return "";
+}
+
+ulong FindLivePositionTicketByIdentifier(const ulong position_identifier)
+{
+   if(position_identifier == 0) return 0;
+   int total = PositionsTotal();
+   for(int index = 0; index < total; index++)
+     {
+      ulong ticket = PositionGetTicket(index);
+      if(ticket == 0) continue;
+      ulong identifier =
+         (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      if(identifier == position_identifier) return ticket;
+     }
+   return 0;
+}
+
+void FinalizeManualOpen(const int index, const ulong ticket,
+                        const ulong deal, const double price,
+                        const double volume, const string detail)
+{
+   if(index < 0 || index >= BRIDGE_MANUAL_PENDING ||
+      !g_manualOpen[index].active) return;
+   string request_id = g_manualOpen[index].request_id;
+   CacheResult(request_id, "confirmed", ticket, deal, price, volume,
+               TRADE_RETCODE_DONE, detail);
+   SendExecutionResult(request_id, "confirmed", ticket, deal, price, volume,
+                       TRADE_RETCODE_DONE, detail);
+   if(InpDebugLog)
+      PrintFormat(
+         "[MANUAL_UI][OPEN_CONFIRMED] request=%s ticket=%I64u deal=%I64u " +
+         "price=%.10f volume=%.8f reason=client",
+         request_id, ticket, deal, price, volume);
+   ResetManualOpenExecution(index);
+}
+
+bool TryConfirmManualOpenFromDeal(const ulong deal)
+{
+   if(deal == 0 || !HistoryDealSelect(deal)) return false;
+   ENUM_DEAL_REASON reason =
+      (ENUM_DEAL_REASON)HistoryDealGetInteger(deal, DEAL_REASON);
+   if(reason != DEAL_REASON_CLIENT) return false;
+
+   string symbol = HistoryDealGetString(deal, DEAL_SYMBOL);
+   ENUM_DEAL_TYPE deal_type =
+      (ENUM_DEAL_TYPE)HistoryDealGetInteger(deal, DEAL_TYPE);
+   ENUM_DEAL_ENTRY entry =
+      (ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal, DEAL_ENTRY);
+   if(entry != DEAL_ENTRY_IN && entry != DEAL_ENTRY_INOUT) return false;
+   double volume = HistoryDealGetDouble(deal, DEAL_VOLUME);
+   double price = HistoryDealGetDouble(deal, DEAL_PRICE);
+   datetime deal_time =
+      (datetime)HistoryDealGetInteger(deal, DEAL_TIME);
+   ulong position_identifier =
+      (ulong)HistoryDealGetInteger(deal, DEAL_POSITION_ID);
+
+   for(int index = 0; index < BRIDGE_MANUAL_PENDING; index++)
+     {
+      if(!g_manualOpen[index].active ||
+         !g_manualOpen[index].click_dispatched ||
+         g_manualOpen[index].symbol != symbol)
+         continue;
+      // Do not let an older/manual deal with the same shape confirm this
+      // request. A small allowance covers broker/server second rounding.
+      if(g_manualOpen[index].dispatched_server_time <= 0 ||
+         deal_time + 2 < g_manualOpen[index].dispatched_server_time)
+         continue;
+      bool side_matches =
+         (g_manualOpen[index].side == "BUY" && deal_type == DEAL_TYPE_BUY) ||
+         (g_manualOpen[index].side == "SELL" && deal_type == DEAL_TYPE_SELL);
+      if(!side_matches) continue;
+      double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+      double tolerance = MathMax(0.000000001, step * 0.000001);
+      if(MathAbs(volume - g_manualOpen[index].volume) > tolerance) continue;
+
+      ulong ticket = FindLivePositionTicketByIdentifier(position_identifier);
+      if(ticket == 0) ticket = position_identifier;
+      if(ticket == 0) continue;
+      FinalizeManualOpen(index, ticket, deal, price, volume,
+                         "manual_client_deal_confirmed");
+      return true;
+     }
+   return false;
 }
 //+------------------------------------------------------------------+
