@@ -172,36 +172,6 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
         IntPtr nativeContext = IntPtr.Zero;
         try
         {
-            if (!TryParseHwnd(request.TradeHwnd, out var tradeHwnd) ||
-                NativeMethodsMt5.IsValidWindow(tradeHwnd) != 1)
-            {
-                SafeLog(
-                    $"[MT5_HWND][STALE] exchange={request.Exchange} " +
-                    $"ticket={request.Ticket} tradeHwnd={request.TradeHwnd}");
-                return Failure(request.Exchange, "CLOSE", "invalid",
-                    $"MT5_TRADE_HWND_STALE: {request.TradeHwnd}", request.Ticket);
-            }
-            if (!request.RowIndex.HasValue)
-            {
-                return Failure(request.Exchange, "CLOSE", "invalid",
-                    "MT5 close row is unresolved", request.Ticket);
-            }
-
-            nativeContext = NativeMethodsMt5.CreateContextFromParent(tradeHwnd);
-            if (nativeContext == IntPtr.Zero)
-            {
-                return Failure(request.Exchange, "CLOSE", "invalid",
-                    "MT5 close UI context could not be created", request.Ticket);
-            }
-            var rowCount = NativeMethodsMt5.UpdateRowCount(nativeContext);
-            if (rowCount <= 0 || request.RowIndex.Value < 0 ||
-                request.RowIndex.Value >= rowCount)
-            {
-                return Failure(request.Exchange, "CLOSE", "invalid",
-                    $"MT5 close row is invalid: row={request.RowIndex.Value}, rowCount={rowCount}",
-                    request.Ticket);
-            }
-
             var uiQueuedAt = Stopwatch.GetTimestamp();
             await _manualUiGate.WaitAsync(cancellationToken);
             manualUiGateHeld = true;
@@ -216,6 +186,46 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
                 return Failure(request.Exchange, "CLOSE", "offline", healthError, request.Ticket);
             }
 
+            var health = transport.Health;
+            var configuredValid = TryParseHwnd(request.TradeHwnd, out var configuredTradeHwnd) &&
+                NativeMethodsMt5.IsValidWindow(configuredTradeHwnd) == 1;
+            if (!configuredValid)
+            {
+                SafeLog(
+                    $"[MT5_HWND][STALE] exchange={request.Exchange} " +
+                    $"ticket={request.Ticket} configuredTradeHwnd={request.TradeHwnd}");
+            }
+            if (health.ChartHwnd is not > 0 ||
+                NativeMethodsMt5.IsValidWindow((ulong)health.ChartHwnd.Value) != 1)
+            {
+                return Failure(request.Exchange, "CLOSE", "invalid",
+                    $"MT5_CHART_HWND_STALE: {health.ChartHwnd}", request.Ticket);
+            }
+
+            nativeContext = NativeMethodsMt5.CreateContextForTicket(
+                (ulong)health.ChartHwnd.Value, request.Ticket, out var resolvedRowIndex);
+            if (nativeContext == IntPtr.Zero || resolvedRowIndex < 0)
+            {
+                SafeLog(
+                    $"[MT5_HWND][RESOLVE_FAILED] exchange={request.Exchange} " +
+                    $"ticket={request.Ticket} configuredTradeHwnd={request.TradeHwnd} " +
+                    $"configuredValid={configuredValid} chartHwnd={health.ChartHwnd}");
+                return Failure(request.Exchange, "CLOSE", "invalid",
+                    $"MT5_TICKET_ROW_NOT_FOUND: ticket={request.Ticket}", request.Ticket);
+            }
+            var rowCount = NativeMethodsMt5.UpdateRowCount(nativeContext);
+            if (resolvedRowIndex >= rowCount)
+            {
+                return Failure(request.Exchange, "CLOSE", "invalid",
+                    $"MT5 resolved row is invalid: row={resolvedRowIndex}, rowCount={rowCount}",
+                    request.Ticket);
+            }
+            SafeLog(
+                $"[MT5_HWND][RESOLVED] exchange={request.Exchange} ticket={request.Ticket} " +
+                $"configuredTradeHwnd={request.TradeHwnd} configuredValid={configuredValid} " +
+                $"chartHwnd={health.ChartHwnd} configuredRow={request.RowIndex?.ToString() ?? "-"} " +
+                $"resolvedRow={resolvedRowIndex} rowCount={rowCount} source=terminal_ticket_scan");
+
             var now = Environment.TickCount64;
             var requestId = Guid.NewGuid().ToString("N");
             var command = new Mt5BridgeCloseCommand
@@ -229,7 +239,7 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
                 ExpiresMilliseconds = now + (long)_options.ExecutionTimeout.TotalMilliseconds
             };
 
-            SafeLog($"[MT5_BRIDGE][CLOSE][SEND] exchange={request.Exchange} requestId={requestId} ticket={request.Ticket} symbol={symbol} row={request.RowIndex.Value} queueWaitMs={queueWaitMs}");
+            SafeLog($"[MT5_BRIDGE][CLOSE][SEND] exchange={request.Exchange} requestId={requestId} ticket={request.Ticket} symbol={symbol} row={resolvedRowIndex} queueWaitMs={queueWaitMs}");
             var armed = new TaskCompletionSource<long>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var responseTask = transport.SendAsync(
@@ -255,13 +265,13 @@ public sealed class Mt5TradeExecutor : ITradePlatformExecutor
 
             var armedAt = await armed.Task;
             var clickResult = NativeMethodsMt5.ClosePositionMt5(
-                nativeContext, request.RowIndex.Value);
+                nativeContext, resolvedRowIndex);
             var dispatchedAt = Stopwatch.GetTimestamp();
             var uiDispatchMs = (long)Stopwatch
                 .GetElapsedTime(uiAcquiredAt, dispatchedAt).TotalMilliseconds;
             SafeLog(
                 $"[MT5_BRIDGE][CLOSE][DISPATCHED] exchange={request.Exchange} " +
-                $"requestId={requestId} ticket={request.Ticket} row={request.RowIndex.Value} " +
+                $"requestId={requestId} ticket={request.Ticket} row={resolvedRowIndex} " +
                 $"queueWaitMs={queueWaitMs} armMs={(long)Stopwatch.GetElapsedTime(uiAcquiredAt, armedAt).TotalMilliseconds} " +
                 $"uiDispatchMs={uiDispatchMs} clickResult={clickResult}");
             _manualUiGate.Release();

@@ -18,6 +18,12 @@ internal static class NativeMethodsMt5
     [DllImport(DllName, EntryPoint = "mt_create_context_from_parent", CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr CreateContextFromParent(ulong parentHwnd);
 
+    [DllImport(DllName, EntryPoint = "mt_create_context_for_ticket", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr CreateContextForTicket(
+        ulong descendantHwnd,
+        ulong ticket,
+        out int rowIndex);
+
     [DllImport(DllName, EntryPoint = "mt_update_row_count", CallingConvention = CallingConvention.Cdecl)]
     internal static extern int UpdateRowCount(IntPtr context);
 

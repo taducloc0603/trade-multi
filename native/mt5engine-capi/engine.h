@@ -45,6 +45,7 @@ void     DestroyContext(Context* ctx);
 int  UpdateRowCount(Context* ctx);
 bool ClosePositionMT5(Context* ctx, int rowIdx);
 bool ClosePositionMT4(Context* ctx, int rowIdx);
+Context* CreateContextForTicket(HWND descendant, uint64_t ticket, int& rowIdx);
 void PostClick(HWND hwnd, int cx, int cy);
 
 std::string WstrToUtf8(const std::wstring& ws);

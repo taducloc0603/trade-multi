@@ -1,4 +1,6 @@
 #include "engine.h"
+#include <algorithm>
+#include <cwctype>
 #include <utility>
 
 namespace MetaTraderEngine {
@@ -175,6 +177,99 @@ bool ClosePositionMT4(Context* ctx, int rowIdx)
 
     PostMessage(ctx->hMT5, WM_COMMAND, MAKEWPARAM(35451, 0), 0);
     return true;
+}
+
+namespace {
+
+bool ReadListViewCell(HWND listView, HANDLE process, int row, int column,
+                      std::wstring& value)
+{
+    value.clear();
+    constexpr int capacity = 256;
+    auto* remoteText = static_cast<wchar_t*>(VirtualAllocEx(
+        process, nullptr, capacity * sizeof(wchar_t), MEM_COMMIT | MEM_RESERVE,
+        PAGE_READWRITE));
+    auto* remoteItem = static_cast<LVITEMW*>(VirtualAllocEx(
+        process, nullptr, sizeof(LVITEMW), MEM_COMMIT | MEM_RESERVE,
+        PAGE_READWRITE));
+    if (!remoteText || !remoteItem) {
+        if (remoteText) VirtualFreeEx(process, remoteText, 0, MEM_RELEASE);
+        if (remoteItem) VirtualFreeEx(process, remoteItem, 0, MEM_RELEASE);
+        return false;
+    }
+
+    LVITEMW item = {};
+    item.mask = LVIF_TEXT;
+    item.iSubItem = column;
+    item.pszText = remoteText;
+    item.cchTextMax = capacity;
+    bool ok = WriteProcessMemory(process, remoteItem, &item, sizeof(item), nullptr) != FALSE;
+    DWORD_PTR copied = 0;
+    if (ok) {
+        ok = SendMessageTimeoutW(listView, LVM_GETITEMTEXTW,
+                                 static_cast<WPARAM>(row),
+                                 reinterpret_cast<LPARAM>(remoteItem),
+                                 SMTO_ABORTIFHUNG | SMTO_BLOCK, 200,
+                                 &copied) != FALSE;
+    }
+    wchar_t localText[capacity] = {};
+    if (ok) {
+        ok = ReadProcessMemory(process, remoteText, localText,
+                               sizeof(localText), nullptr) != FALSE;
+    }
+    VirtualFreeEx(process, remoteText, 0, MEM_RELEASE);
+    VirtualFreeEx(process, remoteItem, 0, MEM_RELEASE);
+    if (!ok) return false;
+    value.assign(localText);
+    return true;
+}
+
+bool CellMatchesTicket(const std::wstring& value, uint64_t ticket)
+{
+    auto first = std::find_if(value.begin(), value.end(),
+        [](wchar_t ch) { return !std::iswspace(ch) && ch != L'#'; });
+    auto last = std::find_if(value.rbegin(), value.rend(),
+        [](wchar_t ch) { return !std::iswspace(ch); }).base();
+    if (first >= last) return false;
+    return std::wstring(first, last) == std::to_wstring(ticket);
+}
+
+} // namespace
+
+Context* CreateContextForTicket(HWND descendant, uint64_t ticket, int& rowIdx)
+{
+    rowIdx = -1;
+    if (!descendant || !IsWindow(descendant) || ticket == 0) return nullptr;
+    HWND root = GetAncestor(descendant, GA_ROOT);
+    if (!root) return nullptr;
+
+    auto children = EnumChildWindowList(root);
+    for (const auto& child : children) {
+        if (child.className != L"SysListView32") continue;
+        int rows = GetRowCount(child.hwnd);
+        if (rows <= 0) continue;
+        DWORD pid = 0;
+        GetWindowThreadProcessId(child.hwnd, &pid);
+        HANDLE process = OpenProcess(
+            PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE,
+            FALSE, pid);
+        if (!process) continue;
+        bool found = false;
+        for (int row = 0; row < rows && !found; ++row) {
+            for (int column = 0; column < 16; ++column) {
+                std::wstring value;
+                if (ReadListViewCell(child.hwnd, process, row, column, value) &&
+                    CellMatchesTicket(value, ticket)) {
+                    rowIdx = row;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        CloseHandle(process);
+        if (found) return CreateContext(child.hwnd);
+    }
+    return nullptr;
 }
 
 void PostClick(HWND hwnd, int cx, int cy)

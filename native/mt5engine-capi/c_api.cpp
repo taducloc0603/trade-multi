@@ -49,6 +49,14 @@ MT_API void* mt_create_context_from_parent(uint64_t parentHwnd)
     return reinterpret_cast<void*>(ctx);
 }
 
+MT_API void* mt_create_context_for_ticket(uint64_t descendantHwnd, uint64_t ticket, int* rowIndex)
+{
+    if (!rowIndex) return nullptr;
+    *rowIndex = -1;
+    auto* ctx = CreateContextForTicket(ToHwnd(descendantHwnd), ticket, *rowIndex);
+    return reinterpret_cast<void*>(ctx);
+}
+
 MT_API int mt_update_row_count(void* ctx)
 {
     auto* context = reinterpret_cast<Context*>(ctx);
