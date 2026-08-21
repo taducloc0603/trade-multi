@@ -3579,7 +3579,24 @@ public sealed class DashboardViewModel : ObservableObject
                 tradeResultA.Records, tradeResultB.Records, tradeMapNameA, tradeMapNameB);
             if (restoredCount == 0)
             {
-                AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Resync skipped: no pairable open trades found");
+                var openCountA = tradeResultA.Records.Count;
+                var openCountB = tradeResultB.Records.Count;
+                if (openCountA == 0 && openCountB == 0)
+                {
+                    await ReconcileBothFlatAtStartAsync();
+                    return;
+                }
+
+                // At least one physical trade still exists, but it cannot be paired safely.
+                // Keep coordinator/mappings intact for diagnostics and recovery; never turn an
+                // orphan/unpairable startup snapshot into an artificial BothFlat reset.
+                _isAutoOpenPausedByInvariant = true;
+                AddSignalLog(
+                    $"    - [{DateTime.Now:HH:mm:ss.fff}] Resync blocked: unpairable open trades " +
+                    $"(A={openCountA}, B={openCountB}); auto-open paused for recovery");
+                SafeVmLog(
+                    $"[START_RECONCILE][WARN] state=Unpairable openA={openCountA} openB={openCountB} " +
+                    $"slots={_portfolioCoordinator.LiveAndPendingTotalCount} result=PAUSE");
                 return;
             }
 
@@ -3594,6 +3611,41 @@ public sealed class DashboardViewModel : ObservableObject
             SafeVmLog($"[RECOVERY][ERROR] Resync open trades failed: {ex}");
             AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Resync failed: {ex.Message}");
         }
+    }
+
+    private async Task ReconcileBothFlatAtStartAsync()
+    {
+        var slotsBefore = _portfolioCoordinator.LiveAndPendingTotalCount;
+        var pendingOpenBefore = _pendingOpenPairById.Count;
+        var pendingCloseBefore = _pendingClosePairById.Count;
+
+        // Trades MMF is the source of truth for currently-open positions. Clear only
+        // live/session coordination state here. Ticket/request mappings intentionally
+        // remain available so already-closed app trades still render in History.
+        _portfolioCoordinator.ClearAllSlots();
+        _pendingOpenPairById.Clear();
+        _pendingClosePairById.Clear();
+        _openConfirmBySlot.Clear();
+        _closeConfirmBySlot.Clear();
+        _activeAutoCycle = null;
+        _activeAutoCloseRecoveryCycle = null;
+        _lastDeferredBothFlatClosePairId = null;
+        _hadBothOpenRecently = false;
+        _externalPartialCloseStreak = 0;
+        _externalPartialCloseInFlight = false;
+        _isAutoOpenPausedByInvariant = false;
+        _invariantClearStreak = 0;
+
+        await PersistCurrentSlotsSnapshotAsync("start-resync-both-flat");
+
+        AddSignalLog(
+            $"    - [{DateTime.Now:HH:mm:ss.fff}] Resync complete: both trade maps are flat; " +
+            $"cleared {slotsBefore} stale slot(s)");
+        SafeVmLog(
+            $"[START_RECONCILE][INFO] state=BothFlat openA=0 openB=0 " +
+            $"slotsBefore={slotsBefore} slotsAfter={_portfolioCoordinator.LiveAndPendingTotalCount} " +
+            $"pendingOpenBefore={pendingOpenBefore} pendingCloseBefore={pendingCloseBefore} " +
+            $"historyMappingsPreserved={_pairIdByTicket.Count} result=PASS");
     }
 
     private Task OpenConfigAsync()

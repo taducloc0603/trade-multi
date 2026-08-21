@@ -135,6 +135,31 @@ public sealed class PortfolioCoordinatorRecoveryTests
         Assert.Null(coordinator.GetSlotByPairId("p-pre"));
         Assert.NotNull(coordinator.GetSlotByPairId("p-recovered"));
     }
+
+    [Fact]
+    public void ClearAllSlots_BothFlatStartup_RemovesLiveAndPendingSlots()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(maxTotal: 7, maxBuy: 4, maxSell: 4);
+
+        coordinator.RecoverSlotsFromPersisted(new[] { Persisted(1, "p-live") });
+
+        var trigger = new GapSignalTriggerResult(
+            true, GapSignalAction.Open, GapSignalTriggerType.OpenByGapSell, GapSignalSide.Sell,
+            Array.Empty<int>(), Array.Empty<int>(), null, null, DateTime.UtcNow,
+            null, null, null, null, null, null, null, null, 1);
+        coordinator.AllocatePendingOpenSlot("p-pending", trigger);
+
+        Assert.True(coordinator.LiveAndPendingTotalCount > 0);
+
+        coordinator.ClearAllSlots();
+
+        Assert.Equal(0, coordinator.LiveCount);
+        Assert.Equal(0, coordinator.PendingCount);
+        Assert.Equal(0, coordinator.LiveAndPendingTotalCount);
+        Assert.Null(coordinator.GetSlotByPairId("p-live"));
+        Assert.Null(coordinator.GetSlotByPairId("p-pending"));
+    }
 }
 
 // Phase 5 — JSON round-trip for slot persistence.
