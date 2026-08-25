@@ -135,7 +135,10 @@ public sealed record GapSignalConfirmationConfig(
     int SosCloseGapPts = 0,
     CloseGapMode CloseGapMode = CloseGapMode.Normal,
     GapStabilityConfig? OpenGapStability = null,
-    GapStabilityConfig? CloseGapStability = null);
+    GapStabilityConfig? CloseGapStability = null,
+    string DiagnosticConfigId = "",
+    string DiagnosticSymbol = "",
+    int DiagnosticMaxGap = 0);
 
 public sealed record GapSignalTriggerResult(
     bool Triggered,
@@ -163,7 +166,9 @@ public sealed record GapSignalTriggerResult(
     CloseGapMode CloseGapMode = CloseGapMode.Normal,
     int? EffectiveCloseConfirmGapPts = null,
     int? EffectiveCloseGapPts = null,
-    int? EffectiveCloseHoldMs = null);
+    int? EffectiveCloseHoldMs = null,
+    string DiagnosticCycleId = "",
+    string DiagnosticSignalId = "");
 
 public enum GapSignalTriggerType
 {

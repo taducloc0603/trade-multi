@@ -16,6 +16,7 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
     private readonly TpWindowState _tpState = new();
     private readonly ISlotLogger? _logger;
     private int? _slotId;
+    private GapCycleDiagnostics.PolicyContext? _lastDiagnosticPolicy;
 
     public CloseSignalEngine(ISlotLogger? logger = null)
     {
@@ -136,8 +137,19 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
     {
         _buyState.Reset();
         _sellState.Reset();
-        LogCloseTransition("BUY", _closeByGapSellCycle.Reset("Reset Normal Close GapSell Cycle."), null);
-        LogCloseTransition("SELL", _closeByGapBuyCycle.Reset("Reset Normal Close GapBuy Cycle."), null);
+        var minimumSamples = _lastDiagnosticPolicy?.Stability.MinStableSamples ?? 3;
+        LogCloseTransition(
+            "BUY",
+            _closeByGapSellCycle.Reset("Reset Normal Close GapSell Cycle."),
+            null,
+            minimumSamples,
+            _lastDiagnosticPolicy);
+        LogCloseTransition(
+            "SELL",
+            _closeByGapBuyCycle.Reset("Reset Normal Close GapBuy Cycle."),
+            null,
+            minimumSamples,
+            _lastDiagnosticPolicy);
     }
 
     private GapSignalTriggerResult? ProcessStableGap(
@@ -206,6 +218,14 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         int effectiveConfirm,
         int effectiveClose)
     {
+        var diagnosticPolicy = new GapCycleDiagnostics.PolicyContext(
+            stabilityConfig,
+            normalizedCloseHoldMs,
+            config.LimitMaxGap,
+            config.DiagnosticMaxGap,
+            config.DiagnosticConfigId,
+            config.DiagnosticSymbol);
+        _lastDiagnosticPolicy = diagnosticPolicy;
         var update = state.Process(
             snapshot.TimestampUtc,
             primaryGap,
@@ -215,7 +235,12 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             normalizedCloseHoldMs,
             config.LimitMaxGap);
         var sideName = positionSide == GapSignalSide.Buy ? "BUY" : "SELL";
-        LogCloseTransition(sideName, update, primaryGap);
+        LogCloseTransition(
+            sideName,
+            update,
+            primaryGap,
+            stabilityConfig.MinStableSamples,
+            diagnosticPolicy);
         var cycle = update.CurrentCycle;
         if (cycle.Status != GapCycleStatus.Stable || cycle.Gaps.Count == 0)
         {
@@ -236,6 +261,7 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         }
 
         var closesByGapSell = triggerType == GapSignalTriggerType.CloseByGapSell;
+        var diagnosticSignalId = Guid.NewGuid().ToString("N");
         var result = new GapSignalTriggerResult(
             Triggered: true,
             Action: GapSignalAction.Close,
@@ -258,19 +284,39 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             CloseGapMode: CloseGapMode.Normal,
             EffectiveCloseConfirmGapPts: effectiveConfirm,
             EffectiveCloseGapPts: effectiveClose,
-            EffectiveCloseHoldMs: normalizedCloseHoldMs);
+            EffectiveCloseHoldMs: normalizedCloseHoldMs,
+            DiagnosticCycleId: cycle.CycleId,
+            DiagnosticSignalId: diagnosticSignalId);
 
         GapCycleDiagnostics.LogTrigger(
-            _logger, "CLOSE", sideName, _slotId, cycle, lastGap, "Normal Close trigger đã phát.");
-        LogCloseTransition(
+            _logger,
+            "CLOSE",
             sideName,
-            state.Reset("Normal Close trigger đã phát; reset Cycle."),
-            lastGap);
+            _slotId,
+            cycle,
+            lastGap,
+            "Normal Close trigger đã phát.",
+            diagnosticPolicy,
+            diagnosticSignalId);
+        state.Reset("Normal Close trigger đã phát; reset Cycle.");
         return result;
     }
 
-    private void LogCloseTransition(string side, GapCycleUpdateResult update, int? newGap) =>
-        GapCycleDiagnostics.LogTransition(_logger, "CLOSE", side, _slotId, update, newGap);
+    private void LogCloseTransition(
+        string side,
+        GapCycleUpdateResult update,
+        int? newGap,
+        int minimumSamplesToLog = 3,
+        GapCycleDiagnostics.PolicyContext? policy = null) =>
+        GapCycleDiagnostics.LogTransition(
+            _logger,
+            "CLOSE",
+            side,
+            _slotId,
+            update,
+            newGap,
+            minimumSamplesToLog,
+            policy);
 
     private GapSignalTriggerResult? ProcessTp(
         GapSignalSnapshot snapshot,

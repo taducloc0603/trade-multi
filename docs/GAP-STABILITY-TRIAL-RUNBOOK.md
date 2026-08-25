@@ -28,6 +28,14 @@ bash tools/analyze-gap-stability-logs.sh "/path/to/trade-log.log"
 
 Có thể truyền nhiều file của cùng một bộ tham số. Không gộp file từ các bộ tham số khác nhau.
 
+Analyzer mới vẫn tự tách báo cáo theo:
+
+```text
+action | side | slot_id | config_id | symbol
+```
+
+Vì vậy có thể truyền nhiều file log liên tiếp của cùng đợt chạy. Nên truyền theo thứ tự thời gian để `TRIGGER → GUARD → OUTCOME` được ghép đúng bằng `signal_id`.
+
 ## Cách đọc báo cáo
 
 - `cycles`: Cycle bắt đầu mới, gồm Started và tách bởi Delta.
@@ -38,6 +46,11 @@ Có thể truyền nhiều file của cùng một bộ tham số. Không gộp f
 - `triggers`: trigger Open/Close do Stable Cycle phát ra.
 - `guard_blocked`: trigger bị guard hiện tại chặn sau Stable.
 - `confirmed`, `blocked`, `failed`, `cancelled`: outcome cuối lấy từ signal lifecycle log.
+- `gap_distribution`: phân bố độ lớn tuyệt đối của các Gap đã lưu, nhưng chuỗi gốc trong log vẫn giữ dấu và thứ tự.
+- `sample_distribution`, `duration_distribution_ms`: cho biết Cycle thường kết thúc ở bao nhiêu mẫu và thời gian nào.
+- `dispersion_distribution`, `drift_distribution`: dùng để thử lại ngưỡng Open/Close khác mà không trộn hai policy.
+
+Một `cycle_id` xuất hiện ở cả `CYCLE_STABLE` và `TRIGGER_EMITTED` chỉ được tính một lần trong `cycles`. Analyzer giữ snapshot mới nhất của Cycle để tránh cộng trùng danh sách Gap.
 
 ## Nhật ký hiệu chỉnh
 

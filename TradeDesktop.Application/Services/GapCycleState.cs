@@ -27,6 +27,7 @@ public enum GapCycleTransition
 }
 
 public sealed record GapCycleSnapshot(
+    string CycleId,
     GapCycleStatus Status,
     DateTime? StartedAtUtc,
     DateTime? LastTickUtc,
@@ -56,6 +57,7 @@ public sealed record GapCycleUpdateResult(
 public sealed class GapCycleState
 {
     private readonly List<int> _gaps = [];
+    private string _cycleId = string.Empty;
     private DateTime? _startedAtUtc;
     private DateTime? _lastTickUtc;
     private GapStabilityCalculator.Metrics? _metrics;
@@ -218,6 +220,7 @@ public sealed class GapCycleState
         Clear();
         _startedAtUtc = timestampUtc;
         _lastTickUtc = timestampUtc;
+        _cycleId = Guid.NewGuid().ToString("N");
         _gaps.Add(gap);
         _metrics = GapStabilityCalculator.Calculate(_gaps, config);
         _status = GapCycleStatus.Collecting;
@@ -227,6 +230,7 @@ public sealed class GapCycleState
     private void Clear()
     {
         _gaps.Clear();
+        _cycleId = string.Empty;
         _startedAtUtc = null;
         _lastTickUtc = null;
         _metrics = null;
@@ -240,6 +244,7 @@ public sealed class GapCycleState
         metrics ??= _metrics;
 
         return new GapCycleSnapshot(
+            _cycleId,
             _status,
             _startedAtUtc,
             _lastTickUtc,

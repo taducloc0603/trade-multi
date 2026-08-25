@@ -48,6 +48,7 @@ public sealed class DashboardViewModel : ObservableObject
     private long _systemLogTotalCount;
     private long _systemLogWarningCount;
     private long _systemLogErrorCount;
+    private string _gapDiagnosticsConfigId = string.Empty;
     private readonly ITelegramNotifier _telegramNotifier;
     private readonly IHwndHealthChecker _hwndHealthChecker;
     private readonly string _normalizedHostName;
@@ -296,6 +297,7 @@ public sealed class DashboardViewModel : ObservableObject
     private sealed class SignalLifecycleContext
     {
         public Guid SignalId { get; init; } = Guid.NewGuid();
+        public string CycleId { get; init; } = string.Empty;
         public DateTime DetectedAtUtc { get; init; } = DateTime.UtcNow;
         public required GapSignalAction Action { get; init; }
         public required GapSignalSide Side { get; init; }
@@ -7080,6 +7082,7 @@ public sealed class DashboardViewModel : ObservableObject
                 _runtimeConfigState.UpdateGapStability(
                     result.OpenGapStability!,
                     result.CloseGapStability!);
+                _gapDiagnosticsConfigId = result.ConfigId.ToString();
                 SafeVmLog(
                     $"[CONFIG][GAP_STABILITY] Open={FormatGapStabilityConfig(result.OpenGapStability!)} | " +
                     $"NormalClose={FormatGapStabilityConfig(result.CloseGapStability!)}");
@@ -7251,7 +7254,10 @@ public sealed class DashboardViewModel : ObservableObject
                     SosCloseConfirmGapPts: _runtimeConfigState.CurrentSosCloseConfirmGapPts,
                     SosCloseGapPts: _runtimeConfigState.CurrentSosCloseGapPts,
                     OpenGapStability: openGapStability,
-                    CloseGapStability: closeGapStability));
+                    CloseGapStability: closeGapStability,
+                    DiagnosticConfigId: _gapDiagnosticsConfigId,
+                    DiagnosticSymbol: $"{metrics.ExchangeA.Symbol}|{metrics.ExchangeB.Symbol}",
+                    DiagnosticMaxGap: _runtimeConfigState.CurrentMaxGap));
 
             if (portfolioResult.UiNotices is { Count: > 0 })
             {
@@ -7304,6 +7310,12 @@ public sealed class DashboardViewModel : ObservableObject
             LogSignalDetected(trigger);
             if (!guardResult.CanTrade)
             {
+                var guardReasonCode = ResolveGuardReasonCode(guardResult.SkipReason);
+                LogGapStabilityGuard(
+                    signalContext,
+                    "BLOCKED",
+                    guardReasonCode,
+                    closeTargetSlot?.SlotId);
                 SetLastSignalStatus("REJECTED: GUARD");
                 SafeVmLog(
                     "[GUARD][WARN] Auto trade rejected: " +
@@ -7330,13 +7342,19 @@ public sealed class DashboardViewModel : ObservableObject
                 LogSignalOutcome(
                     signalContext,
                     "BLOCKED",
-                    ResolveGuardReasonCode(guardResult.SkipReason),
+                    guardReasonCode,
                     closeTargetSlot?.PairId,
                     closeTargetSlot?.SlotId,
                     ("guardReason", guardResult.SkipReason));
 
                 return;
             }
+
+            LogGapStabilityGuard(
+                signalContext,
+                "PASS",
+                "NONE",
+                closeTargetSlot?.SlotId);
 
             if (trigger.Action == GapSignalAction.Open
                 && !TryAllowAutoOpenByToggle(trigger, out var blockedReason))
@@ -8491,6 +8509,10 @@ public sealed class DashboardViewModel : ObservableObject
 
         var context = new SignalLifecycleContext
         {
+            SignalId = Guid.TryParseExact(trigger.DiagnosticSignalId, "N", out var diagnosticSignalId)
+                ? diagnosticSignalId
+                : Guid.NewGuid(),
+            CycleId = trigger.DiagnosticCycleId,
             DetectedAtUtc = trigger.TriggeredAtUtc,
             Action = trigger.Action,
             Side = trigger.PrimarySide,
@@ -8522,6 +8544,7 @@ public sealed class DashboardViewModel : ObservableObject
                 description,
                 SignalLogLevel.Info,
                 ("signalId", signalId),
+                ("cycleId", context.CycleId),
                 (context.IsHedge ? "newSide" : "side", trigger.PrimarySide),
                 ("originalSide", context.IsHedge ? context.OriginalSide : null),
                 ("originalSlot", context.OriginalSlot),
@@ -8561,6 +8584,7 @@ public sealed class DashboardViewModel : ObservableObject
             closeDescription,
             SignalLogLevel.Info,
             ("signalId", signalId),
+            ("cycleId", context.CycleId),
             ("pairId", context.PairId),
             ("slot", context.SlotId),
             ("aType", isBuyPositionA ? "BUY" : "SELL"),
@@ -8693,6 +8717,7 @@ public sealed class DashboardViewModel : ObservableObject
         var fields = new List<(string Name, object? Value)>
         {
             ("signalId", context.SignalId.ToString("N")),
+            ("cycleId", context.CycleId),
             ("pairId", pairId ?? context.PairId),
             ("slot", slotId ?? context.SlotId),
             ("side", context.Side),
@@ -8757,9 +8782,53 @@ public sealed class DashboardViewModel : ObservableObject
             AddLegOutcomeFields(fields, "b", context.LegB);
         }
         fields.AddRange(extraFields.Where(field => field.Value is not null));
+        LogGapStabilityOutcome(
+            context,
+            outcome,
+            reasonCode,
+            pairId ?? context.PairId,
+            slotId ?? context.SlotId);
         AddSignalLog(SignalLifecycleLogFormatter.Create(eventType, description, level, fields.ToArray()));
         context.FinalOutcomeLogged = true;
         CleanupSignalContext(context);
+    }
+
+    private void LogGapStabilityGuard(
+        SignalLifecycleContext context,
+        string result,
+        string reasonCode,
+        int? slotId = null)
+    {
+        if (string.IsNullOrWhiteSpace(context.CycleId))
+        {
+            return;
+        }
+
+        SafeVmLog(
+            $"[GAP_STABILITY][GUARD] cycle_id={context.CycleId} " +
+            $"signal_id={context.SignalId:N} action={context.Action.ToString().ToUpperInvariant()} " +
+            $"side={context.Side.ToString().ToUpperInvariant()} " +
+            $"slot_id={(slotId ?? context.SlotId)?.ToString() ?? "-"} " +
+            $"result={result} reason={reasonCode}");
+    }
+
+    private void LogGapStabilityOutcome(
+        SignalLifecycleContext context,
+        string outcome,
+        string reasonCode,
+        string? pairId,
+        int? slotId)
+    {
+        if (string.IsNullOrWhiteSpace(context.CycleId))
+        {
+            return;
+        }
+
+        SafeVmLog(
+            $"[GAP_STABILITY][OUTCOME] cycle_id={context.CycleId} " +
+            $"signal_id={context.SignalId:N} action={context.Action.ToString().ToUpperInvariant()} " +
+            $"side={context.Side.ToString().ToUpperInvariant()} slot_id={slotId?.ToString() ?? "-"} " +
+            $"pair_id={pairId ?? "-"} outcome={outcome} reason={reasonCode}");
     }
 
     private void CleanupSignalContext(SignalLifecycleContext context)

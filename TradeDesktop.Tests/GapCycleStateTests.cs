@@ -20,6 +20,7 @@ public sealed class GapCycleStateTests
 
         Assert.Equal(GapCycleTransition.Started, result.Transition);
         Assert.Equal(GapCycleStatus.Collecting, result.CurrentCycle.Status);
+        Assert.False(string.IsNullOrWhiteSpace(result.CurrentCycle.CycleId));
         Assert.Equal([100], result.CurrentCycle.Gaps);
         Assert.Equal(100d, result.CurrentCycle.Center);
         Assert.Equal(0d, result.CurrentCycle.DurationMs);
@@ -68,6 +69,9 @@ public sealed class GapCycleStateTests
         Assert.Equal(GapCycleTransition.NewCycle, result.Transition);
         Assert.Equal([2, 4, 3], result.CompletedCycle!.Gaps);
         Assert.Equal([20], result.CurrentCycle.Gaps);
+        Assert.False(string.IsNullOrWhiteSpace(result.CompletedCycle.CycleId));
+        Assert.False(string.IsNullOrWhiteSpace(result.CurrentCycle.CycleId));
+        Assert.NotEqual(result.CompletedCycle.CycleId, result.CurrentCycle.CycleId);
         Assert.Equal(GapCycleStatus.Collecting, result.CurrentCycle.Status);
         Assert.Contains("Delta", result.CurrentCycle.Reason);
     }
