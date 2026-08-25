@@ -278,6 +278,61 @@ public sealed class PortfolioCoordinatorAdapterTests
     }
 
     [Fact]
+    public void ForceWaitingClose_WhenLiveSlotExists_DoesNotOverwriteItsDirection()
+    {
+        var coordinator = new PortfolioCoordinator(
+            new GapSignalConfirmationEngine(),
+            new CloseSignalEngineFactory(),
+            random: new Random(42));
+        var sut = new PortfolioCoordinatorAdapter(coordinator);
+        var confirmedAt = DateTime.UtcNow;
+        coordinator.RegisterSyncedSlot(
+            pairId: "AUTO-buy",
+            side: TradingPositionSide.Buy,
+            openMode: TradingOpenMode.GapBuy,
+            ticketA: 100,
+            ticketB: 200,
+            openConfirmedAtUtc: confirmedAt,
+            holdingSeconds: 10);
+
+        // Simulates the old scalar re-check observing a Sell MMF row that belongs
+        // to another pair and attempting to apply it to the current slot.
+        sut.ForceWaitingClose(TradingPositionSide.Sell);
+
+        var slot = coordinator.GetSlotByPairId("AUTO-buy");
+        Assert.NotNull(slot);
+        Assert.Equal(TradingPositionSide.Buy, slot!.Side);
+        Assert.Equal(TradingOpenMode.GapBuy, slot.OpenMode);
+        Assert.Equal((ulong)100, slot.TicketA);
+        Assert.Equal((ulong)200, slot.TicketB);
+        Assert.Equal(confirmedAt, slot.OpenConfirmedAtUtc);
+    }
+
+    [Fact]
+    public void ForceWaitingClose_WithOppositeLiveSlots_DoesNotOverwriteFirstSlot()
+    {
+        var coordinator = new PortfolioCoordinator(
+            new GapSignalConfirmationEngine(),
+            new CloseSignalEngineFactory(),
+            random: new Random(42));
+        var sut = new PortfolioCoordinatorAdapter(coordinator);
+        var confirmedAt = DateTime.UtcNow;
+        coordinator.RegisterSyncedSlot(
+            "AUTO-buy", TradingPositionSide.Buy, TradingOpenMode.GapBuy,
+            100, 200, confirmedAt, 10);
+        coordinator.RegisterSyncedSlot(
+            "AUTO-sell", TradingPositionSide.Sell, TradingOpenMode.GapSell,
+            300, 400, confirmedAt.AddSeconds(1), 10);
+
+        sut.ForceWaitingClose(TradingPositionSide.Sell);
+
+        Assert.Equal(TradingPositionSide.Buy, coordinator.GetSlotByPairId("AUTO-buy")!.Side);
+        Assert.Equal(TradingOpenMode.GapBuy, coordinator.GetSlotByPairId("AUTO-buy")!.OpenMode);
+        Assert.Equal(TradingPositionSide.Sell, coordinator.GetSlotByPairId("AUTO-sell")!.Side);
+        Assert.Equal(TradingOpenMode.GapSell, coordinator.GetSlotByPairId("AUTO-sell")!.OpenMode);
+    }
+
+    [Fact]
     public void ForceWaitingOpen_ClearsPositionAndReturnsToWaitingOpen()
     {
         var sut = CreateSut();

@@ -5018,13 +5018,10 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
-        if (_tradingFlowEngine.CurrentPositionSide != side)
-        {
-            _tradingFlowEngine.ForceWaitingClose(side);
-            LogFlowTransitionIfChanged($"sync-force-waiting-close-correct-side={side}");
-            RaiseCurrentPositionTextChanged();
-            OnPropertyChanged(nameof(CurrentPhaseText));
-        }
+        // Do not "correct" an existing coordinator slot from a scalar side inferred
+        // from the first MMF row. In a multi-slot portfolio that row can belong to a
+        // different pair. Slot direction is authoritative from the open trigger and
+        // pair-aware ticket recovery; reconciliation must always be pair/ticket based.
     }
 
     private TradingPositionSide ResolveLivePositionSideFromMaps()

@@ -227,18 +227,17 @@ public sealed class PortfolioCoordinatorAdapter : ITradingFlowEngine
             ? TradingOpenMode.GapBuy
             : TradingOpenMode.GapSell;
 
-        // Find existing non-closed slot or create synced one.
+        // Multi-slot safety: an aggregate/scalar MMF re-check cannot identify which
+        // coordinator slot it belongs to. Never rewrite an existing slot's side/mode
+        // from that value; doing so can turn a GapBuy slot into GapSell (or vice versa)
+        // when the first MMF record belongs to another pair.
+        //
+        // Existing slots already carry the authoritative direction captured from their
+        // open trigger (or pair-aware recovery). ForceWaitingClose is retained only for
+        // the legacy/recovery case where no coordinator slot exists yet.
         var existing = FirstNonClosedSlot();
         if (existing is not null)
         {
-            // Update existing slot's side/mode (mirrors engine cũ overwriting state).
-            existing.MarkSynced(
-                side: positionSide,
-                mode: mode,
-                ticketA: existing.TicketA,
-                ticketB: existing.TicketB,
-                openConfirmedAtUtc: existing.OpenConfirmedAtUtc ?? existing.OpenedAtUtc ?? DateTime.UtcNow,
-                holdingSeconds: existing.HoldingSeconds > 0 ? existing.HoldingSeconds : FallbackHoldingSeconds());
             return;
         }
 
