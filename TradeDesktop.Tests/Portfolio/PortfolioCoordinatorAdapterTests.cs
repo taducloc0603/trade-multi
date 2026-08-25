@@ -252,6 +252,32 @@ public sealed class PortfolioCoordinatorAdapterTests
     }
 
     [Fact]
+    public void BeginWaitAfterClose_WithPairId_ClosesOlderSlotAndPreservesNewerSlot()
+    {
+        var coordinator = new PortfolioCoordinator(
+            new GapSignalConfirmationEngine(),
+            new CloseSignalEngineFactory(),
+            random: new Random(42));
+        var sut = new PortfolioCoordinatorAdapter(coordinator);
+        var openedAt = DateTime.UtcNow.AddMinutes(-10);
+        var older = coordinator.RegisterSyncedSlot(
+            "pair-older", TradingPositionSide.Buy, TradingOpenMode.GapBuy,
+            101, 201, openedAt, 10);
+        var newer = coordinator.RegisterSyncedSlot(
+            "pair-newer", TradingPositionSide.Buy, TradingOpenMode.GapBuy,
+            102, 202, openedAt.AddMinutes(1), 10);
+
+        older.MarkCloseTriggered(DateTime.UtcNow);
+        sut.BeginWaitAfterClose(DateTime.UtcNow, 0, 0, "pair-older");
+
+        Assert.Null(coordinator.GetSlotByPairId("pair-older"));
+        Assert.Same(newer, coordinator.GetSlotByPairId("pair-newer"));
+        Assert.Equal(PositionSlotStatus.Live, newer.Status);
+        Assert.Equal((ulong)102, newer.TicketA);
+        Assert.Equal((ulong)202, newer.TicketB);
+    }
+
+    [Fact]
     public void ForceWaitingClose_WhenBuy_SetsWaitingCloseFromGapBuy()
     {
         var sut = CreateSut();

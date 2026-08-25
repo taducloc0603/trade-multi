@@ -23,7 +23,7 @@ namespace TradeDesktop.App.ViewModels;
 public sealed class DashboardViewModel : ObservableObject
 {
     private static readonly string AssemblyVersion = GetAssemblyVersion();
-    private static readonly string[] SystemLogThrottleSubjectKeys = ["pairId=", "slot=", "exchange=", "map="];
+    private static readonly string[] SystemLogThrottleSubjectKeys = ["pairId=", "slot=", "slotId=", "ticket=", "exchange=", "map="];
 
     private readonly IServiceProvider _serviceProvider;
     private readonly RuntimeConfigState _runtimeConfigState;
@@ -615,10 +615,10 @@ public sealed class DashboardViewModel : ObservableObject
             : $"{_lastSignalSummary} — [{status}]";
     }
 
-    private const int MaxSignalLogItems = 500;
-    private const int MaxSystemLogItems = 2_000;
-    private const int MaxPendingSystemLogs = 5_000;
-    private const int MaxSystemLogsPerFlush = 150;
+    private const int MaxSignalLogItems = 2_000;
+    private const int MaxSystemLogItems = 10_000;
+    private const int MaxPendingSystemLogs = 20_000;
+    private const int MaxSystemLogsPerFlush = 300;
     public SignalLogCollection SignalLogItems { get; }
     public CappedObservableCollection<SystemLogItem> SystemLogItems { get; }
     public string SystemLogStatusText =>
@@ -1152,12 +1152,19 @@ public sealed class DashboardViewModel : ObservableObject
     {
         if (message.Contains("[TP_CHECK]", StringComparison.OrdinalIgnoreCase)
             || message.Contains("[TRADE_GATE][BLOCKED]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("[TRADE_POLICY][BLOCKED]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("[SLOT][ABORT]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("[SIGNAL_CLOSE_BLOCKED]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("[CLOSE_SELECT][INFO]", StringComparison.OrdinalIgnoreCase)
+            || IsEmptyCloseRequestLog(message)
             || message.Contains("Latency spike", StringComparison.OrdinalIgnoreCase))
         {
             return TimeSpan.FromSeconds(10);
         }
 
         if (message.Contains("[MIN_PROFIT][WAITING]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("[CLOSE_SELECT][ERROR]", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Close reconcile blocked", StringComparison.OrdinalIgnoreCase)
             || message.Contains("[COOLDOWN][BLOCK]", StringComparison.OrdinalIgnoreCase)
             || message.Contains("[CONN][SKIP]", StringComparison.OrdinalIgnoreCase)
             || message.Contains("[HWND][SKIP]", StringComparison.OrdinalIgnoreCase)
@@ -1168,6 +1175,11 @@ public sealed class DashboardViewModel : ObservableObject
 
         return TimeSpan.Zero;
     }
+
+    private static bool IsEmptyCloseRequestLog(string message)
+        => message.Contains("Close pair request:", StringComparison.OrdinalIgnoreCase)
+           && message.Contains("legA={platform=,action=", StringComparison.OrdinalIgnoreCase)
+           && message.Contains("legB={platform=,action=", StringComparison.OrdinalIgnoreCase);
 
     private static string ResolveThrottleSubject(string message)
     {
@@ -1182,6 +1194,29 @@ public sealed class DashboardViewModel : ObservableObject
             start += key.Length;
             var end = message.IndexOfAny([' ', ',', ';'], start);
             return end > start ? message[start..end] : message[start..];
+        }
+
+        // Some CLOSE_SELECT messages use "Ticket 123"/"Slot 41" rather than key=value.
+        // Keep each subject independent so one broken slot cannot hide another one.
+        foreach (var (prefix, label) in new[] { ("Ticket ", "ticket"), ("Slot ", "slot") })
+        {
+            var valueStart = message.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+            if (valueStart < 0)
+            {
+                continue;
+            }
+
+            valueStart += prefix.Length;
+            var valueEnd = valueStart;
+            while (valueEnd < message.Length && char.IsDigit(message[valueEnd]))
+            {
+                valueEnd++;
+            }
+
+            if (valueEnd > valueStart)
+            {
+                return $"{label}:{message[valueStart..valueEnd]}";
+            }
         }
 
         return "global";
@@ -2317,7 +2352,7 @@ public sealed class DashboardViewModel : ObservableObject
 
             var appCloseRequestTimeLocal = DateTimeOffset.Now;
             var appCloseRequestRawMs = Environment.TickCount64;
-            _activeAutoCloseRecoveryCycle = BuildActiveCloseRecoveryCycle(slot, selectA, selectB);
+            _activeAutoCloseRecoveryCycle = BuildActiveCloseRecoveryCycle(slot, selectA, selectB, targetSlot);
             var delayCloseAMs = Math.Max(0, _runtimeConfigState.CurrentDelayCloseAMs);
             var delayCloseBMs = Math.Max(0, _runtimeConfigState.CurrentDelayCloseBMs);
 
@@ -3231,8 +3266,27 @@ public sealed class DashboardViewModel : ObservableObject
     private ActiveAutoCycleState? BuildActiveCloseRecoveryCycle(
         int slot,
         CloseSelectionResult selectA,
-        CloseSelectionResult selectB)
+        CloseSelectionResult selectB,
+        PositionSlot? targetSlot = null)
     {
+        // Multi-slot close must be tracked by the slot being closed. _activeAutoCycle is a
+        // legacy singleton and may point at a newer slot, so it cannot authorize recovery
+        // for an arbitrary targetSlot.
+        if (targetSlot is not null)
+        {
+            return new ActiveAutoCycleState
+            {
+                Slot = targetSlot.SlotId,
+                OpenedAtLocal = targetSlot.OpenConfirmedAtUtc.HasValue
+                    ? new DateTimeOffset(targetSlot.OpenConfirmedAtUtc.Value)
+                    : DateTimeOffset.Now,
+                PairIdA = targetSlot.PairId,
+                PairIdB = targetSlot.PairId,
+                TicketA = selectA.Request?.Ticket ?? targetSlot.TicketA,
+                TicketB = selectB.Request?.Ticket ?? targetSlot.TicketB
+            };
+        }
+
         var active = _activeAutoCycle;
         if (active is null || active.Slot != slot)
         {
@@ -3334,10 +3388,16 @@ public sealed class DashboardViewModel : ObservableObject
         return false;
     }
 
-    private void ClearActiveAutoCycleOnCloseFinalize()
+    private void ClearActiveAutoCycleOnCloseFinalize(string? closedPairId = null)
     {
         _activeAutoCloseRecoveryCycle = null;
-        _activeAutoCycle = null;
+        if (string.IsNullOrWhiteSpace(closedPairId)
+            || _activeAutoCycle is null
+            || string.Equals(_activeAutoCycle.PairIdA, closedPairId, StringComparison.Ordinal)
+            || string.Equals(_activeAutoCycle.PairIdB, closedPairId, StringComparison.Ordinal))
+        {
+            _activeAutoCycle = null;
+        }
 
         // Clear persisted tickets from Supabase on close finalize
         _ = Task.Run(async () =>
@@ -3355,21 +3415,20 @@ public sealed class DashboardViewModel : ObservableObject
         });
     }
 
-    private bool IsPendingCloseStateForActiveCycle(PendingClosePairState state)
+    private bool IsPendingCloseStateForTrackedSlot(PendingClosePairState state)
     {
-        var active = _activeAutoCycle;
-        if (active is null)
+        var slot = _portfolioCoordinator.GetSlotByPairId(state.PairId);
+        if (slot is null || slot.SlotId != state.SlotNumber)
         {
             return false;
         }
 
-        if (state.SlotNumber != active.Slot)
+        if (state.TicketA.HasValue && slot.TicketA != state.TicketA.Value)
         {
             return false;
         }
 
-        return string.Equals(state.PairId, active.PairIdA, StringComparison.Ordinal)
-            || string.Equals(state.PairId, active.PairIdB, StringComparison.Ordinal);
+        return !state.TicketB.HasValue || slot.TicketB == state.TicketB.Value;
     }
 
     private void ShowManualTradeFeedback(string actionName, ManualTradeResult result)
@@ -4808,17 +4867,12 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
-        // Khi active cycle đã null, main close flow đã trigger BeginWaitAfterClose từ trước —
-        // pending close finalize ở đây chỉ là safety-net polling, không cần log noise.
-        if (_activeAutoCycle is null)
-        {
-            return;
-        }
-
-        if (!IsPendingCloseStateForActiveCycle(state))
+        // Multi-slot: validate against the coordinator slot that owns this pair/tickets.
+        // _activeAutoCycle is only a legacy singleton and can point at a newer slot.
+        if (!IsPendingCloseStateForTrackedSlot(state))
         {
             SignalLogItems.Insert(0,
-                $"    - [{DateTime.Now:HH:mm:ss.fff}] Close pending ignored: pair does not match active auto cycle ({state.PairId})");
+                $"    - [{DateTime.Now:HH:mm:ss.fff}] Close pending ignored: pair/tickets do not match tracked slot ({state.PairId})");
             return;
         }
 
@@ -4843,7 +4897,7 @@ public sealed class DashboardViewModel : ObservableObject
             $"    - [{DateTime.Now:HH:mm:ss.fff}] Close pending confirmed by ticket check: pair={state.PairId}");
         SignalLogItems.Insert(0,
             SignalLogFormatter.FormatRandomWaitingTime(closeCompletedAtLocal, waitSeconds));
-        ClearActiveAutoCycleOnCloseFinalize();
+        ClearActiveAutoCycleOnCloseFinalize(state.PairId);
         RaiseCurrentPositionTextChanged();
         OnPropertyChanged(nameof(CurrentPhaseText));
     }
@@ -5224,7 +5278,9 @@ public sealed class DashboardViewModel : ObservableObject
             $"    - [{DateTime.Now:HH:mm:ss.fff}] Flow -> WaitingOpen after close confirmed ({source})");
         SignalLogItems.Insert(0,
             SignalLogFormatter.FormatRandomWaitingTime(closeCompletedAtLocal, waitSeconds));
-        ClearActiveAutoCycleOnCloseFinalize();
+        var closedPairId = _activeAutoCloseRecoveryCycle?.PairIdA
+            ?? _activeAutoCloseRecoveryCycle?.PairIdB;
+        ClearActiveAutoCycleOnCloseFinalize(closedPairId);
         _closeBothFlatPollStreak = 0;
         RaiseCurrentPositionTextChanged();
         OnPropertyChanged(nameof(CurrentPhaseText));
@@ -5263,7 +5319,9 @@ public sealed class DashboardViewModel : ObservableObject
             $"    - [{DateTime.Now:HH:mm:ss.fff}] Flow -> WaitingOpen after close confirmed ({source})");
         SignalLogItems.Insert(0,
             SignalLogFormatter.FormatRandomWaitingTime(closeCompletedAtLocal, waitSeconds));
-        ClearActiveAutoCycleOnCloseFinalize();
+        var closedPairId = _activeAutoCloseRecoveryCycle?.PairIdA
+            ?? _activeAutoCloseRecoveryCycle?.PairIdB;
+        ClearActiveAutoCycleOnCloseFinalize(closedPairId);
         _closeBothFlatPollStreak = 0;
         RaiseCurrentPositionTextChanged();
         OnPropertyChanged(nameof(CurrentPhaseText));

@@ -2,6 +2,7 @@ using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Media;
 using TradeDesktop.App.ViewModels;
 using TradeDesktop.Application.Models;
 
@@ -11,6 +12,11 @@ public partial class SignalLogWindow : Window
 {
     private INotifyCollectionChanged? _logItems;
     private INotifyCollectionChanged? _systemLogItems;
+    private ScrollViewer? _signalScrollViewer;
+    private ScrollViewer? _systemScrollViewer;
+    private bool _followSignalLog = true;
+    private bool _followSystemLog = true;
+    private const double FollowTopThreshold = 1.0;
 
     public SignalLogWindow()
     {
@@ -32,6 +38,18 @@ public partial class SignalLogWindow : Window
         _systemLogItems.CollectionChanged += OnSystemLogItemsChanged;
         CollectionViewSource.GetDefaultView(SignalLogList.ItemsSource).Filter = FilterSignalLog;
         CollectionViewSource.GetDefaultView(SystemLogList.ItemsSource).Filter = FilterSystemLog;
+        SignalLogList.UpdateLayout();
+        SystemLogList.UpdateLayout();
+        _signalScrollViewer = FindVisualChild<ScrollViewer>(SignalLogList);
+        _systemScrollViewer = FindVisualChild<ScrollViewer>(SystemLogList);
+        if (_signalScrollViewer is not null)
+        {
+            _signalScrollViewer.ScrollChanged += OnSignalScrollChanged;
+        }
+        if (_systemScrollViewer is not null)
+        {
+            _systemScrollViewer.ScrollChanged += OnSystemScrollChanged;
+        }
         ScrollToNewestLog();
         ScrollToNewestSystemLog();
     }
@@ -49,16 +67,92 @@ public partial class SignalLogWindow : Window
             _systemLogItems.CollectionChanged -= OnSystemLogItemsChanged;
             _systemLogItems = null;
         }
+        if (_signalScrollViewer is not null)
+        {
+            _signalScrollViewer.ScrollChanged -= OnSignalScrollChanged;
+            _signalScrollViewer = null;
+        }
+        if (_systemScrollViewer is not null)
+        {
+            _systemScrollViewer.ScrollChanged -= OnSystemScrollChanged;
+            _systemScrollViewer = null;
+        }
     }
 
     private void OnLogItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        Dispatcher.BeginInvoke(ScrollToNewestLog);
+        if (_followSignalLog)
+        {
+            Dispatcher.BeginInvoke(ScrollToNewestLog);
+        }
+        else
+        {
+            PreservePausedPosition(_signalScrollViewer, e);
+        }
     }
 
     private void OnSystemLogItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        Dispatcher.BeginInvoke(ScrollToNewestSystemLog);
+        if (_followSystemLog)
+        {
+            Dispatcher.BeginInvoke(ScrollToNewestSystemLog);
+        }
+        else
+        {
+            PreservePausedPosition(_systemScrollViewer, e);
+        }
+    }
+
+    private void OnSignalScrollChanged(object sender, ScrollChangedEventArgs e)
+        => HandleScrollChanged((ScrollViewer)sender, e, isSignalLog: true);
+
+    private void OnSystemScrollChanged(object sender, ScrollChangedEventArgs e)
+        => HandleScrollChanged((ScrollViewer)sender, e, isSignalLog: false);
+
+    private void HandleScrollChanged(ScrollViewer viewer, ScrollChangedEventArgs e, bool isSignalLog)
+    {
+        var shouldFollow = e.VerticalOffset <= FollowTopThreshold;
+        if (isSignalLog)
+        {
+            _followSignalLog = shouldFollow;
+            SignalFollowButton.Visibility = shouldFollow ? Visibility.Collapsed : Visibility.Visible;
+        }
+        else
+        {
+            _followSystemLog = shouldFollow;
+            SystemFollowButton.Visibility = shouldFollow ? Visibility.Collapsed : Visibility.Visible;
+        }
+    }
+
+    private void PreservePausedPosition(ScrollViewer? viewer, NotifyCollectionChangedEventArgs e)
+    {
+        if (viewer is null
+            || e.Action != NotifyCollectionChangedAction.Add
+            || e.NewStartingIndex != 0
+            || e.NewItems is null
+            || e.NewItems.Count == 0)
+        {
+            return;
+        }
+
+        var offsetBeforeInsert = viewer.VerticalOffset;
+        var insertedCount = e.NewItems.Count;
+        Dispatcher.BeginInvoke(() =>
+            viewer.ScrollToVerticalOffset(offsetBeforeInsert + insertedCount));
+    }
+
+    private void OnSignalFollowClick(object sender, RoutedEventArgs e)
+    {
+        _followSignalLog = true;
+        SignalFollowButton.Visibility = Visibility.Collapsed;
+        ScrollToNewestLog();
+    }
+
+    private void OnSystemFollowClick(object sender, RoutedEventArgs e)
+    {
+        _followSystemLog = true;
+        SystemFollowButton.Visibility = Visibility.Collapsed;
+        ScrollToNewestSystemLog();
     }
 
     private void OnCloseClick(object sender, RoutedEventArgs e)
@@ -116,5 +210,25 @@ public partial class SignalLogWindow : Window
         {
             SystemLogList.ScrollIntoView(SystemLogList.Items[0]);
         }
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            var descendant = FindVisualChild<T>(child);
+            if (descendant is not null)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
     }
 }

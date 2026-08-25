@@ -93,6 +93,13 @@
                                     <ComboBoxItem Content="Hedge" Tag="Hedge" />
                                     <ComboBoxItem Content="Close" Tag="Close" />
                                 </ComboBox>
+                                <Button x:Name="SignalFollowButton"
+                                        Content="Về log mới"
+                                        Height="26"
+                                        Margin="8,0,0,0"
+                                        Padding="10,0"
+                                        Visibility="Collapsed"
+                                        Click="OnSignalFollowClick" />
                             </StackPanel>
 
                             <ListBox x:Name="SignalLogList"
@@ -103,6 +110,9 @@
                                      Foreground="#101828"
                                      FontFamily="Consolas"
                                      FontSize="12"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.VirtualizationMode="Recycling"
+                                     ScrollViewer.IsDeferredScrollingEnabled="True"
                                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                      ScrollViewer.VerticalScrollBarVisibility="Auto">
                                 <ListBox.ItemTemplate>
@@ -166,6 +176,13 @@
                                     <ComboBoxItem Content="Warn" Tag="Warn" />
                                     <ComboBoxItem Content="Error" Tag="Error" />
                                 </ComboBox>
+                                <Button x:Name="SystemFollowButton"
+                                        Content="Về log mới"
+                                        Height="26"
+                                        Margin="8,0,0,0"
+                                        Padding="10,0"
+                                        Visibility="Collapsed"
+                                        Click="OnSystemFollowClick" />
                             </StackPanel>
 
                             <ListBox x:Name="SystemLogList"
@@ -176,6 +193,9 @@
                                      Foreground="#101828"
                                      FontFamily="Consolas"
                                      FontSize="12"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.VirtualizationMode="Recycling"
+                                     ScrollViewer.IsDeferredScrollingEnabled="True"
                                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                      ScrollViewer.VerticalScrollBarVisibility="Auto">
                                 <ListBox.ItemTemplate>
