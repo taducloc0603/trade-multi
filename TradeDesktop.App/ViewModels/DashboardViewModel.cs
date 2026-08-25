@@ -6969,6 +6969,14 @@ public sealed class DashboardViewModel : ObservableObject
             ? $"{value.Value.ToString(CultureInfo.InvariantCulture)} ms"
             : "-";
 
+    private static string FormatGapStabilityConfig(GapStabilityConfig config) =>
+        $"A={config.AbsoluteFloor.ToString(CultureInfo.InvariantCulture)}," +
+        $"R={config.RelativeTolerance.ToString("0.####", CultureInfo.InvariantCulture)}," +
+        $"K={config.MadMultiplier.ToString("0.####", CultureInfo.InvariantCulture)}," +
+        $"MinSamples={config.MinStableSamples.ToString(CultureInfo.InvariantCulture)}," +
+        $"MaxDispersion={config.MaxDispersion.ToString("0.####", CultureInfo.InvariantCulture)}," +
+        $"MaxDrift={config.MaxDrift.ToString("0.####", CultureInfo.InvariantCulture)}";
+
     private string FormatTradeTime(ulong timeMsc)
     {
         if (timeMsc == 0)
@@ -7069,6 +7077,12 @@ public sealed class DashboardViewModel : ObservableObject
                     rdStartPostOpenLockSeconds: result.RdStartPostOpenLockSeconds,
                     rdEndPostOpenLockSeconds: result.RdEndPostOpenLockSeconds,
                     minProfitToClose: result.MinProfitToClose);
+                _runtimeConfigState.UpdateGapStability(
+                    result.OpenGapStability!,
+                    result.CloseGapStability!);
+                SafeVmLog(
+                    $"[CONFIG][GAP_STABILITY] Open={FormatGapStabilityConfig(result.OpenGapStability!)} | " +
+                    $"NormalClose={FormatGapStabilityConfig(result.CloseGapStability!)}");
                 _runtimeConfigState.UpdateScheduleSleeping(result.ScheduleSleepingJson);
                 _runtimeConfigState.UpdateQuota(
                     result.MaxTotalOpens,
@@ -7191,6 +7205,14 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
+            var openGapStability = _runtimeConfigState.CurrentOpenGapStability;
+            var closeGapStability = _runtimeConfigState.CurrentCloseGapStability;
+            if (openGapStability is null || closeGapStability is null)
+            {
+                // Fail-safe: không chạy legacy Open path nếu DB config chưa load hợp lệ.
+                return;
+            }
+
             // Gốc fix: profit nuôi quyết định TP phải tươi MỖI tick, đồng bộ với gap-snapshot
             // dùng ngay dưới — KHÔNG kẹp vào throttle render UI (canRenderUi ~200ms). Nếu không,
             // _tpState.Profits bị nhồi-lặp giá trị cũ và có thể latch spike ảo.
@@ -7227,7 +7249,9 @@ public sealed class DashboardViewModel : ObservableObject
                     SosTriggerAOpenDistancePts: _runtimeConfigState.CurrentSosTriggerAOpenDistancePts,
                     SosTriggerAfterSeconds: _runtimeConfigState.CurrentSosTriggerAfterSeconds,
                     SosCloseConfirmGapPts: _runtimeConfigState.CurrentSosCloseConfirmGapPts,
-                    SosCloseGapPts: _runtimeConfigState.CurrentSosCloseGapPts));
+                    SosCloseGapPts: _runtimeConfigState.CurrentSosCloseGapPts,
+                    OpenGapStability: openGapStability,
+                    CloseGapStability: closeGapStability));
 
             if (portfolioResult.UiNotices is { Count: > 0 })
             {

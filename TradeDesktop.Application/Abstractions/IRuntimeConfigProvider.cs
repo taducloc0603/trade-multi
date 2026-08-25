@@ -1,4 +1,5 @@
 using TradeDesktop.Domain.Models;
+using TradeDesktop.Application.Models;
 
 namespace TradeDesktop.Application.Abstractions;
 
@@ -37,6 +38,8 @@ public interface IRuntimeConfigProvider
     int CurrentDelayCloseBMs { get; }
     int CurrentOpenNumberOfQualifyingTimes { get; }
     int CurrentCloseNumberOfQualifyingTimes { get; }
+    GapStabilityConfig? CurrentOpenGapStability => null;
+    GapStabilityConfig? CurrentCloseGapStability => null;
     int CurrentOppositeOpenMinDistancePts { get; }
     string CurrentMapName1 { get; }
     string CurrentMapName2 { get; }

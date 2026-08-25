@@ -433,6 +433,9 @@ public sealed class ConfigViewModel : ObservableObject
                 rdEndPostCloseLockSeconds: loadResult.RdEndPostCloseLockSeconds,
                 rdStartPostOpenLockSeconds: loadResult.RdStartPostOpenLockSeconds,
                 rdEndPostOpenLockSeconds: loadResult.RdEndPostOpenLockSeconds);
+            _runtimeConfigState.UpdateGapStability(
+                loadResult.OpenGapStability!,
+                loadResult.CloseGapStability!);
             _runtimeConfigState.UpdateScheduleSleeping(loadResult.ScheduleSleepingJson);
             _runtimeConfigState.UpdateManualTradeHwnd(BuildManualHwndColumns());
 

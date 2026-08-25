@@ -96,7 +96,21 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             RdEndPostCloseLockSeconds: row.RdEndPostCloseLockSeconds,
             RdStartPostOpenLockSeconds: row.RdStartPostOpenLockSeconds,
             RdEndPostOpenLockSeconds: row.RdEndPostOpenLockSeconds,
-            ScheduleSleepingJson: row.ScheduleSleepingJson);
+            ScheduleSleepingJson: row.ScheduleSleepingJson,
+            OpenGapStability: new GapStabilityConfig(
+                row.OpenGapAbsoluteFloor,
+                row.OpenGapRelativeTolerance,
+                row.OpenGapMadMultiplier,
+                row.OpenGapMinStableSamples,
+                row.OpenGapMaxDispersion,
+                row.OpenGapMaxDrift),
+            CloseGapStability: new GapStabilityConfig(
+                row.CloseGapAbsoluteFloor,
+                row.CloseGapRelativeTolerance,
+                row.CloseGapMadMultiplier,
+                row.CloseGapMinStableSamples,
+                row.CloseGapMaxDispersion,
+                row.CloseGapMaxDrift));
     }
 
     public async Task<bool> UpdateCurrentTicksAsync(
@@ -332,6 +346,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("rd_end_post_close_lock_seconds", out var rdEndPostCloseLockSecondsElement);
         first.TryGetProperty("rd_start_post_open_lock_seconds", out var rdStartPostOpenLockSecondsElement);
         first.TryGetProperty("rd_end_post_open_lock_seconds", out var rdEndPostOpenLockSecondsElement);
+        ReadGapStabilityElements(first, out var openGapElements, out var closeGapElements);
         first.TryGetProperty("schedule_sleeping", out var scheduleSleepingElement);
 
         // DB column name is lowercase: hostname
@@ -404,6 +419,18 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             RdEndPostCloseLockSeconds = rdEndPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostCloseLockSecondsElement.TryGetInt32(out var rdEndPostCloseLockSeconds) ? rdEndPostCloseLockSeconds : 300,
             RdStartPostOpenLockSeconds = rdStartPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostOpenLockSecondsElement.TryGetInt32(out var rdStartPostOpenLockSeconds) ? rdStartPostOpenLockSeconds : 0,
             RdEndPostOpenLockSeconds = rdEndPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostOpenLockSecondsElement.TryGetInt32(out var rdEndPostOpenLockSeconds) ? rdEndPostOpenLockSeconds : 0,
+            OpenGapAbsoluteFloor = ReadInt(openGapElements.AbsoluteFloor, -1),
+            OpenGapRelativeTolerance = ReadDouble(openGapElements.RelativeTolerance),
+            OpenGapMadMultiplier = ReadDouble(openGapElements.MadMultiplier),
+            OpenGapMinStableSamples = ReadInt(openGapElements.MinStableSamples),
+            OpenGapMaxDispersion = ReadDouble(openGapElements.MaxDispersion),
+            OpenGapMaxDrift = ReadDouble(openGapElements.MaxDrift),
+            CloseGapAbsoluteFloor = ReadInt(closeGapElements.AbsoluteFloor, -1),
+            CloseGapRelativeTolerance = ReadDouble(closeGapElements.RelativeTolerance),
+            CloseGapMadMultiplier = ReadDouble(closeGapElements.MadMultiplier),
+            CloseGapMinStableSamples = ReadInt(closeGapElements.MinStableSamples),
+            CloseGapMaxDispersion = ReadDouble(closeGapElements.MaxDispersion),
+            CloseGapMaxDrift = ReadDouble(closeGapElements.MaxDrift),
             ScheduleSleeping = scheduleSleepingElement.ValueKind == JsonValueKind.Object
                 ? scheduleSleepingElement.Clone()
                 : default
@@ -494,6 +521,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("rd_end_post_close_lock_seconds", out var rdEndPostCloseLockSecondsElement);
         first.TryGetProperty("rd_start_post_open_lock_seconds", out var rdStartPostOpenLockSecondsElement);
         first.TryGetProperty("rd_end_post_open_lock_seconds", out var rdEndPostOpenLockSecondsElement);
+        ReadGapStabilityElements(first, out var openGapElements, out var closeGapElements);
         first.TryGetProperty("schedule_sleeping", out var scheduleSleepingElement);
 
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
@@ -564,6 +592,18 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             RdEndPostCloseLockSeconds = rdEndPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostCloseLockSecondsElement.TryGetInt32(out var rdEndPostCloseLockSeconds) ? rdEndPostCloseLockSeconds : 300,
             RdStartPostOpenLockSeconds = rdStartPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostOpenLockSecondsElement.TryGetInt32(out var rdStartPostOpenLockSeconds) ? rdStartPostOpenLockSeconds : 0,
             RdEndPostOpenLockSeconds = rdEndPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostOpenLockSecondsElement.TryGetInt32(out var rdEndPostOpenLockSeconds) ? rdEndPostOpenLockSeconds : 0,
+            OpenGapAbsoluteFloor = ReadInt(openGapElements.AbsoluteFloor, -1),
+            OpenGapRelativeTolerance = ReadDouble(openGapElements.RelativeTolerance),
+            OpenGapMadMultiplier = ReadDouble(openGapElements.MadMultiplier),
+            OpenGapMinStableSamples = ReadInt(openGapElements.MinStableSamples),
+            OpenGapMaxDispersion = ReadDouble(openGapElements.MaxDispersion),
+            OpenGapMaxDrift = ReadDouble(openGapElements.MaxDrift),
+            CloseGapAbsoluteFloor = ReadInt(closeGapElements.AbsoluteFloor, -1),
+            CloseGapRelativeTolerance = ReadDouble(closeGapElements.RelativeTolerance),
+            CloseGapMadMultiplier = ReadDouble(closeGapElements.MadMultiplier),
+            CloseGapMinStableSamples = ReadInt(closeGapElements.MinStableSamples),
+            CloseGapMaxDispersion = ReadDouble(closeGapElements.MaxDispersion),
+            CloseGapMaxDrift = ReadDouble(closeGapElements.MaxDrift),
             ScheduleSleeping = scheduleSleepingElement.ValueKind == JsonValueKind.Object
                 ? scheduleSleepingElement.Clone()
                 : default
@@ -616,6 +656,58 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         using var doc = JsonDocument.Parse(body);
         return doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0;
     }
+
+    private static void ReadGapStabilityElements(
+        JsonElement row,
+        out GapStabilityElements open,
+        out GapStabilityElements close)
+    {
+        row.TryGetProperty("open_gap_absolute_floor", out var openAbsoluteFloor);
+        row.TryGetProperty("open_gap_relative_tolerance", out var openRelativeTolerance);
+        row.TryGetProperty("open_gap_mad_multiplier", out var openMadMultiplier);
+        row.TryGetProperty("open_gap_min_stable_samples", out var openMinStableSamples);
+        row.TryGetProperty("open_gap_max_dispersion", out var openMaxDispersion);
+        row.TryGetProperty("open_gap_max_drift", out var openMaxDrift);
+        open = new GapStabilityElements(
+            openAbsoluteFloor,
+            openRelativeTolerance,
+            openMadMultiplier,
+            openMinStableSamples,
+            openMaxDispersion,
+            openMaxDrift);
+
+        row.TryGetProperty("close_gap_absolute_floor", out var closeAbsoluteFloor);
+        row.TryGetProperty("close_gap_relative_tolerance", out var closeRelativeTolerance);
+        row.TryGetProperty("close_gap_mad_multiplier", out var closeMadMultiplier);
+        row.TryGetProperty("close_gap_min_stable_samples", out var closeMinStableSamples);
+        row.TryGetProperty("close_gap_max_dispersion", out var closeMaxDispersion);
+        row.TryGetProperty("close_gap_max_drift", out var closeMaxDrift);
+        close = new GapStabilityElements(
+            closeAbsoluteFloor,
+            closeRelativeTolerance,
+            closeMadMultiplier,
+            closeMinStableSamples,
+            closeMaxDispersion,
+            closeMaxDrift);
+    }
+
+    private static int ReadInt(JsonElement element, int missingValue = 0) =>
+        element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out var value)
+            ? value
+            : missingValue;
+
+    private static double ReadDouble(JsonElement element) =>
+        element.ValueKind == JsonValueKind.Number && element.TryGetDouble(out var value)
+            ? value
+            : double.NaN;
+
+    private readonly record struct GapStabilityElements(
+        JsonElement AbsoluteFloor,
+        JsonElement RelativeTolerance,
+        JsonElement MadMultiplier,
+        JsonElement MinStableSamples,
+        JsonElement MaxDispersion,
+        JsonElement MaxDrift);
 
     private sealed class ConfigRow
     {
@@ -675,6 +767,42 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("close_hold_confirm_ms")]
         public int CloseHoldConfirmMs { get; set; }
+
+        [JsonPropertyName("open_gap_absolute_floor")]
+        public int OpenGapAbsoluteFloor { get; set; } = -1;
+
+        [JsonPropertyName("open_gap_relative_tolerance")]
+        public double OpenGapRelativeTolerance { get; set; } = double.NaN;
+
+        [JsonPropertyName("open_gap_mad_multiplier")]
+        public double OpenGapMadMultiplier { get; set; } = double.NaN;
+
+        [JsonPropertyName("open_gap_min_stable_samples")]
+        public int OpenGapMinStableSamples { get; set; }
+
+        [JsonPropertyName("open_gap_max_dispersion")]
+        public double OpenGapMaxDispersion { get; set; } = double.NaN;
+
+        [JsonPropertyName("open_gap_max_drift")]
+        public double OpenGapMaxDrift { get; set; } = double.NaN;
+
+        [JsonPropertyName("close_gap_absolute_floor")]
+        public int CloseGapAbsoluteFloor { get; set; } = -1;
+
+        [JsonPropertyName("close_gap_relative_tolerance")]
+        public double CloseGapRelativeTolerance { get; set; } = double.NaN;
+
+        [JsonPropertyName("close_gap_mad_multiplier")]
+        public double CloseGapMadMultiplier { get; set; } = double.NaN;
+
+        [JsonPropertyName("close_gap_min_stable_samples")]
+        public int CloseGapMinStableSamples { get; set; }
+
+        [JsonPropertyName("close_gap_max_dispersion")]
+        public double CloseGapMaxDispersion { get; set; } = double.NaN;
+
+        [JsonPropertyName("close_gap_max_drift")]
+        public double CloseGapMaxDrift { get; set; } = double.NaN;
 
         [JsonPropertyName("close_price_freeze_ms")]
         public int ClosePriceFreezeMs { get; set; }

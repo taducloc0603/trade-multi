@@ -47,6 +47,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentCloseNumberOfQualifyingTimes { get; private set; } = 1;
     public int CurrentMaxLifeTimeBySecond { get; private set; }
     public double CurrentMinProfitToClose { get; private set; }
+    public GapStabilityConfig? CurrentOpenGapStability { get; private set; }
+    public GapStabilityConfig? CurrentCloseGapStability { get; private set; }
 
     // Rule C — opposite-side OPEN lock (sau OPEN, chỉ chặn chiều ngược). Default 300 khi DB
     // chưa có cột, override từ DB column opposite_side_lock_seconds.
@@ -129,6 +131,32 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     /// đắt (native) chỉ khi config HWND thật sự đổi.
     /// </summary>
     public event EventHandler? ManualHwndChanged;
+
+    public void UpdateGapStability(
+        GapStabilityConfig openGapStability,
+        GapStabilityConfig closeGapStability)
+    {
+        ArgumentNullException.ThrowIfNull(openGapStability);
+        ArgumentNullException.ThrowIfNull(closeGapStability);
+
+        if (!openGapStability.TryValidate(out var openError))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(openGapStability),
+                $"[OPEN GAP STABILITY] {openError}");
+        }
+
+        if (!closeGapStability.TryValidate(out var closeError))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(closeGapStability),
+                $"[NORMAL CLOSE GAP STABILITY] {closeError}");
+        }
+
+        CurrentOpenGapStability = openGapStability;
+        CurrentCloseGapStability = closeGapStability;
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     public void Update(
         string machineHostName,

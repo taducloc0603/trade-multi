@@ -57,4 +57,6 @@ public sealed record ConfigRecord(
     int RdEndPostCloseLockSeconds = 300,
     int RdStartPostOpenLockSeconds = 0,
     int RdEndPostOpenLockSeconds = 0,
-    string ScheduleSleepingJson = "");
+    string ScheduleSleepingJson = "",
+    GapStabilityConfig? OpenGapStability = null,
+    GapStabilityConfig? CloseGapStability = null);

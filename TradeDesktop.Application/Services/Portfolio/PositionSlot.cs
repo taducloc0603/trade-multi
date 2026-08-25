@@ -16,6 +16,10 @@ public sealed class PositionSlot
         PairId = pairId;
         Status = PositionSlotStatus.PendingOpen;
         CloseSignalEngine = closeSignalEngine;
+        if (closeSignalEngine is CloseSignalEngine concreteEngine)
+        {
+            concreteEngine.SetSlotId(slotId);
+        }
     }
 
     public int SlotId { get; }
@@ -209,6 +213,10 @@ public sealed class PositionSlot
     public void ResetCloseSignalEngine(ICloseSignalEngine engine)
     {
         CloseSignalEngine = engine;
+        if (engine is CloseSignalEngine concreteEngine)
+        {
+            concreteEngine.SetSlotId(SlotId);
+        }
     }
 
     public bool UpdateSosMode(bool isActive, string source)

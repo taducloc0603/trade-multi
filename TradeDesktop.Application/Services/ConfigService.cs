@@ -42,6 +42,34 @@ public sealed class ConfigService(
             return ConfigLoadResult.NotFound(hostName);
         }
 
+        if (record.OpenGapStability is null)
+        {
+            return ConfigLoadResult.Failed(
+                hostName,
+                "Cấu hình [OPEN GAP STABILITY] không hợp lệ: thiếu cấu hình.");
+        }
+
+        if (!record.OpenGapStability.TryValidate(out var openGapError))
+        {
+            return ConfigLoadResult.Failed(
+                hostName,
+                $"Cấu hình [OPEN GAP STABILITY] không hợp lệ: {openGapError}");
+        }
+
+        if (record.CloseGapStability is null)
+        {
+            return ConfigLoadResult.Failed(
+                hostName,
+                "Cấu hình [NORMAL CLOSE GAP STABILITY] không hợp lệ: thiếu cấu hình.");
+        }
+
+        if (!record.CloseGapStability.TryValidate(out var closeGapError))
+        {
+            return ConfigLoadResult.Failed(
+                hostName,
+                $"Cấu hình [NORMAL CLOSE GAP STABILITY] không hợp lệ: {closeGapError}");
+        }
+
         SansJsonHelper.TryParseSans(record.SansJson, out var mapName1, out var mapName2, out var manualHwndColumns);
         return ConfigLoadResult.Success(
             hostName,
@@ -103,7 +131,9 @@ public sealed class ConfigService(
             rdEndPostCloseLockSeconds: record.RdEndPostCloseLockSeconds,
             rdStartPostOpenLockSeconds: record.RdStartPostOpenLockSeconds,
             rdEndPostOpenLockSeconds: record.RdEndPostOpenLockSeconds,
-            scheduleSleepingJson: record.ScheduleSleepingJson);
+            scheduleSleepingJson: record.ScheduleSleepingJson,
+            openGapStability: record.OpenGapStability,
+            closeGapStability: record.CloseGapStability);
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -238,7 +268,9 @@ public sealed record ConfigLoadResult(
     int RdStartPostOpenLockSeconds = 0,
     int RdEndPostOpenLockSeconds = 0,
     string ScheduleSleepingJson = "",
-    double MinProfitToClose = 0)
+    double MinProfitToClose = 0,
+    GapStabilityConfig? OpenGapStability = null,
+    GapStabilityConfig? CloseGapStability = null)
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -300,7 +332,9 @@ public sealed record ConfigLoadResult(
         int rdStartPostOpenLockSeconds = 0,
         int rdEndPostOpenLockSeconds = 0,
         string scheduleSleepingJson = "",
-        double minProfitToClose = 0) =>
+        double minProfitToClose = 0,
+        GapStabilityConfig? openGapStability = null,
+        GapStabilityConfig? closeGapStability = null) =>
         new(
             true,
             true,
@@ -364,7 +398,9 @@ public sealed record ConfigLoadResult(
             Math.Max(0, rdStartPostOpenLockSeconds),
             Math.Max(0, rdEndPostOpenLockSeconds),
             scheduleSleepingJson ?? string.Empty,
-            Math.Max(0d, minProfitToClose));
+            Math.Max(0d, minProfitToClose),
+            openGapStability,
+            closeGapStability);
 
     public static ConfigLoadResult NotFound(string machineHostName) =>
         new(

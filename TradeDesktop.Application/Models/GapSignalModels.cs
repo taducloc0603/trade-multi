@@ -55,6 +55,64 @@ public sealed record GapSignalSnapshot(
     int? GapSell,
     int PointMultiplier);
 
+/// <summary>
+/// Các giới hạn dùng để phân loại một chu kỳ Gap là ổn định.
+/// Thời gian tối thiểu của chu kỳ tiếp tục lấy từ open/close_hold_confirm_ms.
+/// </summary>
+public sealed record GapStabilityConfig(
+    int AbsoluteFloor,
+    double RelativeTolerance,
+    double MadMultiplier,
+    int MinStableSamples,
+    double MaxDispersion,
+    double MaxDrift)
+{
+    public bool TryValidate(out string error)
+    {
+        if (AbsoluteFloor < 0)
+        {
+            error = "AbsoluteFloor phải >= 0.";
+            return false;
+        }
+
+        if (!IsFiniteNonNegative(RelativeTolerance))
+        {
+            error = "RelativeTolerance phải là số hữu hạn và >= 0.";
+            return false;
+        }
+
+        if (!IsFiniteNonNegative(MadMultiplier))
+        {
+            error = "MadMultiplier phải là số hữu hạn và >= 0.";
+            return false;
+        }
+
+        if (MinStableSamples < 3)
+        {
+            error = "MinStableSamples phải >= 3.";
+            return false;
+        }
+
+        if (!IsFiniteNonNegative(MaxDispersion))
+        {
+            error = "MaxDispersion phải là số hữu hạn và >= 0.";
+            return false;
+        }
+
+        if (!IsFiniteNonNegative(MaxDrift))
+        {
+            error = "MaxDrift phải là số hữu hạn và >= 0.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool IsFiniteNonNegative(double value) =>
+        double.IsFinite(value) && value >= 0d;
+}
+
 public sealed record GapSignalConfirmationConfig(
     int ConfirmGapPts,
     int OpenPts,
@@ -75,7 +133,9 @@ public sealed record GapSignalConfirmationConfig(
     int SosTriggerAfterSeconds = 0,
     int SosCloseConfirmGapPts = 0,
     int SosCloseGapPts = 0,
-    CloseGapMode CloseGapMode = CloseGapMode.Normal);
+    CloseGapMode CloseGapMode = CloseGapMode.Normal,
+    GapStabilityConfig? OpenGapStability = null,
+    GapStabilityConfig? CloseGapStability = null);
 
 public sealed record GapSignalTriggerResult(
     bool Triggered,
