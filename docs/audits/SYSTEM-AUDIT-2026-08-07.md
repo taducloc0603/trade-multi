@@ -13,15 +13,16 @@
 - Multi-slot, quota DB, persistence `current_slots`, startup recovery, manual/recovery barrier,
   physical dispatch mutex, ticket-precise close và watchdog self-heal đều đã triển khai.
 - Các lock kết hợp theo AND/deadline muộn nhất, không cộng duration.
-- Có một finding code mức **High** ở Gap Close và 13 tests đang fail; chưa sửa trong audit này.
+- Tại thời điểm audit có một finding code mức **High** ở Gap Close và 13 tests fail.
+  **Cập nhật 2026-08-25:** finding `AUD-001` đã được khắc phục; toàn bộ 380/380 tests hiện pass.
 - Tài liệu cũ còn nhiều mô tả Phase 0–5/deferred/cap=1; `README.md` và `CLAUDE.md` đã được
   cập nhật theo trạng thái hiện tại.
 
-## Finding cần thay đổi code (chưa thực hiện)
+## Tình trạng findings
 
-### AUD-001 — High — Gap Close chọn sai collection ở cuối confirm window
+### AUD-001 — High — Gap Close chọn sai collection ở cuối confirm window — RESOLVED 2026-08-25
 
-Luồng hiện tại trong `CloseSignalEngine`:
+Luồng tại thời điểm phát hiện (2026-08-07) trong `CloseSignalEngine`:
 
 - Vị thế `GapBuy` phải đóng bằng `gapSell` âm. Lời gọi `ProcessSide` truyền
   `primaryGap: snapshot.GapSell`, nhưng truyền `side: GapSignalSide.Buy`.
@@ -37,7 +38,7 @@ Hậu quả:
 - GapSell Close có thể kiểm tra `SellGaps` thay vì chuỗi `BuyGaps`.
 - Với dữ liệu thực tế `gapBuy != gapSell`, close signal hợp lệ có thể không trigger.
 
-Test evidence:
+Test evidence tại thời điểm phát hiện:
 
 - Toàn suite: 292 tests, 279 pass, 13 fail.
 - Failures tập trung ở `TradingFlowEngineTests` và `PortfolioCoordinatorAdapterTests`, nơi test
@@ -47,12 +48,26 @@ Test evidence:
 - Chạy riêng `ProcessSnapshot_RunsSequentialFlow_OpenBuyThenCloseBuy` vẫn fail, nên không phải
   lỗi do test chạy song song.
 
-Đề xuất sửa sau khi được duyệt:
+Phương án khắc phục đã đề xuất:
 
 1. Tách `trigger/position side` khỏi `primary gap collection`, hoặc truyền rõ collection cần dùng
    vào `ProcessSide`.
 2. Thêm regression tests với `gapBuy` và `gapSell` khác nhau cho cả GapBuy Close và GapSell Close.
-3. Chạy lại toàn bộ 292 tests trên runtime .NET 8 chính thức và trên CI Windows.
+3. Chạy lại toàn bộ tests và xác minh trên CI Windows.
+
+Trạng thái cập nhật 2026-08-25:
+
+- `GapSignalConfirmationEngine.ProcessSide` hiện chọn collection chính theo `triggerType`:
+  `CloseByGapBuy` dùng `state.BuyGaps`, `CloseByGapSell` dùng `state.SellGaps`; `side` chỉ còn là
+  fallback cho trigger không xác định. Vì vậy collection kiểm tra cuối confirm window khớp với
+  `primaryGap` đã kích hoạt window.
+- Các flow tuần tự Open Buy → Close Buy và Open Sell → Close Sell hiện pass khi `gapBuy` và
+  `gapSell` khác nhau.
+- Build `TradeDesktop.App` ngày 2026-08-25 thành công với 0 errors; macOS báo 3 cảnh báo
+  `CA1416` vì các API MMF chỉ hỗ trợ Windows.
+- Toàn suite ngày 2026-08-25: **380 total, 380 passed, 0 failed, 0 skipped**.
+- Kết luận: lỗi chức năng của `AUD-001` không còn tái hiện. Validation trên Windows/.NET 8 chính
+  thức vẫn là bước xác nhận môi trường cuối, không phải finding logic còn mở.
 
 ### AUD-002 — Low — Platform analyzer warnings
 
@@ -65,8 +80,8 @@ Không ảnh hưởng build; không sửa trong audit này.
 
 Một số comment trong `PortfolioState`, `PortfolioCoordinator`, DI và ViewModel vẫn nói cap=1,
 Phase 5 deferred hoặc line number cũ. Runtime behavior không bị ảnh hưởng, nhưng comment có thể làm
-người bảo trì hiểu sai. Audit không sửa vì đây là thay đổi trong file code; nên dọn riêng sau khi
-AUD-001 được xử lý và tests xanh.
+người bảo trì hiểu sai. Audit không sửa vì đây là thay đổi trong file code; có thể dọn trong một
+thay đổi tài liệu/comment riêng. `AUD-001` đã được xử lý và tests hiện xanh.
 
 ## Config pipeline đã xác minh
 
@@ -155,9 +170,19 @@ Ngày audit: 2026-08-07.
   - Kết quả: 292 total, 279 passed, 13 failed.
   - Máy audit chỉ có .NET 10 runtime; tests target .NET 8, nên đã dùng roll-forward để chạy.
 
+### Validation cập nhật — 2026-08-25
+
+- `dotnet build TradeDesktop.App/TradeDesktop.App.csproj --no-restore -p:EnableWindowsTargeting=true`
+  - Kết quả: success, 0 errors, 3 cảnh báo `CA1416` liên quan MMF chỉ hỗ trợ Windows.
+- `DOTNET_ROLL_FORWARD=Major dotnet test TradeDesktop.Tests/TradeDesktop.Tests.csproj --no-restore`
+  - Kết quả: 380 total, 380 passed, 0 failed, 0 skipped.
+  - Môi trường xác minh là macOS arm64 với .NET 10 roll-forward cho target .NET 8; cần giữ bước
+    validation cuối trên Windows với runtime .NET 8 chính thức cho WPF/MMF/MT4/MT5 integration.
+
 ## Test coverage còn thiếu/yếu
 
-- Thiếu direct regression test Gap Close với `gapBuy != gapSell` ở `CloseSignalEngineTests`.
+- Finding Gap Close với `gapBuy != gapSell` đã được che phủ ở các flow tuần tự và toàn suite hiện
+  pass; nên tiếp tục giữ các trường hợp này như regression coverage bắt buộc.
 - Chưa có test end-to-end schedule transition log vì code chưa có event transition.
 - Router/App tests khó chạy cross-platform do WPF/MMF Windows; CI Windows vẫn là validation cuối.
 - Persistence DTO không lưu selected post-open/post-close duration hoặc SOS mode; recovery chủ động
@@ -170,4 +195,5 @@ Ngày audit: 2026-08-07.
 - Cập nhật persistence/recovery từ “deferred” sang trạng thái đã triển khai.
 - Thay “global action gate” bằng physical mutex + Auto transition gate.
 - Ghi rõ phạm vi/kết hợp lock và hai anchor post-close.
-- Ghi rõ Gap Close finding, validation và giới hạn test hiện tại.
+- Ghi rõ Gap Close finding, validation và giới hạn test tại thời điểm audit.
+- Cập nhật 2026-08-25: đánh dấu `AUD-001` đã khắc phục và bổ sung validation 380/380 tests pass.
