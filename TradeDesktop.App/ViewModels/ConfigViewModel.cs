@@ -425,7 +425,6 @@ public sealed class ConfigViewModel : ObservableObject
                 loadResult.CloseNumberOfQualifyingTimes,
                 closeMaxTpProfit: loadResult.CloseMaxTpProfit,
                 limitMaxTp: loadResult.LimitMaxTp,
-                freezeLastN: loadResult.FreezeLastN,
                 oppositeOpenMinDistancePts: loadResult.OppositeOpenMinDistancePts,
                 rdStartSameActionLockSeconds: loadResult.RdStartSameActionLockSeconds,
                 rdEndSameActionLockSeconds: loadResult.RdEndSameActionLockSeconds,

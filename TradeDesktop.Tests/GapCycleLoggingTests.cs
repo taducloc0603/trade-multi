@@ -43,6 +43,7 @@ public sealed class GapCycleLoggingTests
         Assert.Contains("dispersion=", stable);
         Assert.Contains("drift=", stable);
         Assert.Contains("status=Stable", stable);
+        Assert.Contains("next_status=Stable", stable);
         Assert.Contains("result=STABLE", stable);
         Assert.Contains("gaps=\"100|110|120\"", stable);
         Assert.Contains("gaps_truncated=false", stable);
@@ -87,18 +88,23 @@ public sealed class GapCycleLoggingTests
         engine.ProcessSnapshot(Snapshot(1, gapBuy: 300), config);
         engine.ProcessSnapshot(Snapshot(2, gapBuy: 550), config);
 
-        var split = Assert.Single(logger.Messages.Where(message =>
+        Assert.Empty(logger.Messages);
+
+        var split = Assert.Single(logger.RawMessages.Where(message =>
             message.Contains("[CYCLE_COMPLETED]", StringComparison.Ordinal)
             && message.Contains("result=DELTA_SPLIT", StringComparison.Ordinal)));
         Assert.Contains("new_gap=300", split);
         Assert.Contains("Delta", split);
+        Assert.Contains("action=OPEN side=BUY gap_type=GAP_BUY", split);
+        Assert.Contains("gaps_order=oldest_to_newest gaps_unit=point", split);
 
-        var rejected = Assert.Single(logger.Messages.Where(message =>
+        var rejected = Assert.Single(logger.RawMessages.Where(message =>
             message.Contains("[CYCLE_COMPLETED]", StringComparison.Ordinal)
             && message.Contains("result=REJECTED", StringComparison.Ordinal)));
         Assert.Contains("new_gap=550", rejected);
         Assert.Contains("limit_max_gap 500", rejected);
-        Assert.Contains("status=Rejected", rejected);
+        Assert.Contains("status_before=Collecting", rejected);
+        Assert.Contains("next_status=Rejected", rejected);
     }
 
     [Fact]
@@ -112,6 +118,7 @@ public sealed class GapCycleLoggingTests
         shortEngine.ProcessSnapshot(Snapshot(0, gapBuy: 0), config);
 
         Assert.Empty(shortLogger.Messages);
+        Assert.Empty(shortLogger.RawMessages);
 
         var significantLogger = new CaptureLogger();
         var significantEngine = new GapSignalConfirmationEngine(significantLogger);
@@ -120,10 +127,16 @@ public sealed class GapCycleLoggingTests
         significantEngine.ProcessSnapshot(Snapshot(2, gapBuy: 120), config);
         significantEngine.ProcessSnapshot(Snapshot(3, gapBuy: 0), config);
 
+        Assert.DoesNotContain(significantLogger.Messages, message =>
+            message.Contains("[CYCLE_COMPLETED]", StringComparison.Ordinal));
         Assert.Contains(significantLogger.Messages, message =>
+            message.Contains("[CYCLE_STABLE]", StringComparison.Ordinal));
+        Assert.Contains(significantLogger.RawMessages, message =>
             message.Contains("[CYCLE_COMPLETED]", StringComparison.Ordinal)
             && message.Contains("result=RESET_CONFIRM", StringComparison.Ordinal)
-            && message.Contains("sample_count=3", StringComparison.Ordinal));
+            && message.Contains("total_sample_count=3", StringComparison.Ordinal)
+            && message.Contains("status_before=Stable", StringComparison.Ordinal)
+            && message.Contains("next_status=Empty", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -147,7 +160,7 @@ public sealed class GapCycleLoggingTests
     }
 
     [Fact]
-    public void Open_LongCycle_LogsOnlyLastTwoThousandGapsAndMarksTruncation()
+    public void Open_LongCycle_LogsOnlyLastTwoHundredFiftySixGapsAndMarksTruncation()
     {
         var logger = new CaptureLogger();
         var engine = new GapSignalConfirmationEngine(logger);
@@ -162,11 +175,11 @@ public sealed class GapCycleLoggingTests
 
         engine.Reset();
 
-        var completed = Assert.Single(logger.Messages.Where(message =>
+        var completed = Assert.Single(logger.RawMessages.Where(message =>
             message.Contains("result=RESET_EXPLICIT", StringComparison.Ordinal)));
         Assert.Contains("gaps_truncated=true", completed);
         Assert.Contains("total_sample_count=2001", completed);
-        Assert.Contains("logged_sample_count=2000", completed);
+        Assert.Contains("logged_sample_count=256", completed);
         Assert.Contains("gaps=\"101|100|101", completed);
     }
 
@@ -253,10 +266,13 @@ public sealed class GapCycleLoggingTests
             gapSell,
             PointMultiplier: 100);
 
-    private sealed class CaptureLogger : ISlotLogger
+    private sealed class CaptureLogger : ISlotLogger, IGapStabilityRawLogger
     {
         public List<string> Messages { get; } = [];
+        public List<string> RawMessages { get; } = [];
 
         public void Log(string message) => Messages.Add(message);
+
+        public void LogGapStabilityRaw(string message) => RawMessages.Add(message);
     }
 }

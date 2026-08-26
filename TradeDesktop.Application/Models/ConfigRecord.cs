@@ -48,7 +48,6 @@ public sealed record ConfigRecord(
     int MaxBuyOpens = 3,
     int MaxSellOpens = 3,
     int MaxTotalOpens = 5,
-    int FreezeLastN = 0,
     int OppositeSideLockSeconds = 300,
     int OppositeOpenMinDistancePts = 0,
     int RdStartSameActionLockSeconds = 3,

@@ -8,19 +8,25 @@ namespace TradeDesktop.App.Services;
 
 public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
 {
+    private sealed record QueuedLog(string Line, bool IsGapStabilityRaw);
+
     private static readonly TimeSpan DrainShutdownTimeout = TimeSpan.FromSeconds(5);
     private const int DefaultQueueCapacity = 50_000;
 
     private readonly object _sync = new();
     private StreamWriter? _writer;
+    private StreamWriter? _gapStabilityRawWriter;
     private DateTimeOffset? _sessionStartedAt;
     private string? _sessionHostName;
     private string? _sessionFileBasePath;
+    private string? _gapStabilityRawFileBasePath;
     private long _currentFileBytes;
+    private long _currentGapStabilityRawFileBytes;
     private long _maxFileSizeBytes = 50L * 1024 * 1024;
     private int _rotationIndex;
+    private int _gapStabilityRawRotationIndex;
     private TradeLogLevel _minLevel = TradeLogLevel.Info;
-    private BlockingCollection<string>? _writeQueue;
+    private BlockingCollection<QueuedLog>? _writeQueue;
     private Task? _drainTask;
     private long _droppedLogCount;
 
@@ -45,7 +51,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         // so messages are not lost across restarts.
         DrainAndCloseQueue();
 
-        BlockingCollection<string>? queueToStart = null;
+        BlockingCollection<QueuedLog>? queueToStart = null;
 
         lock (_sync)
         {
@@ -68,16 +74,34 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 _minLevel = ResolveMinLevelFromEnvironment();
                 _maxFileSizeBytes = ResolveMaxFileSizeFromEnvironment();
                 _rotationIndex = 0;
+                _gapStabilityRawRotationIndex = 0;
                 _currentFileBytes = 0;
+                _currentGapStabilityRawFileBytes = 0;
                 Interlocked.Exchange(ref _droppedLogCount, 0);
                 _sessionHostName = hostName;
 
                 var fileName = $"{startedAtLocal:yyyyMMdd_HHmmss}-trade-log.log";
                 var filePath = Path.Combine(logDirectory, fileName);
                 _sessionFileBasePath = Path.Combine(logDirectory, $"{startedAtLocal:yyyyMMdd_HHmmss}-trade-log");
+                _gapStabilityRawFileBasePath = Path.Combine(
+                    logDirectory,
+                    $"{startedAtLocal:yyyyMMdd_HHmmss}-gap-stability-raw");
 
                 var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
                 _writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+                {
+                    AutoFlush = true
+                };
+
+                var gapRawPath = $"{_gapStabilityRawFileBasePath}.log";
+                var gapRawStream = new FileStream(
+                    gapRawPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.ReadWrite);
+                _gapStabilityRawWriter = new StreamWriter(
+                    gapRawStream,
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
                 {
                     AutoFlush = true
                 };
@@ -88,8 +112,12 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 WriteLineCore($"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] ===== TRADE SESSION START =====");
                 WriteLineCore($"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] Host: {hostName}");
                 WriteLineCore($"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] File: {filePath}");
+                WriteGapStabilityRawLineCore(
+                    $"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] ===== GAP STABILITY RAW START =====");
+                WriteGapStabilityRawLineCore(
+                    $"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] Host: {hostName}");
 
-                _writeQueue = new BlockingCollection<string>(ResolveQueueCapacityFromEnvironment());
+                _writeQueue = new BlockingCollection<QueuedLog>(ResolveQueueCapacityFromEnvironment());
                 queueToStart = _writeQueue;
             }
             catch (Exception ex)
@@ -117,7 +145,18 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     public void LogFileOnly(string message)
         => LogCore(InferLevelFromMessage(message), message, publishRealtime: false);
 
-    private void LogCore(TradeLogLevel level, string message, bool publishRealtime)
+    public void LogGapStabilityRaw(string message)
+        => LogCore(
+            InferLevelFromMessage(message),
+            message,
+            publishRealtime: false,
+            isGapStabilityRaw: true);
+
+    private void LogCore(
+        TradeLogLevel level,
+        string message,
+        bool publishRealtime,
+        bool isGapStabilityRaw = false)
     {
         var queue = _writeQueue;
         if (queue is null || queue.IsAddingCompleted)
@@ -134,7 +173,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         {
             var timestamp = DateTimeOffset.Now;
             var line = $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {message}";
-            if (TryEnqueue(queue, line, level) && publishRealtime)
+            if (TryEnqueue(queue, new QueuedLog(line, isGapStabilityRaw), level) && publishRealtime)
             {
                 PublishRealtimeLog(timestamp.LocalDateTime, message, level);
             }
@@ -171,18 +210,45 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         }
     }
 
-    private void DrainQueue(BlockingCollection<string> queue)
+    private void DrainQueue(BlockingCollection<QueuedLog> queue)
     {
+        QueuedLog? pendingGapRaw = null;
         try
         {
-            foreach (var line in queue.GetConsumingEnumerable())
+            foreach (var queuedLog in queue.GetConsumingEnumerable())
             {
                 try
                 {
                     lock (_sync)
                     {
                         WriteDroppedLogSummaryIfNeeded();
-                        WriteLineCore(line);
+                        if (pendingGapRaw is not null)
+                        {
+                            if (TryMergeCloseGapRaw(pendingGapRaw, queuedLog, out var merged))
+                            {
+                                pendingGapRaw = merged;
+                                continue;
+                            }
+
+                            WriteGapStabilityRawLineCore(pendingGapRaw.Line);
+                            pendingGapRaw = null;
+                        }
+
+                        if (IsMergeableCloseGapRaw(queuedLog))
+                        {
+                            // Các Close engine theo slot thường phát cùng một diagnostics
+                            // liên tiếp trên một market snapshot. Giữ tối đa một record chờ
+                            // để gộp cycle_id/slot_ids trước khi ghi file.
+                            pendingGapRaw = queuedLog;
+                        }
+                        else if (queuedLog.IsGapStabilityRaw)
+                        {
+                            WriteGapStabilityRawLineCore(queuedLog.Line);
+                        }
+                        else
+                        {
+                            WriteLineCore(queuedLog.Line);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -195,11 +261,121 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         {
             SafeDebug($"DrainQueue failed: {ex}");
         }
+        finally
+        {
+            if (pendingGapRaw is not null)
+            {
+                lock (_sync)
+                {
+                    WriteGapStabilityRawLineCore(pendingGapRaw.Line);
+                }
+            }
+        }
     }
 
-    private bool TryEnqueue(BlockingCollection<string> queue, string line, TradeLogLevel level)
+    private static bool IsMergeableCloseGapRaw(QueuedLog queuedLog) =>
+        queuedLog.IsGapStabilityRaw
+        && queuedLog.Line.Contains(
+            "[GAP_STABILITY_RAW][CYCLE_COMPLETED]",
+            StringComparison.Ordinal)
+        && queuedLog.Line.Contains(" action=CLOSE ", StringComparison.Ordinal);
+
+    private static bool TryMergeCloseGapRaw(
+        QueuedLog pending,
+        QueuedLog current,
+        out QueuedLog merged)
     {
-        if (queue.TryAdd(line))
+        merged = pending;
+        if (!IsMergeableCloseGapRaw(pending) || !IsMergeableCloseGapRaw(current))
+        {
+            return false;
+        }
+
+        var pendingSignature = NormalizeGapRawMergeFields(pending.Line);
+        var currentSignature = NormalizeGapRawMergeFields(current.Line);
+        if (!string.Equals(pendingSignature, currentSignature, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var cycleIds = JoinDistinctFieldValues(
+            ReadField(pending.Line, "cycle_id", quoted: false),
+            ReadField(current.Line, "cycle_id", quoted: false));
+        var slotIds = JoinDistinctFieldValues(
+            ReadField(pending.Line, "slot_ids", quoted: true),
+            ReadField(current.Line, "slot_ids", quoted: true));
+        var line = ReplaceField(pending.Line, "cycle_id", cycleIds, quoted: false);
+        line = ReplaceField(line, "slot_ids", slotIds, quoted: true);
+        merged = pending with { Line = line };
+        return true;
+    }
+
+    private static string NormalizeGapRawMergeFields(string line)
+    {
+        var eventStart = line.IndexOf(
+            "[GAP_STABILITY_RAW][CYCLE_COMPLETED]",
+            StringComparison.Ordinal);
+        var normalized = eventStart >= 0 ? line[eventStart..] : line;
+        normalized = ReplaceField(normalized, "cycle_id", "*", quoted: false);
+        return ReplaceField(normalized, "slot_ids", "*", quoted: true);
+    }
+
+    private static string JoinDistinctFieldValues(string first, string second)
+    {
+        var values = first.Split('|', StringSplitOptions.RemoveEmptyEntries)
+            .Concat(second.Split('|', StringSplitOptions.RemoveEmptyEntries))
+            .Distinct(StringComparer.Ordinal);
+        return string.Join('|', values);
+    }
+
+    private static string ReadField(string line, string key, bool quoted)
+    {
+        var marker = quoted ? $"{key}=\"" : $"{key}=";
+        var start = line.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return string.Empty;
+        }
+
+        start += marker.Length;
+        var end = quoted
+            ? line.IndexOf('"', start)
+            : line.IndexOf(' ', start);
+        if (end < 0)
+        {
+            end = line.Length;
+        }
+
+        return line[start..end];
+    }
+
+    private static string ReplaceField(string line, string key, string value, bool quoted)
+    {
+        var marker = quoted ? $"{key}=\"" : $"{key}=";
+        var start = line.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return line;
+        }
+
+        var valueStart = start + marker.Length;
+        var valueEnd = quoted
+            ? line.IndexOf('"', valueStart)
+            : line.IndexOf(' ', valueStart);
+        if (valueEnd < 0)
+        {
+            valueEnd = line.Length;
+        }
+
+        return line[..valueStart] + value + line[valueEnd..];
+    }
+
+    private bool TryEnqueue(
+        BlockingCollection<QueuedLog> queue,
+        QueuedLog queuedLog,
+        TradeLogLevel level)
+    {
+        if (queue.TryAdd(queuedLog))
         {
             return true;
         }
@@ -211,7 +387,14 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
             lock (_sync)
             {
                 WriteDroppedLogSummaryIfNeeded();
-                WriteLineCore(line);
+                if (queuedLog.IsGapStabilityRaw)
+                {
+                    WriteGapStabilityRawLineCore(queuedLog.Line);
+                }
+                else
+                {
+                    WriteLineCore(queuedLog.Line);
+                }
             }
             return true;
         }
@@ -255,7 +438,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
 
     private void DrainAndCloseQueue()
     {
-        BlockingCollection<string>? queue;
+        BlockingCollection<QueuedLog>? queue;
         Task? task;
 
         lock (_sync)
@@ -332,15 +515,26 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
 
             _writer.Flush();
             _writer.Dispose();
+            if (_gapStabilityRawWriter is not null)
+            {
+                WriteGapStabilityRawLineCore(
+                    $"[{stoppedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] ===== GAP STABILITY RAW STOP =====");
+                _gapStabilityRawWriter.Flush();
+                _gapStabilityRawWriter.Dispose();
+            }
         }
         finally
         {
             _writer = null;
+            _gapStabilityRawWriter = null;
             _sessionStartedAt = null;
             _sessionHostName = null;
             _sessionFileBasePath = null;
+            _gapStabilityRawFileBasePath = null;
             _currentFileBytes = 0;
+            _currentGapStabilityRawFileBytes = 0;
             _rotationIndex = 0;
+            _gapStabilityRawRotationIndex = 0;
             CurrentLogFilePath = null;
         }
     }
@@ -360,6 +554,60 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
 
         _writer.WriteLine(line);
         _currentFileBytes += lineBytes;
+    }
+
+    private void WriteGapStabilityRawLineCore(string line)
+    {
+        if (_gapStabilityRawWriter is null)
+        {
+            return;
+        }
+
+        var lineBytes = Encoding.UTF8.GetByteCount(line + Environment.NewLine);
+        if (_currentGapStabilityRawFileBytes + lineBytes > _maxFileSizeBytes
+            && _currentGapStabilityRawFileBytes > 0)
+        {
+            RotateGapStabilityRawFile();
+        }
+
+        _gapStabilityRawWriter.WriteLine(line);
+        _currentGapStabilityRawFileBytes += lineBytes;
+    }
+
+    private void RotateGapStabilityRawFile()
+    {
+        if (_gapStabilityRawWriter is null
+            || _sessionStartedAt is null
+            || string.IsNullOrWhiteSpace(_gapStabilityRawFileBasePath))
+        {
+            return;
+        }
+
+        try
+        {
+            _gapStabilityRawRotationIndex++;
+            var nextFilePath = $"{_gapStabilityRawFileBasePath}.{_gapStabilityRawRotationIndex:000}.log";
+            var stream = new FileStream(nextFilePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+            var nextWriter = new StreamWriter(
+                stream,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+            {
+                AutoFlush = true
+            };
+
+            _gapStabilityRawWriter.Flush();
+            _gapStabilityRawWriter.Dispose();
+            _gapStabilityRawWriter = nextWriter;
+            _currentGapStabilityRawFileBytes = 0;
+
+            WriteGapStabilityRawLineCore(
+                $"Continuation of Gap Stability raw session {_sessionStartedAt.Value:yyyy-MM-dd HH:mm:ss} " +
+                $"part {_gapStabilityRawRotationIndex:000}");
+        }
+        catch (Exception ex)
+        {
+            SafeDebug($"RotateGapStabilityRawFile failed: {ex}");
+        }
     }
 
     private void RotateFile()

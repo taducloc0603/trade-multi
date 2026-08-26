@@ -70,7 +70,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxSpread: row.MaxSpread,
             OpenMaxTimesTick: row.OpenMaxTimesTick,
             CloseMaxTimesTick: row.CloseMaxTimesTick,
-            FreezeLastN: row.FreezeLastN,
             OpenPendingTimeMs: row.OpenPendingTimeMs,
             ClosePendingTimeMs: row.ClosePendingTimeMs,
             DelayOpenAMs: row.DelayOpenAMs,
@@ -318,7 +317,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_spread", out var maxSpreadElement);
         first.TryGetProperty("open_max_times_tick", out var openMaxTimesTickElement);
         first.TryGetProperty("close_max_times_tick", out var closeMaxTimesTickElement);
-        first.TryGetProperty("freeze_last_n", out var freezeLastNElement);
         first.TryGetProperty("open_pending_time_ms", out var openPendingTimeMsElement);
         first.TryGetProperty("close_pending_time_ms", out var closePendingTimeMsElement);
         first.TryGetProperty("delay_open_a_ms", out var delayOpenAMsElement);
@@ -389,7 +387,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxSpread = maxSpreadElement.ValueKind == JsonValueKind.Number && maxSpreadElement.TryGetInt32(out var maxSpread) ? maxSpread : 0,
             OpenMaxTimesTick = openMaxTimesTickElement.ValueKind == JsonValueKind.Number && openMaxTimesTickElement.TryGetInt32(out var openMaxTimesTick) ? openMaxTimesTick : 0,
             CloseMaxTimesTick = closeMaxTimesTickElement.ValueKind == JsonValueKind.Number && closeMaxTimesTickElement.TryGetInt32(out var closeMaxTimesTick) ? closeMaxTimesTick : 0,
-            FreezeLastN = freezeLastNElement.ValueKind == JsonValueKind.Number && freezeLastNElement.TryGetInt32(out var freezeLastN) ? freezeLastN : 0,
             OpenPendingTimeMs = openPendingTimeMsElement.ValueKind == JsonValueKind.Number && openPendingTimeMsElement.TryGetInt32(out var openPendingTimeMs) ? openPendingTimeMs : 0,
             ClosePendingTimeMs = closePendingTimeMsElement.ValueKind == JsonValueKind.Number && closePendingTimeMsElement.TryGetInt32(out var closePendingTimeMs) ? closePendingTimeMs : 0,
             DelayOpenAMs = delayOpenAMsElement.ValueKind == JsonValueKind.Number && delayOpenAMsElement.TryGetInt32(out var delayOpenAMs) ? delayOpenAMs : 0,
@@ -493,7 +490,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_spread", out var maxSpreadElement);
         first.TryGetProperty("open_max_times_tick", out var openMaxTimesTickElement);
         first.TryGetProperty("close_max_times_tick", out var closeMaxTimesTickElement);
-        first.TryGetProperty("freeze_last_n", out var freezeLastNElement);
         first.TryGetProperty("open_pending_time_ms", out var openPendingTimeMsElement);
         first.TryGetProperty("close_pending_time_ms", out var closePendingTimeMsElement);
         first.TryGetProperty("delay_open_a_ms", out var delayOpenAMsElement);
@@ -562,7 +558,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxSpread = maxSpreadElement.ValueKind == JsonValueKind.Number && maxSpreadElement.TryGetInt32(out var maxSpread) ? maxSpread : 0,
             OpenMaxTimesTick = openMaxTimesTickElement.ValueKind == JsonValueKind.Number && openMaxTimesTickElement.TryGetInt32(out var openMaxTimesTick) ? openMaxTimesTick : 0,
             CloseMaxTimesTick = closeMaxTimesTickElement.ValueKind == JsonValueKind.Number && closeMaxTimesTickElement.TryGetInt32(out var closeMaxTimesTick) ? closeMaxTimesTick : 0,
-            FreezeLastN = freezeLastNElement.ValueKind == JsonValueKind.Number && freezeLastNElement.TryGetInt32(out var freezeLastN) ? freezeLastN : 0,
             OpenPendingTimeMs = openPendingTimeMsElement.ValueKind == JsonValueKind.Number && openPendingTimeMsElement.TryGetInt32(out var openPendingTimeMs) ? openPendingTimeMs : 0,
             ClosePendingTimeMs = closePendingTimeMsElement.ValueKind == JsonValueKind.Number && closePendingTimeMsElement.TryGetInt32(out var closePendingTimeMs) ? closePendingTimeMs : 0,
             DelayOpenAMs = delayOpenAMsElement.ValueKind == JsonValueKind.Number && delayOpenAMsElement.TryGetInt32(out var delayOpenAMs) ? delayOpenAMs : 0,
@@ -831,9 +826,6 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("close_max_times_tick")]
         public int CloseMaxTimesTick { get; set; }
-
-        [JsonPropertyName("freeze_last_n")]
-        public int FreezeLastN { get; set; }
 
         [JsonPropertyName("open_pending_time_ms")]
         public int OpenPendingTimeMs { get; set; }

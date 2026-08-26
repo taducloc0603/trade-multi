@@ -36,7 +36,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentMaxSpread { get; private set; }
     public int CurrentOpenMaxTimesTick { get; private set; }
     public int CurrentCloseMaxTimesTick { get; private set; }
-    public int CurrentFreezeLastN { get; private set; }
     public int CurrentOpenPendingTimeMs { get; private set; } = 1000;
     public int CurrentClosePendingTimeMs { get; private set; } = 1000;
     public int CurrentDelayOpenAMs { get; private set; }
@@ -192,7 +191,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int maxLifeTimeBySecond = -1,
         double closeMaxTpProfit = 0,
         double limitMaxTp = 0,
-        int freezeLastN = 0,
         double sosTriggerAOpenDistancePts = 0,
         int sosTriggerAfterSeconds = 0,
         int sosCloseConfirmGapPts = 0,
@@ -242,7 +240,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             maxLifeTimeBySecond,
             closeMaxTpProfit,
             limitMaxTp,
-            freezeLastN,
             sosTriggerAOpenDistancePts,
             sosTriggerAfterSeconds,
             sosCloseConfirmGapPts,
@@ -293,7 +290,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int maxLifeTimeBySecond = -1,
         double closeMaxTpProfit = 0,
         double limitMaxTp = 0,
-        int freezeLastN = 0,
         double sosTriggerAOpenDistancePts = 0,
         int sosTriggerAfterSeconds = 0,
         int sosCloseConfirmGapPts = 0,
@@ -341,7 +337,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentMaxSpread = Math.Max(0, maxSpread);
         CurrentOpenMaxTimesTick = Math.Max(0, openMaxTimesTick);
         CurrentCloseMaxTimesTick = Math.Max(0, closeMaxTimesTick);
-        CurrentFreezeLastN = Math.Max(0, freezeLastN);
         if (openPendingTimeMs >= 0)
         {
             CurrentOpenPendingTimeMs = Math.Max(0, openPendingTimeMs);
@@ -465,7 +460,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentCloseNumberOfQualifyingTimes,
             closeMaxTpProfit: CurrentCloseMaxTpProfit,
             limitMaxTp: CurrentLimitMaxTp,
-            freezeLastN: CurrentFreezeLastN,
             sosTriggerAOpenDistancePts: CurrentSosTriggerAOpenDistancePts,
             sosTriggerAfterSeconds: CurrentSosTriggerAfterSeconds,
             sosCloseConfirmGapPts: CurrentSosCloseConfirmGapPts,
@@ -507,7 +501,6 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentCloseNumberOfQualifyingTimes,
             closeMaxTpProfit: CurrentCloseMaxTpProfit,
             limitMaxTp: CurrentLimitMaxTp,
-            freezeLastN: CurrentFreezeLastN,
             sosTriggerAOpenDistancePts: CurrentSosTriggerAOpenDistancePts,
             sosTriggerAfterSeconds: CurrentSosTriggerAfterSeconds,
             sosCloseConfirmGapPts: CurrentSosCloseConfirmGapPts,

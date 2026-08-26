@@ -21,5 +21,6 @@ public interface ITradeSessionFileLogger
     void Log(TradeLogLevel level, string message);
     void Log(string message);
     void LogFileOnly(string message);
+    void LogGapStabilityRaw(string message);
     void StopSession(DateTimeOffset stoppedAtLocal);
 }
