@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
+using System.Windows.Threading;
 using TradeDesktop.App.ViewModels;
 using TradeDesktop.Application.Models;
 
@@ -16,6 +17,8 @@ public partial class SignalLogWindow : Window
     private ScrollViewer? _systemScrollViewer;
     private bool _followSignalLog = true;
     private bool _followSystemLog = true;
+    private DispatcherOperation? _signalScrollOperation;
+    private DispatcherOperation? _systemScrollOperation;
     private const double FollowTopThreshold = 1.0;
 
     public SignalLogWindow()
@@ -56,6 +59,9 @@ public partial class SignalLogWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        AbortPendingScroll(ref _signalScrollOperation);
+        AbortPendingScroll(ref _systemScrollOperation);
+
         if (_logItems is not null)
         {
             _logItems.CollectionChanged -= OnLogItemsChanged;
@@ -83,7 +89,7 @@ public partial class SignalLogWindow : Window
     {
         if (_followSignalLog)
         {
-            Dispatcher.BeginInvoke(ScrollToNewestLog);
+            ScheduleSignalScrollToNewest();
         }
         else
         {
@@ -95,7 +101,7 @@ public partial class SignalLogWindow : Window
     {
         if (_followSystemLog)
         {
-            Dispatcher.BeginInvoke(ScrollToNewestSystemLog);
+            ScheduleSystemScrollToNewest();
         }
         else
         {
@@ -210,6 +216,54 @@ public partial class SignalLogWindow : Window
         {
             SystemLogList.ScrollIntoView(SystemLogList.Items[0]);
         }
+    }
+
+    private void ScheduleSignalScrollToNewest()
+    {
+        if (_signalScrollOperation?.Status == DispatcherOperationStatus.Pending)
+        {
+            return;
+        }
+
+        _signalScrollOperation = Dispatcher.BeginInvoke(
+            DispatcherPriority.Background,
+            new Action(() =>
+            {
+                _signalScrollOperation = null;
+                if (_followSignalLog)
+                {
+                    ScrollToNewestLog();
+                }
+            }));
+    }
+
+    private void ScheduleSystemScrollToNewest()
+    {
+        if (_systemScrollOperation?.Status == DispatcherOperationStatus.Pending)
+        {
+            return;
+        }
+
+        _systemScrollOperation = Dispatcher.BeginInvoke(
+            DispatcherPriority.Background,
+            new Action(() =>
+            {
+                _systemScrollOperation = null;
+                if (_followSystemLog)
+                {
+                    ScrollToNewestSystemLog();
+                }
+            }));
+    }
+
+    private static void AbortPendingScroll(ref DispatcherOperation? operation)
+    {
+        if (operation?.Status == DispatcherOperationStatus.Pending)
+        {
+            operation.Abort();
+        }
+
+        operation = null;
     }
 
     private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject

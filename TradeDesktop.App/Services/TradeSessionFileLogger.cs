@@ -11,6 +11,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     private sealed record QueuedLog(string Line, bool IsGapStabilityRaw);
 
     private static readonly TimeSpan DrainShutdownTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan HealthLogInterval = TimeSpan.FromSeconds(60);
     private const int DefaultQueueCapacity = 50_000;
 
     private readonly object _sync = new();
@@ -29,6 +30,12 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     private BlockingCollection<QueuedLog>? _writeQueue;
     private Task? _drainTask;
     private long _droppedLogCount;
+    private long _totalDroppedLogCount;
+    private long _enqueuedLogCount;
+    private long _writtenMainLogCount;
+    private long _writtenGapRawLogCount;
+    private long _queueHighWaterMark;
+    private DateTimeOffset _nextHealthLogAt;
 
     public event Action<SystemLogItem>? RealtimeLogAccepted;
 
@@ -78,6 +85,12 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 _currentFileBytes = 0;
                 _currentGapStabilityRawFileBytes = 0;
                 Interlocked.Exchange(ref _droppedLogCount, 0);
+                Interlocked.Exchange(ref _totalDroppedLogCount, 0);
+                Interlocked.Exchange(ref _enqueuedLogCount, 0);
+                Interlocked.Exchange(ref _writtenMainLogCount, 0);
+                Interlocked.Exchange(ref _writtenGapRawLogCount, 0);
+                Interlocked.Exchange(ref _queueHighWaterMark, 0);
+                _nextHealthLogAt = startedAtLocal.Add(HealthLogInterval);
                 _sessionHostName = hostName;
 
                 var fileName = $"{startedAtLocal:yyyyMMdd_HHmmss}-trade-log.log";
@@ -222,6 +235,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                     lock (_sync)
                     {
                         WriteDroppedLogSummaryIfNeeded();
+                        WriteLoggerHealthIfDue(queue);
                         if (pendingGapRaw is not null)
                         {
                             if (TryMergeCloseGapRaw(pendingGapRaw, queuedLog, out var merged))
@@ -377,6 +391,8 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     {
         if (queue.TryAdd(queuedLog))
         {
+            Interlocked.Increment(ref _enqueuedLogCount);
+            UpdateQueueHighWaterMark(queue.Count);
             return true;
         }
 
@@ -400,7 +416,42 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         }
 
         Interlocked.Increment(ref _droppedLogCount);
+        Interlocked.Increment(ref _totalDroppedLogCount);
         return false;
+    }
+
+    private void UpdateQueueHighWaterMark(int queueCount)
+    {
+        var current = Interlocked.Read(ref _queueHighWaterMark);
+        while (queueCount > current)
+        {
+            var observed = Interlocked.CompareExchange(ref _queueHighWaterMark, queueCount, current);
+            if (observed == current)
+            {
+                return;
+            }
+
+            current = observed;
+        }
+    }
+
+    private void WriteLoggerHealthIfDue(BlockingCollection<QueuedLog> queue)
+    {
+        var now = DateTimeOffset.Now;
+        if (now < _nextHealthLogAt)
+        {
+            return;
+        }
+
+        _nextHealthLogAt = now.Add(HealthLogInterval);
+        WriteLineCore(
+            $"[{now:yyyy-MM-dd HH:mm:ss.fff}] [LOGGER][HEALTH] " +
+            $"queue_count={queue.Count} queue_capacity={queue.BoundedCapacity} " +
+            $"queue_high_water={Interlocked.Read(ref _queueHighWaterMark)} " +
+            $"enqueued={Interlocked.Read(ref _enqueuedLogCount)} " +
+            $"written_main={Interlocked.Read(ref _writtenMainLogCount)} " +
+            $"written_gap_raw={Interlocked.Read(ref _writtenGapRawLogCount)} " +
+            $"dropped_info={Interlocked.Read(ref _totalDroppedLogCount)}");
     }
 
     private void PublishRealtimeLog(DateTime timestamp, string message, TradeLogLevel level)
@@ -554,6 +605,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
 
         _writer.WriteLine(line);
         _currentFileBytes += lineBytes;
+        Interlocked.Increment(ref _writtenMainLogCount);
     }
 
     private void WriteGapStabilityRawLineCore(string line)
@@ -572,6 +624,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
 
         _gapStabilityRawWriter.WriteLine(line);
         _currentGapStabilityRawFileBytes += lineBytes;
+        Interlocked.Increment(ref _writtenGapRawLogCount);
     }
 
     private void RotateGapStabilityRawFile()

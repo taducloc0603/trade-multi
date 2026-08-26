@@ -442,7 +442,7 @@ public sealed class DashboardViewModel : ObservableObject
         _tradeSessionFileLogger.RealtimeLogAccepted += OnRealtimeLogAccepted;
         _systemLogFlushTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
-            Interval = TimeSpan.FromMilliseconds(200)
+            Interval = TimeSpan.FromMilliseconds(250)
         };
         _systemLogFlushTimer.Tick += (_, _) => FlushPendingSystemLogs();
         _systemLogFlushTimer.Start();
@@ -617,10 +617,10 @@ public sealed class DashboardViewModel : ObservableObject
             : $"{_lastSignalSummary} — [{status}]";
     }
 
-    private const int MaxSignalLogItems = 2_000;
-    private const int MaxSystemLogItems = 10_000;
-    private const int MaxPendingSystemLogs = 20_000;
-    private const int MaxSystemLogsPerFlush = 300;
+    private const int MaxSignalLogItems = 500;
+    private const int MaxSystemLogItems = 2_000;
+    private const int MaxPendingSystemLogs = 2_000;
+    private const int MaxSystemLogsPerFlush = 100;
     public SignalLogCollection SignalLogItems { get; }
     public CappedObservableCollection<SystemLogItem> SystemLogItems { get; }
     public string SystemLogStatusText =>
