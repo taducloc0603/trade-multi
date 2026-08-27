@@ -3790,7 +3790,9 @@ public sealed class DashboardViewModel : ObservableObject
 
         _portfolioCoordinator.UpdateQuotaConfig(
             maxTotal: _runtimeConfigState.CurrentMaxTotalOpens,
+            minBuy: _runtimeConfigState.CurrentMinBuyOpens,
             maxBuy: _runtimeConfigState.CurrentMaxBuyOpens,
+            minSell: _runtimeConfigState.CurrentMinSellOpens,
             maxSell: _runtimeConfigState.CurrentMaxSellOpens);
 
         // Legacy random wait columns were removed. Global range remains zero; transition
@@ -7090,7 +7092,9 @@ public sealed class DashboardViewModel : ObservableObject
                 _runtimeConfigState.UpdateScheduleSleeping(result.ScheduleSleepingJson);
                 _runtimeConfigState.UpdateQuota(
                     result.MaxTotalOpens,
+                    result.MinBuyOpens,
                     result.MaxBuyOpens,
+                    result.MinSellOpens,
                     result.MaxSellOpens);
                 _runtimeConfigState.UpdateManualTradeHwnd(result.ManualHwndColumns);
                 IsShowConfigVisible = result.IsShowConfig == 1;
@@ -7685,6 +7689,8 @@ public sealed class DashboardViewModel : ObservableObject
         var status = over.Count == 0 ? "OK" : string.Join(", ", over);
 
         return $"Old: Buy {oldBuy}, Sell {oldSell} | " +
+               $"Range: Buy {_runtimeConfigState.CurrentMinBuyOpens}-{_runtimeConfigState.CurrentMaxBuyOpens}, " +
+               $"Sell {_runtimeConfigState.CurrentMinSellOpens}-{_runtimeConfigState.CurrentMaxSellOpens} | " +
                $"Current: Buy {quota.EffectiveMaxBuy}, Sell {quota.EffectiveMaxSell} | " +
                $"Total Max: {_runtimeConfigState.CurrentMaxTotalOpens} | Cycle: {quota.CycleNumber} | " +
                $"Progress: {quota.OpenCountSinceRandom}/{quota.RandomAfterOpens} | " +

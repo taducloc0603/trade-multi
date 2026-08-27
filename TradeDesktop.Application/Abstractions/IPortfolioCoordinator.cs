@@ -89,7 +89,7 @@ public interface IPortfolioCoordinator
     bool CanCloseNow(out string blockReason);
 
     // === Config sync from RuntimeConfigState (Phase 2) ===
-    void UpdateQuotaConfig(int maxTotal, int maxBuy, int maxSell);
+    void UpdateQuotaConfig(int maxTotal, int minBuy, int maxBuy, int minSell, int maxSell);
     void EnableRandomQuota();
     void RerollRandomQuota();
     void RestoreRandomQuotaState(RandomQuotaState state);

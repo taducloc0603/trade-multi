@@ -64,10 +64,11 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     // Raw JSONB config; empty/null/malformed values are treated as disabled.
     public string CurrentScheduleSleepingJson { get; private set; } = string.Empty;
 
-    // Multi-slot quota config. Default theo Rule A (5/3/3) khi DB chưa có cột — runtime
-    // được override từ DB columns max_total_opens / max_buy_opens / max_sell_opens qua UpdateQuota.
+    // Multi-slot quota config. Min defaults to 1 để giữ behavior cũ khi DB chưa có cột.
     public int CurrentMaxTotalOpens { get; private set; } = 5;
+    public int CurrentMinBuyOpens { get; private set; } = 1;
     public int CurrentMaxBuyOpens { get; private set; } = 3;
+    public int CurrentMinSellOpens { get; private set; } = 1;
     public int CurrentMaxSellOpens { get; private set; } = 3;
 
     public string CurrentMapName1 { get; private set; } = string.Empty;
@@ -509,11 +510,18 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     // Quota từ DB (max_total_opens / max_buy_opens / max_sell_opens). Floor về 1 để không
     // bao giờ khoá toàn bộ open. Raise StateChanged để ApplyRuntimeConfig → SyncPortfolioCoordinatorConfig
     // đẩy giá trị mới xuống coordinator.
-    public void UpdateQuota(int maxTotalOpens, int maxBuyOpens, int maxSellOpens)
+    public void UpdateQuota(
+        int maxTotalOpens,
+        int minBuyOpens,
+        int maxBuyOpens,
+        int minSellOpens,
+        int maxSellOpens)
     {
         CurrentMaxTotalOpens = Math.Max(1, maxTotalOpens);
         CurrentMaxBuyOpens = Math.Max(1, maxBuyOpens);
         CurrentMaxSellOpens = Math.Max(1, maxSellOpens);
+        CurrentMinBuyOpens = Math.Clamp(minBuyOpens, 1, CurrentMaxBuyOpens);
+        CurrentMinSellOpens = Math.Clamp(minSellOpens, 1, CurrentMaxSellOpens);
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 

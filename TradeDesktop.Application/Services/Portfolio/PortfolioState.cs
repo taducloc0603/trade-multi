@@ -15,7 +15,9 @@ public sealed class PortfolioState
 
     // Phase 0 default: cap=1. Phase 2 raise to 7/4/4 via UpdateQuotaConfig from DB.
     public int MaxTotalOpens { get; set; } = 1;
+    public int MinBuyOpens { get; set; } = 1;
     public int MaxBuyOpens { get; set; } = 1;
+    public int MinSellOpens { get; set; } = 1;
     public int MaxSellOpens { get; set; } = 1;
     public int EffectiveMaxBuyOpens { get; set; } = 1;
     public int EffectiveMaxSellOpens { get; set; } = 1;

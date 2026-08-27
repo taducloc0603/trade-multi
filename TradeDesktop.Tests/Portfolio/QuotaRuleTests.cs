@@ -208,6 +208,32 @@ public sealed class QuotaRuleTests
     }
 
     [Fact]
+    public void RandomQuota_ManualReroll_UsesConfiguredMinimums()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(maxTotal: 10, minBuy: 3, maxBuy: 4, minSell: 2, maxSell: 3);
+        coordinator.EnableRandomQuota();
+
+        for (var i = 0; i < 50; i++)
+        {
+            coordinator.RerollRandomQuota();
+            Assert.InRange(coordinator.RandomQuotaState.EffectiveMaxBuy, 3, 4);
+            Assert.InRange(coordinator.RandomQuotaState.EffectiveMaxSell, 2, 3);
+        }
+    }
+
+    [Fact]
+    public void RandomQuota_InvalidMinimums_AreClampedToConfiguredMaximums()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(maxTotal: 5, minBuy: 9, maxBuy: 3, minSell: 0, maxSell: 2);
+        coordinator.EnableRandomQuota();
+
+        Assert.Equal(3, coordinator.RandomQuotaState.EffectiveMaxBuy);
+        Assert.InRange(coordinator.RandomQuotaState.EffectiveMaxSell, 1, 2);
+    }
+
+    [Fact]
     public void RandomQuota_DuplicateConfirmation_CountsOnlyOnce()
     {
         var coordinator = CreateCoordinator();

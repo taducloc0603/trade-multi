@@ -84,7 +84,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CurrentSlots: row.CurrentSlotsJson,
             MaxLifeTimeBySecond: row.MaxLifeTimeBySecond,
             MinProfitToClose: row.MinProfitToClose,
+            MinBuyOpens: row.MinBuyOpens,
             MaxBuyOpens: row.MaxBuyOpens,
+            MinSellOpens: row.MinSellOpens,
             MaxSellOpens: row.MaxSellOpens,
             MaxTotalOpens: row.MaxTotalOpens,
             OppositeSideLockSeconds: row.OppositeSideLockSeconds,
@@ -333,7 +335,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("current_slots", out var currentSlotsElement);
         first.TryGetProperty("max_life_time_by_second", out var maxLifeTimeBySecondElement);
         first.TryGetProperty("min_profit_to_close", out var minProfitToCloseElement);
+        first.TryGetProperty("min_buy_opens", out var minBuyOpensElement);
         first.TryGetProperty("max_buy_opens", out var maxBuyOpensElement);
+        first.TryGetProperty("min_sell_opens", out var minSellOpensElement);
         first.TryGetProperty("max_sell_opens", out var maxSellOpensElement);
         first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
         first.TryGetProperty("opposite_side_lock_seconds", out var oppositeSideLockSecondsElement);
@@ -405,7 +409,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
                 : default,
             MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0,
             MinProfitToClose = minProfitToCloseElement.ValueKind == JsonValueKind.Number && minProfitToCloseElement.TryGetDouble(out var minProfitToClose) ? minProfitToClose : 0d,
+            MinBuyOpens = minBuyOpensElement.ValueKind == JsonValueKind.Number && minBuyOpensElement.TryGetInt32(out var minBuyOpens) ? minBuyOpens : 1,
             MaxBuyOpens = maxBuyOpensElement.ValueKind == JsonValueKind.Number && maxBuyOpensElement.TryGetInt32(out var maxBuyOpens) ? maxBuyOpens : 3,
+            MinSellOpens = minSellOpensElement.ValueKind == JsonValueKind.Number && minSellOpensElement.TryGetInt32(out var minSellOpens) ? minSellOpens : 1,
             MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
             MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5,
             OppositeSideLockSeconds = oppositeSideLockSecondsElement.ValueKind == JsonValueKind.Number && oppositeSideLockSecondsElement.TryGetInt32(out var oppositeSideLockSeconds) ? oppositeSideLockSeconds : 300,
@@ -506,7 +512,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("current_slots", out var currentSlotsElement);
         first.TryGetProperty("max_life_time_by_second", out var maxLifeTimeBySecondElement);
         first.TryGetProperty("min_profit_to_close", out var minProfitToCloseElement);
+        first.TryGetProperty("min_buy_opens", out var minBuyOpensElement);
         first.TryGetProperty("max_buy_opens", out var maxBuyOpensElement);
+        first.TryGetProperty("min_sell_opens", out var minSellOpensElement);
         first.TryGetProperty("max_sell_opens", out var maxSellOpensElement);
         first.TryGetProperty("max_total_opens", out var maxTotalOpensElement);
         first.TryGetProperty("opposite_side_lock_seconds", out var oppositeSideLockSecondsElement);
@@ -576,7 +584,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
                 : default,
             MaxLifeTimeBySecond = maxLifeTimeBySecondElement.ValueKind == JsonValueKind.Number && maxLifeTimeBySecondElement.TryGetInt32(out var maxLifeTimeBySecond) ? maxLifeTimeBySecond : 0,
             MinProfitToClose = minProfitToCloseElement.ValueKind == JsonValueKind.Number && minProfitToCloseElement.TryGetDouble(out var minProfitToClose) ? minProfitToClose : 0d,
+            MinBuyOpens = minBuyOpensElement.ValueKind == JsonValueKind.Number && minBuyOpensElement.TryGetInt32(out var minBuyOpens) ? minBuyOpens : 1,
             MaxBuyOpens = maxBuyOpensElement.ValueKind == JsonValueKind.Number && maxBuyOpensElement.TryGetInt32(out var maxBuyOpens) ? maxBuyOpens : 3,
+            MinSellOpens = minSellOpensElement.ValueKind == JsonValueKind.Number && minSellOpensElement.TryGetInt32(out var minSellOpens) ? minSellOpens : 1,
             MaxSellOpens = maxSellOpensElement.ValueKind == JsonValueKind.Number && maxSellOpensElement.TryGetInt32(out var maxSellOpens) ? maxSellOpens : 3,
             MaxTotalOpens = maxTotalOpensElement.ValueKind == JsonValueKind.Number && maxTotalOpensElement.TryGetInt32(out var maxTotalOpens) ? maxTotalOpens : 5,
             OppositeSideLockSeconds = oppositeSideLockSecondsElement.ValueKind == JsonValueKind.Number && oppositeSideLockSecondsElement.TryGetInt32(out var oppositeSideLockSeconds) ? oppositeSideLockSeconds : 300,
@@ -876,8 +886,14 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         [JsonPropertyName("min_profit_to_close")]
         public double MinProfitToClose { get; set; }
 
+        [JsonPropertyName("min_buy_opens")]
+        public int MinBuyOpens { get; set; } = 1;
+
         [JsonPropertyName("max_buy_opens")]
         public int MaxBuyOpens { get; set; } = 3;
+
+        [JsonPropertyName("min_sell_opens")]
+        public int MinSellOpens { get; set; } = 1;
 
         [JsonPropertyName("max_sell_opens")]
         public int MaxSellOpens { get; set; } = 3;

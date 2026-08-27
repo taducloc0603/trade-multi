@@ -527,7 +527,7 @@ Fields chính:
 
 | Rule | Spec |
 |------|------|
-| **A — Random quota Open** | `max_total_opens` là trần tổng cố định từ DB. Mỗi chu kỳ random `effectiveBuy = random(1..max_buy_opens)`, `effectiveSell = random(1..max_sell_opens)` và `X = random(2..5)`. Chỉ pair Open confirmed đủ A/B tăng tiến độ; đủ X thì tạo chu kỳ mới. Đếm cả `PendingOpen + Live + PendingClose`. |
+| **A — Random quota Open** | `max_total_opens` là trần tổng cố định từ DB. Mỗi chu kỳ random `effectiveBuy = random(min_buy_opens..max_buy_opens)`, `effectiveSell = random(min_sell_opens..max_sell_opens)` và `X = random(2..5)`. Hai cận dưới mặc định là `1`. Chỉ pair Open confirmed đủ A/B tăng tiến độ; đủ X thì tạo chu kỳ mới. Đếm cả `PendingOpen + Live + PendingClose`. |
 | **B — Auto transition gate** | Gate atomic theo action trước/action kế tiếp. Open cùng chiều, Open→Close và Close→Close random theo same-action range DB; Close→Open random theo post-close range. Open→Close đồng thời phải hết post-open riêng của slot đích. Manual/recovery không mutate state Auto. |
 | **C — Opposite-side lock** | `opposite_side_lock_seconds` (default 300s): sau OPEN block OPEN opposite-side; same-side OPEN refresh timer. Đây là lớp bổ sung ngoài Auto transition gate. |
 | **D — Priority close (extended)** | Khi nhiều slot trigger close cùng tick: (1) nếu `max_life_time_by_second > 0`, lọc ra các slot có tuổi `(now - OpenConfirmedAtUtc) > max_life_time_by_second` (overtime tier) → chọn profit cao nhất trong tier đó; (2) nếu không có slot nào overtime, chọn profit cao nhất trong tất cả eligible (Rule D gốc). Losers giữ window. `max_life_time_by_second = 0` (default) = disable tier, hành vi giống Rule D gốc. |
@@ -543,8 +543,8 @@ Rule D pick trong `ProcessSnapshot` close path: overtime tier nếu có, fallbac
 Quota Buy/Sell hiệu lực được giữ ổn định trong một chu kỳ:
 
 ```text
-effective_max_buy  = random(1..max_buy_opens)
-effective_max_sell = random(1..max_sell_opens)
+effective_max_buy  = random(min_buy_opens..max_buy_opens)
+effective_max_sell = random(min_sell_opens..max_sell_opens)
 max_total           = max_total_opens       // cố định, không random
 X                   = random(2..5)           // 2, 3, 4 hoặc 5
 ```

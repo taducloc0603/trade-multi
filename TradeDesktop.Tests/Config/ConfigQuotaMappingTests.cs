@@ -2,11 +2,16 @@ using TradeDesktop.Application.Services;
 
 namespace TradeDesktop.Tests.Config;
 
-// Quota config (max_total_opens / max_buy_opens / max_sell_opens) flows from DB → ConfigRecord →
+// Quota config (min/max Buy/Sell and max total) flows from DB → ConfigRecord →
 // ConfigLoadResult. These tests lock the mapping + normalization at the ConfigLoadResult.Success layer.
 public sealed class ConfigQuotaMappingTests
 {
-    private static ConfigLoadResult Build(int maxBuy, int maxSell, int maxTotal)
+    private static ConfigLoadResult Build(
+        int maxBuy,
+        int maxSell,
+        int maxTotal,
+        int minBuy = 1,
+        int minSell = 1)
         => ConfigLoadResult.Success(
             machineHostName: "host",
             mapName1: "A",
@@ -30,16 +35,20 @@ public sealed class ConfigQuotaMappingTests
             endTimeHold: 15,
             configId: "id",
             sansJson: "{}",
+            minBuyOpens: minBuy,
             maxBuyOpens: maxBuy,
+            minSellOpens: minSell,
             maxSellOpens: maxSell,
             maxTotalOpens: maxTotal);
 
     [Fact]
     public void Success_MapsQuotaFromDb()
     {
-        var result = Build(maxBuy: 3, maxSell: 3, maxTotal: 5);
+        var result = Build(maxBuy: 4, maxSell: 3, maxTotal: 5, minBuy: 2, minSell: 2);
 
-        Assert.Equal(3, result.MaxBuyOpens);
+        Assert.Equal(2, result.MinBuyOpens);
+        Assert.Equal(4, result.MaxBuyOpens);
+        Assert.Equal(2, result.MinSellOpens);
         Assert.Equal(3, result.MaxSellOpens);
         Assert.Equal(5, result.MaxTotalOpens);
     }
@@ -53,6 +62,17 @@ public sealed class ConfigQuotaMappingTests
         Assert.Equal(1, result.MaxBuyOpens);
         Assert.Equal(1, result.MaxSellOpens);
         Assert.Equal(1, result.MaxTotalOpens);
+        Assert.Equal(1, result.MinBuyOpens);
+        Assert.Equal(1, result.MinSellOpens);
+    }
+
+    [Fact]
+    public void Success_ClampsMinimumQuotaToNormalizedMaximum()
+    {
+        var result = Build(maxBuy: 3, maxSell: 2, maxTotal: 5, minBuy: 9, minSell: 0);
+
+        Assert.Equal(3, result.MinBuyOpens);
+        Assert.Equal(1, result.MinSellOpens);
     }
 
     [Fact]
@@ -87,6 +107,8 @@ public sealed class ConfigQuotaMappingTests
         Assert.Equal(3, result.MaxBuyOpens);
         Assert.Equal(3, result.MaxSellOpens);
         Assert.Equal(5, result.MaxTotalOpens);
+        Assert.Equal(1, result.MinBuyOpens);
+        Assert.Equal(1, result.MinSellOpens);
     }
 
     [Fact]
