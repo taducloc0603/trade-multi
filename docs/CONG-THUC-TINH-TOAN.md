@@ -6,6 +6,17 @@
 >
 > Quy ước chung trong app: **`Point` (point multiplier)** = `CurrentPoint > 0 ? CurrentPoint : 1`.
 
+> ⚠️ **Lưu ý về confirmation mode.** Các bảng mô tả hold-window ở mục 2 và 3 dưới đây
+> phản ánh nhánh **legacy compatibility** (`ProcessSide` / `ProcessLegacyGap`). Runtime hiện tại
+> luôn có stability policy nên **chỉ chạy FIXED_SIZE**: Open, Normal Close, SOS Close và TP đều
+> gom đủ `signal_cycle_size` mẫu rồi mới xét mẫu cuối. Bốn cột `open_hold_confirm_ms`,
+> `close_hold_confirm_ms`, `open_max_times_tick`, `close_max_times_tick` đã bị **gỡ khỏi
+> toàn bộ source** (config pipeline không còn đọc chúng); các knob cùng tên trong
+> `GapSignalConfirmationConfig` mặc định `0` và chỉ còn test set tay. Xem README §3, §4, §7.1.
+>
+> Guard **PriceFreeze** (mục 4) dùng cửa sổ riêng: `open_price_freeze_ms` cho Open và
+> `close_price_freeze_ms` cho Close — độc lập với hold-time, `0` = tắt kiểm tra.
+
 ---
 
 ## 1. Công thức GAP (lõi tín hiệu)
@@ -138,7 +149,7 @@ Thứ tự: **Latency → MaxGap → Spread → PriceFreeze → (TpFreeze)**. G�
 | **Latency** | Độ trễ sàn vượt ngưỡng | `latA > ConfirmLatencyMs` hoặc `latB > ...` | L87-104 |
 | **MaxGap** | Gap quá lớn | `|LastGap| > MaxGap` | L106-138 |
 | **Spread** | Spread quá rộng | `(int)(Spread × Point) > MaxSpread` (mỗi sàn) | L140-166 |
-| **PriceFreeze** | Giá đứng yên cả cửa sổ | mọi tick trong `HoldConfirmMs` có Bid/Ask **không đổi** | L168-202 |
+| **PriceFreeze** | Giá đứng yên cả cửa sổ | mọi tick trong `open_price_freeze_ms` (Open) / `close_price_freeze_ms` (Close) có Bid/Ask **không đổi** | L163-197 |
 | **TpFreeze** | (chỉ close TP) profit đi ngang | mọi profit làm tròn `"0.00"` bằng nhau | L209-222 |
 
 - PriceFreeze cần ≥ 2 tick trong cửa sổ mới đánh giá; kiểm tra riêng BidA/AskA/BidB/AskB.

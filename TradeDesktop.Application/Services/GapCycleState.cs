@@ -57,6 +57,7 @@ public sealed record GapCycleUpdateResult(
 public sealed class GapCycleState
 {
     private readonly List<int> _gaps = [];
+    private FixedSizeSignalCycle<int>? _fixedCycle;
     private string _cycleId = string.Empty;
     private DateTime? _startedAtUtc;
     private DateTime? _lastTickUtc;
@@ -64,7 +65,100 @@ public sealed class GapCycleState
     private GapCycleStatus _status = GapCycleStatus.Empty;
     private string _reason = "Chưa có Cycle.";
 
-    public GapCycleSnapshot Current => BuildSnapshot();
+    public GapCycleSnapshot Current => _fixedCycle is null
+        ? BuildSnapshot()
+        : BuildFixedSnapshot();
+    public int FixedRequiredSize => _fixedCycle?.RequiredSize ?? 0;
+
+    public GapCycleUpdateResult ProcessFixedSize(
+        DateTime timestampUtc,
+        int? gap,
+        bool hasRequiredData,
+        bool confirmSatisfied,
+        GapStabilityConfig config,
+        int requiredSize,
+        string fingerprint,
+        int limitMaxGap = 0)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        if (!config.TryValidate(out var configError))
+        {
+            throw new ArgumentOutOfRangeException(nameof(config), configError);
+        }
+
+        if (requiredSize < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(requiredSize), "Signal cycle size must be >= 1.");
+        }
+
+        if (string.IsNullOrWhiteSpace(fingerprint))
+        {
+            throw new ArgumentException("Fingerprint is required.", nameof(fingerprint));
+        }
+
+        EnsureFixedCycle(requiredSize);
+
+        if (!hasRequiredData || !gap.HasValue)
+        {
+            return ResetFixed(GapCycleTransition.ResetMissingData, "Missing required Gap/Bid/Ask data.");
+        }
+
+        if (!confirmSatisfied)
+        {
+            return ResetFixed(GapCycleTransition.ResetConfirmNotSatisfied, "Gap does not satisfy confirm threshold.");
+        }
+
+        var gapValue = gap.Value;
+        if (limitMaxGap > 0 && Magnitude(gapValue) > limitMaxGap)
+        {
+            var completed = _fixedCycle!.Count > 0 ? BuildFixedSnapshot() : null;
+            _fixedCycle.Reset("LIMIT_MAX_GAP");
+            _metrics = null;
+            _status = GapCycleStatus.Rejected;
+            _reason = $"Gap {gapValue} exceeds limit_max_gap {limitMaxGap}.";
+            return new GapCycleUpdateResult(GapCycleTransition.Rejected, BuildFixedSnapshot(), completed);
+        }
+
+        if (_fixedCycle!.LastUpdatedAtUtc.HasValue
+            && timestampUtc < _fixedCycle.LastUpdatedAtUtc.Value)
+        {
+            var completed = BuildFixedSnapshot();
+            StartFixedCycle(timestampUtc, gapValue, fingerprint, config, "Timestamp regressed; started a new cycle.");
+            return new GapCycleUpdateResult(GapCycleTransition.ResetTimestamp, BuildFixedSnapshot(), completed);
+        }
+
+        if (_fixedCycle.Count == 0)
+        {
+            StartFixedCycle(timestampUtc, gapValue, fingerprint, config, "Started fixed-size cycle.");
+            return CompleteFixedCycleIfReady(config, GapCycleTransition.Started, fingerprint);
+        }
+
+        var currentMetrics = GapStabilityCalculator.Calculate(_fixedCycle.Values, config);
+        var delta = GapStabilityCalculator.CalculateDelta(gapValue, currentMetrics.Center);
+        if (delta > currentMetrics.Tolerance)
+        {
+            var completed = BuildFixedSnapshot(currentMetrics);
+            StartFixedCycle(
+                timestampUtc,
+                gapValue,
+                fingerprint,
+                config,
+                $"Delta {delta:0.####} exceeds Tolerance {currentMetrics.Tolerance:0.####}; started a new cycle.");
+            return new GapCycleUpdateResult(GapCycleTransition.NewCycle, BuildFixedSnapshot(), completed);
+        }
+
+        var add = _fixedCycle.Add(gapValue, timestampUtc, fingerprint);
+        if (add.DuplicateIgnored)
+        {
+            _reason = "Duplicate snapshot ignored.";
+            return new GapCycleUpdateResult(GapCycleTransition.None, BuildFixedSnapshot(currentMetrics));
+        }
+
+        _metrics = GapStabilityCalculator.Calculate(_fixedCycle.Values, config);
+        _status = GapCycleStatus.Collecting;
+        _reason = $"Collecting fixed-size cycle: {_fixedCycle.Count}/{_fixedCycle.RequiredSize}.";
+        return CompleteFixedCycleIfReady(config, GapCycleTransition.Joined, fingerprint);
+    }
 
     public GapCycleUpdateResult Process(
         DateTime timestampUtc,
@@ -199,7 +293,122 @@ public sealed class GapCycleState
     }
 
     public GapCycleUpdateResult Reset(string reason = "Reset Cycle theo yêu cầu.") =>
-        ResetInternal(GapCycleTransition.ResetExplicitly, reason);
+        _fixedCycle is null
+            ? ResetInternal(GapCycleTransition.ResetExplicitly, reason)
+            : ResetFixed(GapCycleTransition.ResetExplicitly, reason);
+
+    private GapCycleUpdateResult CompleteFixedCycleIfReady(
+        GapStabilityConfig config,
+        GapCycleTransition collectingTransition,
+        string finalFingerprint)
+    {
+        if (!_fixedCycle!.IsComplete)
+        {
+            return new GapCycleUpdateResult(collectingTransition, BuildFixedSnapshot());
+        }
+
+        var metrics = GapStabilityCalculator.Calculate(_fixedCycle.Values, config);
+        _metrics = metrics;
+        if (metrics.Dispersion > config.MaxDispersion || metrics.Drift > config.MaxDrift)
+        {
+            _status = GapCycleStatus.Unstable;
+            _reason = BuildUnstableReason(metrics, config);
+            var completed = BuildFixedSnapshot(metrics);
+            var lastGap = _fixedCycle.Values[^1];
+            var lastTimestamp = _fixedCycle.LastUpdatedAtUtc!.Value;
+            StartFixedCycle(
+                lastTimestamp,
+                lastGap,
+                finalFingerprint,
+                config,
+                "Restarted from final Gap of unstable fixed-size cycle.");
+            return new GapCycleUpdateResult(
+                GapCycleTransition.BecameUnstable,
+                BuildFixedSnapshot(),
+                completed);
+        }
+
+        _status = GapCycleStatus.Stable;
+        _reason = $"Fixed-size cycle has {_fixedCycle.RequiredSize} Gaps and passed Dispersion/Drift.";
+        return new GapCycleUpdateResult(GapCycleTransition.BecameStable, BuildFixedSnapshot(metrics));
+    }
+
+    private void EnsureFixedCycle(int requiredSize)
+    {
+        if (_fixedCycle is null)
+        {
+            _fixedCycle = new FixedSizeSignalCycle<int>(requiredSize);
+            return;
+        }
+
+        if (_fixedCycle.RequiredSize != requiredSize)
+        {
+            _fixedCycle.Resize(requiredSize);
+            _metrics = null;
+            _status = GapCycleStatus.Empty;
+            _reason = "Signal cycle size changed; reset fixed-size cycle.";
+        }
+    }
+
+    private void StartFixedCycle(
+        DateTime timestampUtc,
+        int gap,
+        string fingerprint,
+        GapStabilityConfig config,
+        string reason)
+    {
+        if (_fixedCycle!.Count == 0)
+        {
+            _fixedCycle.Add(gap, timestampUtc, fingerprint);
+        }
+        else
+        {
+            _fixedCycle.RestartWith(gap, timestampUtc, fingerprint, reason);
+        }
+
+        _metrics = GapStabilityCalculator.Calculate(_fixedCycle.Values, config);
+        _status = GapCycleStatus.Collecting;
+        _reason = reason;
+    }
+
+    private GapCycleUpdateResult ResetFixed(
+        GapCycleTransition transition,
+        string reason)
+    {
+        var completed = _fixedCycle!.Count > 0 ? BuildFixedSnapshot() : null;
+        _fixedCycle.Reset(reason);
+        _metrics = null;
+        _status = GapCycleStatus.Empty;
+        _reason = reason;
+        return new GapCycleUpdateResult(transition, BuildFixedSnapshot(), completed);
+    }
+
+    private GapCycleSnapshot BuildFixedSnapshot(
+        GapStabilityCalculator.Metrics? metrics = null)
+    {
+        metrics ??= _metrics;
+        return new GapCycleSnapshot(
+            _fixedCycle?.CycleId ?? string.Empty,
+            _status,
+            _fixedCycle?.StartedAtUtc,
+            _fixedCycle?.LastUpdatedAtUtc,
+            _fixedCycle?.Values.ToArray() ?? [],
+            metrics?.Center,
+            metrics?.Mad,
+            metrics?.Tolerance,
+            metrics?.Dispersion,
+            metrics?.EarlyCenter,
+            metrics?.LateCenter,
+            metrics?.Drift,
+            CalculateFixedDurationMs(),
+            _reason);
+    }
+
+    private double CalculateFixedDurationMs() =>
+        _fixedCycle?.StartedAtUtc is { } started
+        && _fixedCycle.LastUpdatedAtUtc is { } last
+            ? Math.Max(0d, (last - started).TotalMilliseconds)
+            : 0d;
 
     private GapCycleUpdateResult ResetInternal(
         GapCycleTransition transition,

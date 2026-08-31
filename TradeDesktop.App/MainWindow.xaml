@@ -327,6 +327,8 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="4" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="8" />
+                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="4" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="4" />
@@ -388,6 +390,52 @@
                                         VerticalAlignment="Center"
                                         Command="{Binding RandomQuotaCommand}" />
                             </StackPanel>
+
+                            <Border Grid.Row="18"
+                                    BorderBrush="#E4E7EC"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="8"
+                                    Background="White">
+                                <StackPanel>
+                                    <TextBlock Text="Signal Cycles"
+                                               FontWeight="SemiBold"
+                                               Foreground="#344054"
+                                               Margin="0,0,0,5" />
+                                    <ItemsControl ItemsSource="{Binding SignalCycleStatuses}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Margin="0,2">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="55" />
+                                                            <ColumnDefinition Width="80" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Text="{Binding DisplayName}"
+                                                                   Foreground="#344054"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Grid.Column="1"
+                                                                   Text="{Binding ProgressText}"
+                                                                   FontFamily="Consolas"
+                                                                   HorizontalAlignment="Center"
+                                                                   Foreground="#101828" />
+                                                        <TextBlock Grid.Column="2"
+                                                                   Text="{Binding Status}"
+                                                                   HorizontalAlignment="Right"
+                                                                   Foreground="#667085" />
+                                                    </Grid>
+                                                    <TextBlock Text="{Binding DetailText}"
+                                                               ToolTip="{Binding LastReason}"
+                                                               Foreground="#98A2B3"
+                                                               FontSize="10"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
                         </Grid>
                     </Border>
 

@@ -9,13 +9,11 @@ public interface IRuntimeConfigProvider
     int CurrentPoint { get; }
     int CurrentOpenPts { get; }
     int CurrentConfirmGapPts { get; }
-    int CurrentHoldConfirmMs { get; }
     int CurrentOpenPriceFreezeMs { get; }
     int CurrentClosePts { get; }
     int CurrentCloseConfirmGapPts { get; }
     double CurrentCloseTpProfit { get; }
     double CurrentCloseConfirmTpProfit { get; }
-    int CurrentCloseHoldConfirmMs { get; }
     int CurrentClosePriceFreezeMs { get; }
     int CurrentStartTimeHold { get; }
     int CurrentEndTimeHold { get; }
@@ -28,8 +26,7 @@ public interface IRuntimeConfigProvider
     int CurrentSosCloseConfirmGapPts { get; }
     int CurrentSosCloseGapPts { get; }
     int CurrentMaxSpread { get; }
-    int CurrentOpenMaxTimesTick { get; }
-    int CurrentCloseMaxTimesTick { get; }
+    int CurrentSignalCycleSize => 10;
     int CurrentOpenPendingTimeMs { get; }
     int CurrentClosePendingTimeMs { get; }
     int CurrentDelayOpenAMs { get; }

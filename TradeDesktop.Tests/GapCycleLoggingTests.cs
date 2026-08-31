@@ -14,7 +14,7 @@ public sealed class GapCycleLoggingTests
         new(10, 0.50, 4.0, 3, 0.45, 0.60);
 
     [Fact]
-    public void Open_LogsStateChangesAndTrigger_ButDoesNotLogJoinedTicks()
+    public void Open_LogsFixedSizeStartProgressCompletionAndTrigger()
     {
         var logger = new CaptureLogger();
         var engine = new GapSignalConfirmationEngine(logger);
@@ -24,14 +24,21 @@ public sealed class GapCycleLoggingTests
         engine.ProcessSnapshot(Snapshot(1, gapBuy: 110), config);
         var emitted = Assert.Single(engine.ProcessSnapshot(Snapshot(2, gapBuy: 120), config));
 
-        Assert.Equal(2, logger.Messages.Count);
-        Assert.Contains("[CYCLE_STABLE]", logger.Messages[0]);
-        Assert.Contains("[TRIGGER_EMITTED]", logger.Messages[1]);
-        Assert.DoesNotContain(logger.Messages, message => message.Contains("CYCLE_STARTED", StringComparison.Ordinal));
-        Assert.DoesNotContain(logger.Messages, message => message.Contains("CYCLE_RESET", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[OPEN_CYCLE][STARTED]", StringComparison.Ordinal)
+            && message.Contains("count=1/3", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[OPEN_CYCLE][PROGRESS]", StringComparison.Ordinal)
+            && message.Contains("count=2/3", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[OPEN_CYCLE][COMPLETED]", StringComparison.Ordinal)
+            && message.Contains("count=3/3", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[OPEN_CYCLE][TRIGGERED]", StringComparison.Ordinal));
         Assert.DoesNotContain(logger.Messages, message => message.Contains("JOINED", StringComparison.Ordinal));
 
-        var stable = logger.Messages[0];
+        var stable = Assert.Single(logger.Messages.Where(message =>
+            message.Contains("[GAP_STABILITY][CYCLE_STABLE]", StringComparison.Ordinal)));
         Assert.Contains("action=OPEN side=BUY slot_id=-", stable);
         Assert.Contains("sample_count=3", stable);
         Assert.Contains("duration_ms=2000", stable);
@@ -60,6 +67,9 @@ public sealed class GapCycleLoggingTests
         Assert.Contains("max_dispersion=0.45", stable);
         Assert.Contains("max_drift=0.6", stable);
         Assert.Contains("hold_confirm_ms=2000", stable);
+        Assert.Contains("confirmation_mode=FIXED_SIZE", stable);
+        Assert.Contains("signal_cycle_size=3", stable);
+        Assert.Contains("hold_confirm_ignored=true", stable);
         Assert.Contains("limit_max_gap=0", stable);
         Assert.Contains("max_gap=700", stable);
         Assert.Contains("reason=\"", stable);
@@ -68,7 +78,8 @@ public sealed class GapCycleLoggingTests
         Assert.Equal(32, cycleId.Length);
         Assert.All(cycleId, character => Assert.True(Uri.IsHexDigit(character)));
 
-        var trigger = logger.Messages[1];
+        var trigger = Assert.Single(logger.Messages.Where(message =>
+            message.Contains("[GAP_STABILITY][TRIGGER_EMITTED]", StringComparison.Ordinal)));
         var signalId = ReadValue(trigger, "signal_id");
         Assert.Equal(cycleId, ReadValue(trigger, "cycle_id"));
         Assert.Equal(cycleId, emitted.DiagnosticCycleId);
@@ -88,7 +99,10 @@ public sealed class GapCycleLoggingTests
         engine.ProcessSnapshot(Snapshot(1, gapBuy: 300), config);
         engine.ProcessSnapshot(Snapshot(2, gapBuy: 550), config);
 
-        Assert.Empty(logger.Messages);
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[OPEN_CYCLE][STARTED]", StringComparison.Ordinal));
+        Assert.Equal(2, logger.Messages.Count(message =>
+            message.Contains("[OPEN_CYCLE][RESET]", StringComparison.Ordinal)));
 
         var split = Assert.Single(logger.RawMessages.Where(message =>
             message.Contains("[CYCLE_COMPLETED]", StringComparison.Ordinal)
@@ -117,7 +131,11 @@ public sealed class GapCycleLoggingTests
         shortEngine.ProcessSnapshot(Snapshot(0, gapBuy: 100), config);
         shortEngine.ProcessSnapshot(Snapshot(0, gapBuy: 0), config);
 
-        Assert.Empty(shortLogger.Messages);
+        Assert.Contains(shortLogger.Messages, message =>
+            message.Contains("[OPEN_CYCLE][STARTED]", StringComparison.Ordinal));
+        Assert.Contains(shortLogger.Messages, message =>
+            message.Contains("[OPEN_CYCLE][RESET]", StringComparison.Ordinal)
+            && message.Contains("count=1/3", StringComparison.Ordinal));
         Assert.Empty(shortLogger.RawMessages);
 
         var significantLogger = new CaptureLogger();
@@ -131,12 +149,6 @@ public sealed class GapCycleLoggingTests
             message.Contains("[CYCLE_COMPLETED]", StringComparison.Ordinal));
         Assert.Contains(significantLogger.Messages, message =>
             message.Contains("[CYCLE_STABLE]", StringComparison.Ordinal));
-        Assert.Contains(significantLogger.RawMessages, message =>
-            message.Contains("[CYCLE_COMPLETED]", StringComparison.Ordinal)
-            && message.Contains("result=RESET_CONFIRM", StringComparison.Ordinal)
-            && message.Contains("total_sample_count=3", StringComparison.Ordinal)
-            && message.Contains("status_before=Stable", StringComparison.Ordinal)
-            && message.Contains("next_status=Empty", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -157,6 +169,77 @@ public sealed class GapCycleLoggingTests
         Assert.Contains(logger.Messages, message =>
             message.Contains("[TRIGGER_EMITTED]", StringComparison.Ordinal)
             && message.Contains("action=CLOSE side=BUY slot_id=7", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[NORMAL_CLOSE_CYCLE][STARTED]", StringComparison.Ordinal)
+            && message.Contains("count=1/3", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[NORMAL_CLOSE_CYCLE][PROGRESS]", StringComparison.Ordinal)
+            && message.Contains("count=2/3", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[NORMAL_CLOSE_CYCLE][COMPLETED]", StringComparison.Ordinal)
+            && message.Contains("count=3/3", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[NORMAL_CLOSE_CYCLE][TRIGGERED]", StringComparison.Ordinal)
+            && message.Contains("slot_id=7", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Open_DuplicateSnapshot_DoesNotLogOrIncreaseProgress()
+    {
+        var logger = new CaptureLogger();
+        var engine = new GapSignalConfirmationEngine(logger);
+        var config = OpenConfig();
+        var first = Snapshot(0, gapBuy: 100);
+
+        engine.ProcessSnapshot(first, config);
+        engine.ProcessSnapshot(first, config);
+        engine.ProcessSnapshot(Snapshot(1, gapBuy: 110), config);
+        engine.ProcessSnapshot(Snapshot(2, gapBuy: 120), config);
+
+        Assert.Single(logger.Messages.Where(message =>
+            message.Contains("[OPEN_CYCLE][STARTED]", StringComparison.Ordinal)));
+        Assert.Single(logger.Messages.Where(message =>
+            message.Contains("[OPEN_CYCLE][PROGRESS]", StringComparison.Ordinal)
+            && message.Contains("count=2/3", StringComparison.Ordinal)));
+        Assert.Single(logger.Messages.Where(message =>
+            message.Contains("[OPEN_CYCLE][COMPLETED]", StringComparison.Ordinal)
+            && message.Contains("count=3/3", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Tp_LogsFixedSizeCycleStartAndCompletion()
+    {
+        var logger = new CaptureLogger();
+        var engine = new CloseSignalEngine(logger);
+        _ = new PositionSlot(7, "PAIR-7", engine);
+        var config = CloseConfig() with
+        {
+            CloseConfirmTpProfit = 5,
+            CloseTpProfit = 10,
+            SignalCycleSize = 3
+        };
+
+        Assert.Null(engine.ProcessSnapshot(Snapshot(0), config, TradingOpenMode.GapBuy, 5));
+        Assert.Null(engine.ProcessSnapshot(Snapshot(1), config, TradingOpenMode.GapBuy, 7));
+        var trigger = engine.ProcessSnapshot(Snapshot(2), config, TradingOpenMode.GapBuy, 10);
+
+        Assert.NotNull(trigger);
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[TP_CYCLE][STARTED]", StringComparison.Ordinal)
+            && message.Contains("slot_id=7", StringComparison.Ordinal)
+            && message.Contains("count=1/3", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[TP_CYCLE][COMPLETED]", StringComparison.Ordinal)
+            && message.Contains("slot_id=7", StringComparison.Ordinal)
+            && message.Contains("count=3/3", StringComparison.Ordinal)
+            && message.Contains("confirmation_mode=FIXED_SIZE", StringComparison.Ordinal)
+            && message.Contains("result=TARGET_REACHED", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[TP_CYCLE][PROGRESS]", StringComparison.Ordinal)
+            && message.Contains("count=2/3", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.Contains("[TP_CYCLE][TRIGGERED]", StringComparison.Ordinal)
+            && message.Contains("result=TRIGGERED", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -164,7 +247,7 @@ public sealed class GapCycleLoggingTests
     {
         var logger = new CaptureLogger();
         var engine = new GapSignalConfirmationEngine(logger);
-        var config = OpenConfig(open: 10_000);
+        var config = OpenConfig(open: 10_000, signalCycleSize: 3_000);
 
         for (var index = 0; index < 2_001; index++)
         {
@@ -218,7 +301,8 @@ public sealed class GapCycleLoggingTests
 
     private static GapSignalConfirmationConfig OpenConfig(
         int open = 100,
-        int limitMaxGap = 0) =>
+        int limitMaxGap = 0,
+        int signalCycleSize = 3) =>
         new(
             ConfirmGapPts: 50,
             OpenPts: open,
@@ -227,7 +311,8 @@ public sealed class GapCycleLoggingTests
             OpenGapStability: Stability,
             DiagnosticConfigId: "CONFIG-TEST",
             DiagnosticSymbol: "XAUUSD|XAUUSD",
-            DiagnosticMaxGap: 700);
+            DiagnosticMaxGap: 700,
+            SignalCycleSize: signalCycleSize);
 
     private static GapSignalConfirmationConfig CloseConfig() =>
         new(
@@ -240,7 +325,8 @@ public sealed class GapCycleLoggingTests
             CloseGapStability: Stability,
             DiagnosticConfigId: "CONFIG-TEST",
             DiagnosticSymbol: "XAUUSD|XAUUSD",
-            DiagnosticMaxGap: 700);
+            DiagnosticMaxGap: 700,
+            SignalCycleSize: 3);
 
     private static string ReadValue(string message, string key)
     {

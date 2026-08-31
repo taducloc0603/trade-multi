@@ -57,7 +57,8 @@ public sealed record GapSignalSnapshot(
 
 /// <summary>
 /// Các giới hạn dùng để phân loại một chu kỳ Gap là ổn định.
-/// Thời gian tối thiểu của chu kỳ tiếp tục lấy từ open/close_hold_confirm_ms.
+/// Open, Normal Close, SOS Close và TP đều dùng chu kỳ số lượng theo signal_cycle_size.
+/// close_hold_confirm_ms / open_hold_confirm_ms không còn tham gia quyết định signal.
 /// </summary>
 public sealed record GapStabilityConfig(
     int AbsoluteFloor,
@@ -113,10 +114,17 @@ public sealed record GapStabilityConfig(
         double.IsFinite(value) && value >= 0d;
 }
 
+// Confirmation mode duy nhất được hỗ trợ là FIXED_SIZE theo SignalCycleSize
+// (Open / Normal Close / SOS Close / TP).
+//
+// HoldConfirmMs, CloseHoldConfirmMs, OpenMaxTimesTick, CloseMaxTimesTick là các knob
+// LEGACY-ONLY: không còn nguồn dữ liệu nào từ DB/RuntimeConfigState đổ vào (mặc định 0),
+// chỉ còn được test và caller trực tiếp cũ set tay để chạy nhánh compatibility
+// (ProcessLegacyGap / ProcessSide). Đừng nối chúng lại vào config pipeline.
 public sealed record GapSignalConfirmationConfig(
     int ConfirmGapPts,
     int OpenPts,
-    int HoldConfirmMs,
+    int HoldConfirmMs = 0,
     int CloseConfirmGapPts = 0,
     int ClosePts = 0,
     double CloseConfirmTpProfit = 0,
@@ -138,7 +146,8 @@ public sealed record GapSignalConfirmationConfig(
     GapStabilityConfig? CloseGapStability = null,
     string DiagnosticConfigId = "",
     string DiagnosticSymbol = "",
-    int DiagnosticMaxGap = 0);
+    int DiagnosticMaxGap = 0,
+    int SignalCycleSize = 10);
 
 public sealed record GapSignalTriggerResult(
     bool Triggered,

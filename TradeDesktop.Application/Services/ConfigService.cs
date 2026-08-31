@@ -42,6 +42,13 @@ public sealed class ConfigService(
             return ConfigLoadResult.NotFound(hostName);
         }
 
+        if (record.SignalCycleSize < 1)
+        {
+            return ConfigLoadResult.Failed(
+                hostName,
+                "Cấu hình signal_cycle_size không hợp lệ: giá trị phải >= 1.");
+        }
+
         if (record.OpenGapStability is null)
         {
             return ConfigLoadResult.Failed(
@@ -81,14 +88,12 @@ public sealed class ConfigService(
             record.Point,
             record.OpenPts,
             record.ConfirmGapPts,
-            record.HoldConfirmMs,
             record.OpenPriceFreezeMs,
             record.ClosePts,
             record.CloseConfirmGapPts,
             record.CloseTpProfit,
             record.CloseConfirmTpProfit,
             record.CloseMaxTpProfit,
-            record.CloseHoldConfirmMs,
             record.ClosePriceFreezeMs,
             record.StartTimeHold,
             record.EndTimeHold,
@@ -102,8 +107,6 @@ public sealed class ConfigService(
             record.MaxGap,
             record.LimitMaxGap,
             record.MaxSpread,
-            record.OpenMaxTimesTick,
-            record.CloseMaxTimesTick,
             record.OpenPendingTimeMs,
             record.ClosePendingTimeMs,
             record.DelayOpenAMs,
@@ -118,6 +121,7 @@ public sealed class ConfigService(
             record.CurrentSlots,
             record.MaxLifeTimeBySecond,
             minProfitToClose: record.MinProfitToClose,
+            signalCycleSize: record.SignalCycleSize,
             limitMaxTp: record.LimitMaxTp,
             minBuyOpens: record.MinBuyOpens,
             maxBuyOpens: record.MaxBuyOpens,
@@ -216,7 +220,6 @@ public sealed record ConfigLoadResult(
     int Point,
     int OpenPts,
     int ConfirmGapPts,
-    int HoldConfirmMs,
     int OpenPriceFreezeMs,
     int ClosePts,
     int CloseConfirmGapPts,
@@ -228,7 +231,6 @@ public sealed record ConfigLoadResult(
     int SosTriggerAfterSeconds,
     int SosCloseConfirmGapPts,
     int SosCloseGapPts,
-    int CloseHoldConfirmMs,
     int ClosePriceFreezeMs,
     int StartTimeHold,
     int EndTimeHold,
@@ -241,8 +243,6 @@ public sealed record ConfigLoadResult(
     int MaxGap,
     int LimitMaxGap,
     int MaxSpread,
-    int OpenMaxTimesTick,
-    int CloseMaxTimesTick,
     int OpenPendingTimeMs,
     int ClosePendingTimeMs,
     int DelayOpenAMs,
@@ -272,7 +272,8 @@ public sealed record ConfigLoadResult(
     string ScheduleSleepingJson = "",
     double MinProfitToClose = 0,
     GapStabilityConfig? OpenGapStability = null,
-    GapStabilityConfig? CloseGapStability = null)
+    GapStabilityConfig? CloseGapStability = null,
+    int SignalCycleSize = 10)
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -284,14 +285,12 @@ public sealed record ConfigLoadResult(
         int point,
         int openPts,
         int confirmGapPts,
-        int holdConfirmMs,
         int openPriceFreezeMs,
         int closePts,
         int closeConfirmGapPts,
         double closeTpProfit,
         double closeConfirmTpProfit,
         double closeMaxTpProfit,
-        int closeHoldConfirmMs,
         int closePriceFreezeMs,
         int startTimeHold,
         int endTimeHold,
@@ -305,8 +304,6 @@ public sealed record ConfigLoadResult(
         int maxGap = 0,
         int limitMaxGap = 0,
         int maxSpread = 0,
-        int openMaxTimesTick = 0,
-        int closeMaxTimesTick = 0,
         int openPendingTimeMs = 0,
         int closePendingTimeMs = 0,
         int delayOpenAMs = 0,
@@ -337,7 +334,8 @@ public sealed record ConfigLoadResult(
         string scheduleSleepingJson = "",
         double minProfitToClose = 0,
         GapStabilityConfig? openGapStability = null,
-        GapStabilityConfig? closeGapStability = null) =>
+        GapStabilityConfig? closeGapStability = null,
+        int signalCycleSize = 10) =>
         new(
             true,
             true,
@@ -348,7 +346,6 @@ public sealed record ConfigLoadResult(
             point > 0 ? point : 1,
             Math.Abs(openPts),
             Math.Abs(confirmGapPts),
-            Math.Max(0, holdConfirmMs),
             Math.Max(0, openPriceFreezeMs),
             Math.Abs(closePts),
             Math.Abs(closeConfirmGapPts),
@@ -360,7 +357,6 @@ public sealed record ConfigLoadResult(
             Math.Max(0, sosTriggerAfterSeconds),
             sosCloseConfirmGapPts,
             sosCloseGapPts,
-            Math.Max(0, closeHoldConfirmMs),
             Math.Max(0, closePriceFreezeMs),
             Math.Max(0, startTimeHold),
             Math.Max(0, endTimeHold),
@@ -373,8 +369,6 @@ public sealed record ConfigLoadResult(
             Math.Max(0, maxGap),
             Math.Max(0, limitMaxGap),
             Math.Max(0, maxSpread),
-            Math.Max(0, openMaxTimesTick),
-            Math.Max(0, closeMaxTimesTick),
             Math.Max(0, openPendingTimeMs),
             Math.Max(0, closePendingTimeMs),
             Math.Max(0, delayOpenAMs),
@@ -404,7 +398,8 @@ public sealed record ConfigLoadResult(
             scheduleSleepingJson ?? string.Empty,
             Math.Max(0d, minProfitToClose),
             openGapStability,
-            closeGapStability);
+            closeGapStability,
+            signalCycleSize);
 
     public static ConfigLoadResult NotFound(string machineHostName) =>
         new(
@@ -417,7 +412,6 @@ public sealed record ConfigLoadResult(
             Point: 1,
             OpenPts: 0,
             ConfirmGapPts: 0,
-            HoldConfirmMs: 0,
             OpenPriceFreezeMs: 0,
             ClosePts: 0,
             CloseConfirmGapPts: 0,
@@ -429,7 +423,6 @@ public sealed record ConfigLoadResult(
             SosTriggerAfterSeconds: 0,
             SosCloseConfirmGapPts: 0,
             SosCloseGapPts: 0,
-            CloseHoldConfirmMs: 0,
             ClosePriceFreezeMs: 0,
             StartTimeHold: 0,
             EndTimeHold: 0,
@@ -442,8 +435,6 @@ public sealed record ConfigLoadResult(
             MaxGap: 0,
             LimitMaxGap: 0,
             MaxSpread: 0,
-            OpenMaxTimesTick: 0,
-            CloseMaxTimesTick: 0,
             OpenPendingTimeMs: 0,
             ClosePendingTimeMs: 0,
             DelayOpenAMs: 0,

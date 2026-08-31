@@ -21,7 +21,8 @@ public sealed class GapDiagnosticsBehaviorBaselineTests
             ConfirmGapPts: 50,
             OpenPts: 100,
             HoldConfirmMs: 2000,
-            OpenGapStability: Stability);
+            OpenGapStability: Stability,
+            SignalCycleSize: 3);
 
         IReadOnlyList<GapSignalTriggerResult> expected = [];
         IReadOnlyList<GapSignalTriggerResult> actual = [];
@@ -70,7 +71,8 @@ public sealed class GapDiagnosticsBehaviorBaselineTests
         {
             CloseConfirmTpProfit = 5,
             CloseTpProfit = 10,
-            CloseHoldConfirmMs = 1000
+            CloseHoldConfirmMs = 1000,
+            SignalCycleSize = 2
         };
 
         GapSignalTriggerResult? expected = null;
@@ -120,7 +122,8 @@ public sealed class GapDiagnosticsBehaviorBaselineTests
             ClosePts: 100,
             CloseHoldConfirmMs: 2000,
             CloseGapMode: mode,
-            CloseGapStability: Stability);
+            CloseGapStability: Stability,
+            SignalCycleSize: 3);
 
     private static GapSignalSnapshot Snapshot(
         int second,

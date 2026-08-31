@@ -91,6 +91,36 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public IReadOnlyList<PositionSlot> PendingCloseSlots =>
         _state.Slots.Where(s => s.Status == PositionSlotStatus.PendingClose).ToList();
 
+    public IReadOnlyList<SignalCycleStatus> GetSignalCycleStatuses()
+    {
+        var statuses = new List<SignalCycleStatus>(_openSignalEngine.GetCycleStatuses());
+        foreach (var slot in _state.Slots.Where(slot =>
+                     slot.Status is PositionSlotStatus.Live or PositionSlotStatus.PendingClose))
+        {
+            var closeKind = slot.IsSosActive
+                ? slot.Side == TradingPositionSide.Buy
+                    ? SignalCycleKind.SosCloseBuy
+                    : SignalCycleKind.SosCloseSell
+                : slot.Side == TradingPositionSide.Buy
+                    ? SignalCycleKind.NormalCloseBuy
+                    : SignalCycleKind.NormalCloseSell;
+            foreach (var status in slot.CloseSignalEngine.GetCycleStatuses().Where(status =>
+                         status.Kind == closeKind || status.Kind == SignalCycleKind.Tp))
+            {
+                statuses.Add(status with
+                {
+                    DisplayName = status.Kind == SignalCycleKind.Tp
+                        ? $"Slot {slot.SlotId} TP"
+                        : slot.IsSosActive
+                            ? $"Slot {slot.SlotId} SOS Close"
+                            : $"Slot {slot.SlotId} Normal Close"
+                });
+            }
+        }
+
+        return statuses;
+    }
+
     public DateTime? GlobalActionLockUntilUtc => _state.GlobalActionLockUntilUtc;
     public bool HasNonAutoCloseInFlight
     {
@@ -952,8 +982,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             $"[SLOT][TP_CHECK] slot={slot.SlotId} band={band} profit={profitText} " +
             $"confirm={Math.Abs(config.CloseConfirmTpProfit).ToString("0.00", CultureInfo.InvariantCulture)} " +
             $"tp={Math.Abs(config.CloseTpProfit).ToString("0.00", CultureInfo.InvariantCulture)} " +
-            $"holdMs={Math.Max(0, config.CloseHoldConfirmMs)} " +
-            $"maxTick={Math.Max(0, config.CloseMaxTimesTick)}");
+            $"cycleSize={Math.Max(1, config.SignalCycleSize)} confirmationMode=FIXED_SIZE");
     }
 
     // Throttle [SLOT][SKIP] Open blocked: log khi (side|reason) đổi HOẶC quá interval — tránh spam mỗi tick khi quota full / opposite-lock.

@@ -56,22 +56,27 @@ Trong code kết quả được ép `int`:
 
 File: `TradeDesktop.Application/Services/GapSignalConfirmationEngine.cs`
 
+Confirmation mode duy nhất là **FIXED_SIZE**: chu kỳ đếm **số lượng mẫu gap** theo
+`signal_cycle_size`, không đếm theo thời gian.
+
 Config trước khi áp rule được chuẩn hóa:
 
 - `ConfirmGapPts = Abs(config.ConfirmGapPts)`
 - `OpenPts = Abs(config.OpenPts)`
-- `HoldConfirmMs = Max(0, config.HoldConfirmMs)`
-- `OpenMaxTimesTick = Max(0, config.OpenMaxTimesTick)`
+- `SignalCycleSize = config.SignalCycleSize` (`>= 1`, config `< 1` bị ConfigService từ chối)
 - `LimitMaxGap = Max(0, config.LimitMaxGap)` — `0` = disabled
+
+> `open_hold_confirm_ms` và `open_max_times_tick` đã bị **gỡ khỏi source**; xem mục 7.1.
 
 ### 3.1 OpenByGapBuy
 
-1. `GapBuy` hiện tại phải tồn tại và `>= ConfirmGapPts`.
-2. Nếu `LimitMaxGap > 0` và `|GapBuy| > LimitMaxGap` → **reset window ngay** (chu kỳ mới).
-3. Mở cửa sổ confirm, gom chuỗi gap theo thời gian.
-4. Khi đủ `HoldConfirmMs`, toàn bộ `BuyGaps` trong cửa sổ phải thỏa `>= ConfirmGapPts`.
-5. Tick cuối cùng phải thỏa `>= OpenPts`.
-6. Nếu `OpenMaxTimesTick > 0` thì số tick trong cửa sổ không được vượt ngưỡng này.
+1. `GapBuy` hiện tại phải tồn tại và `>= ConfirmGapPts`; không đạt -> **reset chu kỳ**.
+2. Nếu `LimitMaxGap > 0` và `|GapBuy| > LimitMaxGap` → **reset chu kỳ ngay**.
+3. Mẫu hợp lệ được gom vào chu kỳ; snapshot trùng (cùng fingerprint) **không tăng count**.
+4. Mẫu lệch quá `Tolerance` so với center của chu kỳ hiện tại → mở chu kỳ mới từ mẫu đó.
+5. Khi đủ `SignalCycleSize` mẫu, chu kỳ phải đạt ngưỡng ổn định (`Dispersion <= MaxDispersion`
+   và `Drift <= MaxDrift`) mới được coi là Stable.
+6. Mẫu cuối phải thỏa `>= OpenPts`; không đạt thì kết thúc chu kỳ, mẫu tiếp theo mở chu kỳ mới.
 7. Thỏa hết điều kiện -> trigger `OpenByGapBuy`.
 
 ### 3.2 OpenByGapSell
@@ -79,14 +84,12 @@ Config trước khi áp rule được chuẩn hóa:
 Đối xứng với ngưỡng âm:
 
 1. `GapSell <= -ConfirmGapPts`.
-2. Nếu `LimitMaxGap > 0` và `|GapSell| > LimitMaxGap` → **reset window ngay** (chu kỳ mới).
-3. Duy trì liên tục đủ `HoldConfirmMs`.
-4. Toàn bộ `SellGaps` trong cửa sổ thỏa `<= -ConfirmGapPts`.
-5. Tick cuối cùng thỏa `<= -OpenPts`.
-6. Nếu `OpenMaxTimesTick > 0`, số tick phải nằm trong giới hạn.
-7. Thỏa hết -> trigger `OpenByGapSell`.
+2. Nếu `LimitMaxGap > 0` và `|GapSell| > LimitMaxGap` → **reset chu kỳ ngay**.
+3. Gom đủ `SignalCycleSize` mẫu thỏa `<= -ConfirmGapPts`.
+4. Mẫu cuối thỏa `<= -OpenPts`.
+5. Thỏa hết -> trigger `OpenByGapSell`.
 
-> Bất kỳ điều kiện nào fail trong window -> reset state của nhánh đó.
+> Bất kỳ điều kiện confirm nào fail -> reset chu kỳ của nhánh đó và loại luôn mẫu vừa fail.
 
 > **`LimitMaxGap`** áp dụng trên mỗi tick — khác với `max_gap` trong `SignalEntryGuard` chỉ kiểm tra tại thời điểm trigger. Khi gap spike vượt ngưỡng, window reset ngay; khi gap về lại bình thường, window mở lại từ đầu.
 
@@ -100,10 +103,12 @@ Config close được chuẩn hóa:
 
 - `CloseConfirmGapPts = Abs(config.CloseConfirmGapPts)`
 - `ClosePts = Abs(config.ClosePts)`
-- `CloseHoldConfirmMs = Max(0, config.CloseHoldConfirmMs)`
-- `CloseMaxTimesTick = Max(0, config.CloseMaxTimesTick)`
+- `SignalCycleSize = config.SignalCycleSize` — dùng chung cho Normal Close, SOS Close và TP
 - `LimitMaxGap = Max(0, config.LimitMaxGap)` — `0` = disabled (dùng chung với open signal)
 - `LimitMaxTp = Abs(config.LimitMaxTp)` — `0` = disabled
+
+> `close_hold_confirm_ms` và `close_max_times_tick` đã bị **gỡ khỏi source** (Normal Close,
+> SOS Close và TP đều chạy chu kỳ số lượng). Xem mục 7.1.
 
 Rule theo mode đã mở:
 
@@ -119,16 +124,44 @@ Rule theo mode đã mở:
   - tick cuối: `GapBuy >= ClosePts`
   - `LimitMaxGap` áp dụng tương tự
 
-**SOS close path (theo từng slot):** SOS bật khi một trong hai điều kiện đúng: khoảng cách tuyệt đối giữa giá hiện tại và giá mở chân A `>= sos_trigger_a_open_distance_pts` (Buy dùng Bid A, Sell dùng Ask A; `0` là tắt), hoặc tuổi lệnh `>= sos_trigger_after_seconds` (`0` là tắt). Khoảng cách chân A được xét cả khi giá chạy thuận và chạy ngược chiều; nếu khoảng cách quay xuống dưới ngưỡng trước khi đủ thời gian thì slot trở lại Normal. Khi điều kiện thời gian đã đạt thì SOS tiếp tục bật. SOS giữ nguyên cơ chế window/hold của Normal nhưng kiểm tra theo chiều hồi vào trong: `GapSell` duy trì `<= +abs(sos_close_confirm_gap_pts)` và tick cuối `<= +abs(sos_close_gap_pts)` để phát `CloseByGapSell`; `GapBuy` duy trì `>= -abs(sos_close_confirm_gap_pts)` và tick cuối `>= -abs(sos_close_gap_pts)` để phát `CloseByGapBuy`. Tick đi ra ngoài ngưỡng confirm sẽ reset window và tick hợp lệ tiếp theo mở chu kỳ mới. Nếu một trong hai ngưỡng Gap SOS bằng `0`, hệ thống fail-safe về bộ Gap thường. Mỗi lần đổi Normal ↔ SOS chỉ reset window Gap của slot, không reset TP window; log chỉ ghi lúc chuyển trạng thái để tránh spam. Trước khi dispatch, Gap được kiểm tra lại bằng đúng mode của signal và phải không vượt `limit_max_gap`. Trong global startup/recovery cooldown, close thường và mọi Open vẫn bị chặn; riêng slot đang thỏa SOS tại cùng snapshot được tiếp tục đánh giá và chỉ bypass global cooldown khi có close signal hợp lệ. Holding, post-open, Min Profit, transition gate và các close guard khác vẫn áp dụng. SOS Close được ghi nhận như Auto Close mới tại dispatch, sinh lại random same-action và post-close theo DB; vì vậy hành động tiếp theo phải chờ theo ma trận #9–#16.
+**SOS close path (theo từng slot):** SOS bật khi một trong hai điều kiện đúng: khoảng cách tuyệt đối giữa giá hiện tại và giá mở chân A `>= sos_trigger_a_open_distance_pts` (Buy dùng Bid A, Sell dùng Ask A; `0` là tắt), hoặc tuổi lệnh `>= sos_trigger_after_seconds` (`0` là tắt). Khoảng cách chân A được xét cả khi giá chạy thuận và chạy ngược chiều; nếu khoảng cách quay xuống dưới ngưỡng trước khi đủ thời gian thì slot trở lại Normal. Khi điều kiện thời gian đã đạt thì SOS tiếp tục bật. SOS Close chạy **chu kỳ số lượng riêng theo `signal_cycle_size`** (state tách hoàn toàn khỏi Normal Close và TP), không dùng `close_hold_confirm_ms` cũng không dùng `close_max_times_tick`. Kiểm tra theo chiều hồi vào trong: mọi mẫu `GapSell` phải `<= +abs(sos_close_confirm_gap_pts)` và mẫu cuối `<= +abs(sos_close_gap_pts)` để phát `CloseByGapSell`; mọi mẫu `GapBuy` phải `>= -abs(sos_close_confirm_gap_pts)` và mẫu cuối `>= -abs(sos_close_gap_pts)` để phát `CloseByGapBuy`. Mẫu không đạt ngưỡng confirm sẽ reset chu kỳ (mẫu đó bị loại) và mẫu hợp lệ tiếp theo mở chu kỳ mới; snapshot trùng không tăng count. Đủ `signal_cycle_size` mẫu mà mẫu cuối không đạt `sos_close_gap_pts` thì chu kỳ kết thúc không trigger, mẫu tiếp theo mở chu kỳ mới. Đổi `signal_cycle_size` sẽ reset chu kỳ. Nếu một trong hai ngưỡng Gap SOS bằng `0`, hệ thống fail-safe về bộ Gap thường. Mỗi lần đổi Normal ↔ SOS chỉ reset window Gap của slot, không reset TP window; log chỉ ghi lúc chuyển trạng thái để tránh spam. Trước khi dispatch, Gap được kiểm tra lại bằng đúng mode của signal và phải không vượt `limit_max_gap`. Trong global startup/recovery cooldown, close thường và mọi Open vẫn bị chặn; riêng slot đang thỏa SOS tại cùng snapshot được tiếp tục đánh giá và chỉ bypass global cooldown khi có close signal hợp lệ. Holding, post-open, Min Profit, transition gate và các close guard khác vẫn áp dụng. SOS Close được ghi nhận như Auto Close mới tại dispatch, sinh lại random same-action và post-close theo DB; vì vậy hành động tiếp theo phải chờ theo ma trận #9–#16.
 
 **TP close path** (song song với gap close, thắng nếu trigger trước):
 
 - Profit phải `>= CloseConfirmTpProfit` để mở window.
 - Nếu `LimitMaxTp > 0` và `profit > LimitMaxTp` → **reset TP window ngay** (chu kỳ mới).
-- Sau `CloseHoldConfirmMs`, toàn bộ profits trong window phải `>= CloseConfirmTpProfit`.
-- Tick cuối phải `>= CloseTpProfit` và `<= CloseMaxTpProfit` (nếu set).
+- Đủ `SignalCycleSize` mẫu profit thỏa `>= CloseConfirmTpProfit` mới xét trigger.
+- Mẫu cuối phải `>= CloseTpProfit` và `<= CloseMaxTpProfit` (nếu set).
 
 > **`LimitMaxTp`** khác với `CloseMaxTpProfit`: `CloseMaxTpProfit` chỉ kiểm tra tại trigger (suspend, không reset), còn `LimitMaxTp` reset window ngay tại tick spike.
+
+---
+
+### 4.1 Log vòng đời chu kỳ signal và panel dashboard
+
+File: `TradeDesktop.Application/Services/GapCycleDiagnostics.cs`
+
+Mỗi chu kỳ ghi log theo cùng một bộ event, tên nhóm lấy theo action:
+`OPEN_CYCLE`, `NORMAL_CLOSE_CYCLE`, `SOS_CLOSE_CYCLE`, `TP_CYCLE`.
+
+```
+[SOS_CLOSE_CYCLE][STARTED]   cycle_id=... action=SOS_CLOSE side=BUY slot_id=3 count=1/10 ...
+[SOS_CLOSE_CYCLE][PROGRESS]  cycle_id=... count=7/10 gap=4 confirmation_mode=FIXED_SIZE ...
+[SOS_CLOSE_CYCLE][RESET]     cycle_id=... reason="Gap does not satisfy confirm threshold."
+[SOS_CLOSE_CYCLE][COMPLETED] cycle_id=... count=10/10 ...
+[SOS_CLOSE_CYCLE][TRIGGERED] cycle_id=... signal_id=... count=10/10 gap=3 ...
+```
+
+Dashboard hiển thị tiến độ từng chu kỳ theo slot (`SignalCycleStatuses`), SOS Close và TP
+là hai dòng độc lập:
+
+```
+Slot 3 SOS Close    7/10    Collecting
+Slot 3 TP           4/10    Collecting
+```
+
+Normal Close và SOS Close dùng state riêng (`_closeByGap*Cycle` vs `_sosCloseByGap*Cycle`),
+nên chuyển mode Normal ↔ SOS không làm lẫn dữ liệu giữa hai chu kỳ.
 
 ---
 
@@ -248,6 +281,36 @@ những limit còn lại dùng `0` để disable):
 | `rd_start_post_close_lock_seconds` / `rd_end_post_close_lock_seconds` | Runtime post-close range | `int` | Random một lần cho mỗi Auto Close; chặn Auto Open cho tới hết deadline |
 | `rd_start_same_action_lock_seconds` / `rd_end_same_action_lock_seconds` | Runtime same-action range | `int` | Random cho Open cùng chiều→Open cùng chiều, Open→Close và Close→Close |
 
+**Signal cycle và price-freeze (3 trường còn hiệu lực):**
+
+| DB column | C# property | Kiểu | Ý nghĩa |
+|---|---|---|---|
+| `signal_cycle_size` | `CurrentSignalCycleSize` | `int` | Số lượng mẫu của một chu kỳ signal. Dùng chung cho **Open, Normal Close, SOS Close và TP** (mỗi loại giữ chu kỳ/state riêng). Phải `>= 1`, nhỏ hơn thì ConfigService từ chối load |
+| `open_price_freeze_ms` | `CurrentOpenPriceFreezeMs` | `int` | Bảo vệ độ mới của giá khi thực thi **Open**: chặn nếu giá không đổi suốt cửa sổ này. `0` = tắt kiểm tra; giá trị âm normalize về `0` |
+| `close_price_freeze_ms` | `CurrentClosePriceFreezeMs` | `int` | Bảo vệ độ mới của giá khi thực thi **Close**: chặn nếu giá không đổi suốt cửa sổ này. `0` = tắt kiểm tra; giá trị âm normalize về `0` |
+
+Hai cột price-freeze **độc lập hoàn toàn** với hold-time: mỗi cột chỉ dùng giá trị của chính
+nó, không còn fallback `open_price_freeze_ms <- open_hold_confirm_ms` /
+`close_price_freeze_ms <- close_hold_confirm_ms`.
+
+**Đã gỡ khỏi source (sẵn sàng DROP trên DB):**
+
+| DB column | Trạng thái |
+|---|---|
+| `open_hold_confirm_ms` | không còn code nào đọc/ghi |
+| `close_hold_confirm_ms` | không còn code nào đọc/ghi |
+| `open_max_times_tick` | không còn code nào đọc/ghi |
+| `close_max_times_tick` | không còn code nào đọc/ghi |
+
+Bốn cột này đã bị gỡ khỏi `ConfigRow` (Supabase DTO), `ConfigRecord`, `ConfigLoadResult`,
+`RuntimeConfigState`, `IRuntimeConfigProvider` và log cấu hình `[DB] ...`. Repository đọc
+bằng `select=*` nên việc DROP cột không ảnh hưởng runtime. Script sẵn dùng:
+`docs/DROP-DEPRECATED-SIGNAL-COLUMNS.sql`.
+
+`GapSignalConfirmationConfig` vẫn còn 4 field cùng tên nhưng mặc định `0` và **không có
+nguồn dữ liệu nào đổ vào**; chúng chỉ phục vụ nhánh legacy `ProcessSide` /
+`ProcessLegacyGap` mà test trực tiếp gọi. Đừng nối chúng lại vào config pipeline.
+
 Same-action range được random đúng một lần tại mỗi Auto dispatch và lưu cùng
 `LastAutoDispatchAtUtc`; không random lại mỗi snapshot. Nếu `start > end`, app tự đảo.
 Mỗi đầu `<= 0` fallback lần lượt về `3` và `10`. Manual/Recovery không đọc hoặc mutate range này.
@@ -323,9 +386,10 @@ Chức năng:
 1. Snapshot giá A/B có hợp lệ không?
 2. `Point` runtime có đúng không?
 3. `GapBuy/GapSell` tính ra có đúng kỳ vọng không?
-4. Cửa sổ confirm có đủ `HoldConfirmMs` và thỏa toàn bộ tick không?
-5. Tick cuối có đạt ngưỡng open/close không?
-6. `OpenMaxTimesTick/CloseMaxTimesTick` có chặn trigger không?
+4. Chu kỳ đã gom đủ `signal_cycle_size` mẫu chưa (xem `[..._CYCLE][PROGRESS]` trong log
+   hoặc panel Signal Cycle trên dashboard)? Có mẫu nào fail confirm làm reset không?
+5. Mẫu cuối có đạt ngưỡng open/close không?
+6. Chu kỳ có bị `[..._CYCLE][RESET]` vì lệch Tolerance / Dispersion / Drift không?
 7. State flow hiện tại là gì (`WaitingOpen` hay `WaitingClose*`)?
 8. Trigger -> Instruction -> Log có khớp công thức nguồn giá không?
 

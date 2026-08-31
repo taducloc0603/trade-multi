@@ -49,7 +49,10 @@ public static class GapCycleDiagnostics
         int LimitMaxGap,
         int MaxGap,
         string ConfigId,
-        string Symbol);
+        string Symbol,
+        string ConfirmationMode = "TIME_AND_MIN_SAMPLES",
+        int SignalCycleSize = 0,
+        bool HoldConfirmIgnored = false);
 
     internal static void LogTransition(
         ISlotLogger? logger,
@@ -61,6 +64,11 @@ public static class GapCycleDiagnostics
         int minimumSamplesToLog = 3,
         PolicyContext? policy = null)
     {
+        if (policy is { ConfirmationMode: "FIXED_SIZE" } fixedPolicy)
+        {
+            LogFixedSizeTransition(logger, action, side, slotId, update, newGap, fixedPolicy);
+        }
+
         if (!EnableGapStabilityDiagnostics
             || logger is null
             || update.Transition is GapCycleTransition.None
@@ -187,6 +195,16 @@ public static class GapCycleDiagnostics
             return;
         }
 
+        if (policy is { ConfirmationMode: "FIXED_SIZE" } fixedPolicy)
+        {
+            var cycleName = action == "CLOSE" ? "NORMAL_CLOSE" : action;
+            logger.Log(
+                $"[{cycleName}_CYCLE][TRIGGERED] cycle_id={Text(cycle.CycleId)} " +
+                $"signal_id={Text(signalId)} action={action} side={side} slot_id={Value(slotId)} " +
+                $"count={cycle.SampleCount}/{Value(fixedPolicy.SignalCycleSize)} gap={newGap} " +
+                $"confirmation_mode=FIXED_SIZE reason=\"{Escape(reason)}\"");
+        }
+
         var delta = cycle.Center.HasValue
             ? GapStabilityCalculator.CalculateDelta(newGap, cycle.Center.Value)
             : (double?)null;
@@ -203,6 +221,55 @@ public static class GapCycleDiagnostics
             policy,
             signalId,
             nextStatus: cycle.Status));
+    }
+
+    private static void LogFixedSizeTransition(
+        ISlotLogger? logger,
+        string action,
+        string side,
+        int? slotId,
+        GapCycleUpdateResult update,
+        int? newGap,
+        PolicyContext policy)
+    {
+        if (!EnableGapStabilityDiagnostics || logger is null)
+        {
+            return;
+        }
+
+        var eventName = update.Transition switch
+        {
+            GapCycleTransition.Started => "STARTED",
+            GapCycleTransition.Joined => "PROGRESS",
+            GapCycleTransition.BecameStable => "COMPLETED",
+            GapCycleTransition.NewCycle
+                or GapCycleTransition.BecameUnstable
+                or GapCycleTransition.Rejected
+                or GapCycleTransition.ResetMissingData
+                or GapCycleTransition.ResetConfirmNotSatisfied
+                or GapCycleTransition.ResetTimestamp
+                or GapCycleTransition.ResetExplicitly => "RESET",
+            _ => null
+        };
+        if (eventName is null)
+        {
+            return;
+        }
+
+        var cycle = eventName == "RESET"
+            ? update.CompletedCycle ?? update.CurrentCycle
+            : update.CurrentCycle;
+        if (eventName == "RESET" && cycle.SampleCount == 0)
+        {
+            return;
+        }
+
+        var cycleName = action == "CLOSE" ? "NORMAL_CLOSE" : action;
+        logger.Log(
+            $"[{cycleName}_CYCLE][{eventName}] cycle_id={Text(cycle.CycleId)} signal_id=- " +
+            $"action={action} side={side} slot_id={Value(slotId)} " +
+            $"count={cycle.SampleCount}/{policy.SignalCycleSize} gap={Value(newGap)} " +
+            $"confirmation_mode=FIXED_SIZE reason=\"{Escape(cycle.Reason)}\"");
     }
 
     private static string Format(
@@ -245,6 +312,9 @@ public static class GapCycleDiagnostics
         $"max_dispersion={Number(policy?.Stability.MaxDispersion)} " +
         $"max_drift={Number(policy?.Stability.MaxDrift)} " +
         $"hold_confirm_ms={Value(policy?.HoldConfirmMs)} " +
+        $"confirmation_mode={Text(policy?.ConfirmationMode)} " +
+        $"signal_cycle_size={Value(policy?.SignalCycleSize)} " +
+        $"hold_confirm_ignored={(policy?.HoldConfirmIgnored ?? false).ToString().ToLowerInvariant()} " +
         $"limit_max_gap={Value(policy?.LimitMaxGap)} max_gap={Value(policy?.MaxGap)} " +
         $"reason=\"{Escape(reason)}\"";
     }
@@ -295,7 +365,8 @@ public static class GapCycleDiagnostics
 
         var signature =
             $"{action}|{side}|{policy.ConfigId}|{policy.Symbol}|" +
-            $"{policy.Stability}|{policy.HoldConfirmMs}|{policy.LimitMaxGap}|{policy.MaxGap}";
+            $"{policy.Stability}|{policy.HoldConfirmMs}|{policy.LimitMaxGap}|{policy.MaxGap}|" +
+            $"{policy.ConfirmationMode}|{policy.SignalCycleSize}|{policy.HoldConfirmIgnored}";
         lock (SummarySync)
         {
             if (!RawPolicySignatures.Add(signature))
@@ -314,6 +385,9 @@ public static class GapCycleDiagnostics
             $"max_dispersion={Number(policy?.Stability.MaxDispersion)} " +
             $"max_drift={Number(policy?.Stability.MaxDrift)} " +
             $"hold_confirm_ms={Value(policy?.HoldConfirmMs)} " +
+            $"confirmation_mode={Text(policy?.ConfirmationMode)} " +
+            $"signal_cycle_size={Value(policy?.SignalCycleSize)} " +
+            $"hold_confirm_ignored={(policy?.HoldConfirmIgnored ?? false).ToString().ToLowerInvariant()} " +
             $"limit_max_gap={Value(policy?.LimitMaxGap)} max_gap={Value(policy?.MaxGap)}");
     }
 

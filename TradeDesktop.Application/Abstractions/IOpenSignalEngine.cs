@@ -9,4 +9,6 @@ public interface IOpenSignalEngine
         GapSignalConfirmationConfig config);
 
     void Reset();
+
+    IReadOnlyList<SignalCycleStatus> GetCycleStatuses() => [];
 }

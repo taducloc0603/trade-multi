@@ -58,7 +58,7 @@ public static class SignalEntryGuard
         DashboardMetrics? metrics,
         GuardConfig config,
         Queue<PriceHistoryEntry> priceHistory,
-        int holdConfirmMs)
+        int priceFreezeMs)
     {
         // 1. Latency
         var latencyResult = CheckLatency(metrics, config.ConfirmLatencyMs);
@@ -73,7 +73,7 @@ public static class SignalEntryGuard
         if (!spreadResult.CanTrade) return spreadResult;
 
         // 4. Price freeze
-        var freezeResult = CheckPriceFreeze(trigger.TriggeredAtUtc, priceHistory, holdConfirmMs);
+        var freezeResult = CheckPriceFreeze(trigger.TriggeredAtUtc, priceHistory, priceFreezeMs);
         if (!freezeResult.CanTrade) return freezeResult;
 
         return new GuardResult(true, null);
@@ -163,11 +163,11 @@ public static class SignalEntryGuard
     private static GuardResult CheckPriceFreeze(
         DateTime triggeredAtUtc,
         Queue<PriceHistoryEntry> priceHistory,
-        int holdConfirmMs)
+        int priceFreezeMs)
     {
-        if (holdConfirmMs <= 0) return new GuardResult(true, null);
+        if (priceFreezeMs <= 0) return new GuardResult(true, null);
 
-        var windowStart = triggeredAtUtc.AddMilliseconds(-holdConfirmMs);
+        var windowStart = triggeredAtUtc.AddMilliseconds(-priceFreezeMs);
         var window = priceHistory
             .Where(e => e.TimestampUtc >= windowStart && e.TimestampUtc <= triggeredAtUtc)
             .ToList();
@@ -179,19 +179,19 @@ public static class SignalEntryGuard
 
         if (first.BidA is decimal bidA0 && window.All(e => e.BidA == first.BidA))
             return new GuardResult(false,
-                $"Giá Bid sàn A đóng băng suốt {holdConfirmMs} ms ({bidA0.ToString("0.#####", CultureInfo.InvariantCulture)})");
+                $"Giá Bid sàn A đóng băng suốt {priceFreezeMs} ms ({bidA0.ToString("0.#####", CultureInfo.InvariantCulture)})");
 
         if (first.AskA is decimal askA0 && window.All(e => e.AskA == first.AskA))
             return new GuardResult(false,
-                $"Giá Ask sàn A đóng băng suốt {holdConfirmMs} ms ({askA0.ToString("0.#####", CultureInfo.InvariantCulture)})");
+                $"Giá Ask sàn A đóng băng suốt {priceFreezeMs} ms ({askA0.ToString("0.#####", CultureInfo.InvariantCulture)})");
 
         if (first.BidB is decimal bidB0 && window.All(e => e.BidB == first.BidB))
             return new GuardResult(false,
-                $"Giá Bid sàn B đóng băng suốt {holdConfirmMs} ms ({bidB0.ToString("0.#####", CultureInfo.InvariantCulture)})");
+                $"Giá Bid sàn B đóng băng suốt {priceFreezeMs} ms ({bidB0.ToString("0.#####", CultureInfo.InvariantCulture)})");
 
         if (first.AskB is decimal askB0 && window.All(e => e.AskB == first.AskB))
             return new GuardResult(false,
-                $"Giá Ask sàn B đóng băng suốt {holdConfirmMs} ms ({askB0.ToString("0.#####", CultureInfo.InvariantCulture)})");
+                $"Giá Ask sàn B đóng băng suốt {priceFreezeMs} ms ({askB0.ToString("0.#####", CultureInfo.InvariantCulture)})");
 
         return new GuardResult(true, null);
     }

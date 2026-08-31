@@ -12,4 +12,6 @@ public interface ICloseSignalEngine
 
     void ResetGapState();
     void Reset();
+
+    IReadOnlyList<SignalCycleStatus> GetCycleStatuses() => [];
 }

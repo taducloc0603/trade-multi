@@ -41,7 +41,7 @@ public sealed class SignalEntryGuardTests
             metrics: null,
             DisabledConfig,
             new Queue<SignalEntryGuard.PriceHistoryEntry>(),
-            holdConfirmMs: 0);
+            priceFreezeMs: 0);
 
     private static GapSignalTriggerResult CreateTrigger(
         GapSignalAction action,

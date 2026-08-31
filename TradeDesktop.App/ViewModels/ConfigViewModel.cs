@@ -399,13 +399,11 @@ public sealed class ConfigViewModel : ObservableObject
                 loadResult.Point,
                 loadResult.OpenPts,
                 loadResult.ConfirmGapPts,
-                loadResult.HoldConfirmMs,
                 loadResult.OpenPriceFreezeMs,
                 loadResult.ClosePts,
                 loadResult.CloseConfirmGapPts,
                 loadResult.CloseTpProfit,
                 loadResult.CloseConfirmTpProfit,
-                loadResult.CloseHoldConfirmMs,
                 loadResult.ClosePriceFreezeMs,
                 loadResult.StartTimeHold,
                 loadResult.EndTimeHold,
@@ -413,8 +411,6 @@ public sealed class ConfigViewModel : ObservableObject
                 loadResult.MaxGap,
                 loadResult.LimitMaxGap,
                 loadResult.MaxSpread,
-                loadResult.OpenMaxTimesTick,
-                loadResult.CloseMaxTimesTick,
                 loadResult.OpenPendingTimeMs,
                 loadResult.ClosePendingTimeMs,
                 loadResult.DelayOpenAMs,
@@ -432,6 +428,7 @@ public sealed class ConfigViewModel : ObservableObject
                 rdEndPostCloseLockSeconds: loadResult.RdEndPostCloseLockSeconds,
                 rdStartPostOpenLockSeconds: loadResult.RdStartPostOpenLockSeconds,
                 rdEndPostOpenLockSeconds: loadResult.RdEndPostOpenLockSeconds);
+            _runtimeConfigState.UpdateSignalCycleSize(loadResult.SignalCycleSize);
             _runtimeConfigState.UpdateGapStability(
                 loadResult.OpenGapStability!,
                 loadResult.CloseGapStability!);

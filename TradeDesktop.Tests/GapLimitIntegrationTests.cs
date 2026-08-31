@@ -129,7 +129,8 @@ public sealed class GapLimitIntegrationTests
             OpenPts: open,
             HoldConfirmMs: 2000,
             LimitMaxGap: limitMaxGap,
-            OpenGapStability: Stability);
+            OpenGapStability: Stability,
+            SignalCycleSize: 3);
 
     private static GapSignalConfirmationConfig CloseConfig(
         int limitMaxGap,
@@ -143,7 +144,8 @@ public sealed class GapLimitIntegrationTests
             ClosePts: close,
             CloseHoldConfirmMs: 2000,
             LimitMaxGap: limitMaxGap,
-            CloseGapStability: Stability);
+            CloseGapStability: Stability,
+            SignalCycleSize: 3);
 
     private static IReadOnlyList<GapSignalTriggerResult> ProcessOpen(
         GapSignalConfirmationEngine engine,
@@ -190,5 +192,5 @@ public sealed class GapLimitIntegrationTests
                 MaxSpread: 0,
                 PointMultiplier: 100),
             new Queue<SignalEntryGuard.PriceHistoryEntry>(),
-            holdConfirmMs: 0);
+            priceFreezeMs: 0);
 }

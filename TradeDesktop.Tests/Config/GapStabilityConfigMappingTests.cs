@@ -61,13 +61,26 @@ public sealed class GapStabilityConfigMappingTests
     [Fact]
     public async Task LoadByMachineHostNameAsync_MapsBothPolicies()
     {
-        var service = BuildService(BuildRecord(ValidOpen, ValidClose));
+        var service = BuildService(BuildRecord(ValidOpen, ValidClose, signalCycleSize: 17));
 
         var result = await service.LoadByMachineHostNameAsync();
 
         Assert.True(result.IsSuccess);
         Assert.Equal(ValidOpen, result.OpenGapStability);
         Assert.Equal(ValidClose, result.CloseGapStability);
+        Assert.Equal(17, result.SignalCycleSize);
+    }
+
+    [Fact]
+    public async Task LoadByMachineHostNameAsync_InvalidSignalCycleSizeFailsSafe()
+    {
+        var service = BuildService(BuildRecord(ValidOpen, ValidClose, signalCycleSize: 0));
+
+        var result = await service.LoadByMachineHostNameAsync();
+
+        Assert.False(result.IsSuccess);
+        Assert.True(result.Exists);
+        Assert.Contains("signal_cycle_size", result.Error);
     }
 
     [Fact]
@@ -106,6 +119,7 @@ public sealed class GapStabilityConfigMappingTests
               "platform_a":"mt5",
               "platform_b":"mt5",
               "point":100,
+              "signal_cycle_size":17,
               "open_gap_absolute_floor":11,
               "open_gap_relative_tolerance":0.51,
               "open_gap_mad_multiplier":4.1,
@@ -126,8 +140,24 @@ public sealed class GapStabilityConfigMappingTests
         var record = await repository.GetByHostNameAsync("test-host");
 
         Assert.NotNull(record);
+        Assert.Equal(17, record.SignalCycleSize);
         Assert.Equal(new GapStabilityConfig(11, 0.51, 4.1, 4, 0.36, 0.41), record.OpenGapStability);
         Assert.Equal(new GapStabilityConfig(12, 0.61, 4.2, 5, 0.46, 0.62), record.CloseGapStability);
+    }
+
+    [Fact]
+    public async Task SupabaseRepository_MissingSignalCycleSizeUsesFallbackTen()
+    {
+        const string json = """
+            [{"id":"config-id","hostname":"test-host","sans":[]}]
+            """;
+        using var httpClient = new HttpClient(new StaticJsonHandler(json));
+        var repository = new SupabaseConfigRepository(httpClient, "https://example.test", "key");
+
+        var record = await repository.GetByHostNameAsync("test-host");
+
+        Assert.NotNull(record);
+        Assert.Equal(10, record.SignalCycleSize);
     }
 
     private static ConfigService BuildService(ConfigRecord record) =>
@@ -135,7 +165,8 @@ public sealed class GapStabilityConfigMappingTests
 
     private static ConfigRecord BuildRecord(
         GapStabilityConfig? open,
-        GapStabilityConfig? close) =>
+        GapStabilityConfig? close,
+        int signalCycleSize = 10) =>
         new(
             Id: "config-id",
             SansJson: "[]",
@@ -145,7 +176,6 @@ public sealed class GapStabilityConfigMappingTests
             Point: 100,
             OpenPts: 1,
             ConfirmGapPts: 0,
-            HoldConfirmMs: 1000,
             OpenPriceFreezeMs: 2000,
             ClosePts: 1,
             CloseConfirmGapPts: 0,
@@ -157,7 +187,6 @@ public sealed class GapStabilityConfigMappingTests
             SosTriggerAfterSeconds: 0,
             SosCloseConfirmGapPts: 0,
             SosCloseGapPts: 0,
-            CloseHoldConfirmMs: 1000,
             ClosePriceFreezeMs: 2000,
             StartTimeHold: 0,
             EndTimeHold: 0,
@@ -165,8 +194,6 @@ public sealed class GapStabilityConfigMappingTests
             MaxGap: 0,
             LimitMaxGap: 0,
             MaxSpread: 40,
-            OpenMaxTimesTick: 32,
-            CloseMaxTimesTick: 32,
             OpenPendingTimeMs: 30000,
             ClosePendingTimeMs: 1000,
             DelayOpenAMs: 0,
@@ -176,7 +203,8 @@ public sealed class GapStabilityConfigMappingTests
             OpenNumberOfQualifyingTimes: 1,
             CloseNumberOfQualifyingTimes: 1,
             OpenGapStability: open,
-            CloseGapStability: close);
+            CloseGapStability: close,
+            SignalCycleSize: signalCycleSize);
 
     private sealed class StubMachineIdentityService : IMachineIdentityService
     {

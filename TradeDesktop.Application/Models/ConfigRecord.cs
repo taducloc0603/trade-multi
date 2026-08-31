@@ -1,5 +1,9 @@
 namespace TradeDesktop.Application.Models;
 
+// Open / Normal Close / SOS Close / TP đều chạy chu kỳ số lượng theo SignalCycleSize.
+// Price-freeze dùng riêng OpenPriceFreezeMs / ClosePriceFreezeMs, KHÔNG fallback về hold-time.
+// Bốn cột cũ open_hold_confirm_ms / close_hold_confirm_ms / open_max_times_tick /
+// close_max_times_tick đã được gỡ khỏi toàn bộ source; có thể DROP an toàn trên DB.
 public sealed record ConfigRecord(
     string Id,
     string SansJson,
@@ -9,7 +13,7 @@ public sealed record ConfigRecord(
     int Point,
     int OpenPts,
     int ConfirmGapPts,
-    int HoldConfirmMs,
+    // Price-freeze khi thực thi Open. 0 = tắt kiểm tra.
     int OpenPriceFreezeMs,
     int ClosePts,
     int CloseConfirmGapPts,
@@ -21,7 +25,7 @@ public sealed record ConfigRecord(
     int SosTriggerAfterSeconds,
     int SosCloseConfirmGapPts,
     int SosCloseGapPts,
-    int CloseHoldConfirmMs,
+    // Price-freeze khi thực thi Close. 0 = tắt kiểm tra.
     int ClosePriceFreezeMs,
     int StartTimeHold,
     int EndTimeHold,
@@ -29,8 +33,6 @@ public sealed record ConfigRecord(
     int MaxGap,
     int LimitMaxGap,
     int MaxSpread,
-    int OpenMaxTimesTick,
-    int CloseMaxTimesTick,
     int OpenPendingTimeMs,
     int ClosePendingTimeMs,
     int DelayOpenAMs,
@@ -60,4 +62,5 @@ public sealed record ConfigRecord(
     int RdEndPostOpenLockSeconds = 0,
     string ScheduleSleepingJson = "",
     GapStabilityConfig? OpenGapStability = null,
-    GapStabilityConfig? CloseGapStability = null);
+    GapStabilityConfig? CloseGapStability = null,
+    int SignalCycleSize = 10);

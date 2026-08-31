@@ -64,12 +64,10 @@ public sealed class GapCalculatorTests
         public int CurrentPoint => point;
         public int CurrentOpenPts => 0;
         public int CurrentConfirmGapPts => 0;
-        public int CurrentHoldConfirmMs => 0;
         public int CurrentClosePts => 0;
         public int CurrentCloseConfirmGapPts => 0;
         public double CurrentCloseTpProfit => 0;
         public double CurrentCloseConfirmTpProfit => 0;
-        public int CurrentCloseHoldConfirmMs => 0;
         public int CurrentStartTimeHold => 0;
         public int CurrentEndTimeHold => 0;
         public int CurrentConfirmLatencyMs => 0;
@@ -81,8 +79,6 @@ public sealed class GapCalculatorTests
         public int CurrentSosCloseConfirmGapPts => 0;
         public int CurrentSosCloseGapPts => 0;
         public int CurrentMaxSpread => 0;
-        public int CurrentOpenMaxTimesTick => 0;
-        public int CurrentCloseMaxTimesTick => 0;
         public int CurrentOpenPendingTimeMs => 0;
         public int CurrentClosePendingTimeMs => 0;
         public int CurrentDelayOpenAMs => 0;

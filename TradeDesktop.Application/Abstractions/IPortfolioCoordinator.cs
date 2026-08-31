@@ -19,6 +19,7 @@ public interface IPortfolioCoordinator
     IReadOnlyList<PositionSlot> LiveSlots { get; }
     IReadOnlyList<PositionSlot> PendingOpenSlots { get; }
     IReadOnlyList<PositionSlot> PendingCloseSlots { get; }
+    IReadOnlyList<SignalCycleStatus> GetSignalCycleStatuses();
 
     // === Diagnostic info (Phase 6 UI status bar) ===
     DateTime? GlobalActionLockUntilUtc { get; }

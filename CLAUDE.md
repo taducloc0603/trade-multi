@@ -273,6 +273,23 @@ TradeDesktop.Tests/            # xUnit tests
   (lời lúc tín hiệu hoá lỗ lúc khớp). `RefreshTradeRowsFromSnapshot` vẫn gọi `UpdateProfit` (dư
   thừa, vô hại) — đừng coi nó là nguồn profit cho logic.
 
+### Signal cycle & price-freeze (đừng dùng lại 4 cột cũ)
+- Confirmation mode duy nhất là FIXED_SIZE theo `signal_cycle_size`, dùng cho **Open, Normal Close,
+  SOS Close và TP**. Mỗi loại giữ cycle/state RIÊNG (`_closeByGap*Cycle` vs `_sosCloseByGap*Cycle`
+  vs `_tpCycle`) — đừng gộp, chuyển Normal ↔ SOS sẽ lẫn dữ liệu.
+- `open_hold_confirm_ms`, `close_hold_confirm_ms`, `open_max_times_tick`, `close_max_times_tick`
+  đã bị **gỡ hoàn toàn khỏi source**: không còn trong `ConfigRow` (Supabase DTO), `ConfigRecord`,
+  `ConfigLoadResult`, `RuntimeConfigState`, `IRuntimeConfigProvider` hay log `[DB]`. Repository
+  đọc `select=*` nên DROP cột an toàn (`docs/DROP-DEPRECATED-SIGNAL-COLUMNS.sql`). KHÔNG nối lại.
+- `GapSignalConfirmationConfig` vẫn còn 4 field cùng tên nhưng mặc định `0` và không có nguồn nào
+  đổ vào; chỉ phục vụ nhánh legacy `ProcessSide` / `ProcessLegacyGap` mà test gọi trực tiếp.
+- `open_price_freeze_ms` / `close_price_freeze_ms` là hai cột ĐỘC LẬP, mỗi cột chỉ dùng giá trị
+  của chính nó. KHÔNG khôi phục fallback về hold-time. `0` = tắt, số âm normalize về `0`.
+  Tham số guard tên là `priceFreezeMs` (`SignalEntryGuard.Check`), không phải `holdConfirmMs`.
+- Log vòng đời: `[OPEN_CYCLE]` / `[NORMAL_CLOSE_CYCLE]` / `[SOS_CLOSE_CYCLE]` / `[TP_CYCLE]` với
+  event `STARTED|PROGRESS|RESET|COMPLETED|TRIGGERED`. Tên nhóm sinh từ `action` trong
+  `GapCycleDiagnostics` — đổi chuỗi action sẽ đổi tên log, cẩn thận khi refactor.
+
 ### Cooldown
 - Auto action thường dùng transition matrix, không dùng global post-action cooldown. Same-action và
   post-close duration được chọn tại dispatch; per-slot post-open được chọn tại Open confirm.

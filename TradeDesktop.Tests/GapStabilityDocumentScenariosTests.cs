@@ -217,7 +217,7 @@ public sealed class GapStabilityDocumentScenariosTests
             metrics: null,
             new SignalEntryGuard.GuardConfig(0, 0, 0, 100),
             priceHistory,
-            holdConfirmMs: 3000);
+            priceFreezeMs: 3000);
 
         Assert.False(guard.CanTrade);
         Assert.Contains("đóng băng", guard.SkipReason);

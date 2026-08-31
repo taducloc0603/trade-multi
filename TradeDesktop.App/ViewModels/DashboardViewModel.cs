@@ -148,7 +148,9 @@ public sealed class DashboardViewModel : ObservableObject
     // but heavy UI rebuild (BindDashboardMetrics + RefreshTradeRowsFromSnapshot)
     // only runs at this minimum interval to keep CPU low when a position is open.
     private const long SnapshotUiRenderMinIntervalMs = 200;
+    private static readonly TimeSpan TerminalCycleStatusDisplayDuration = TimeSpan.FromSeconds(5);
     private long _lastSnapshotUiRenderTickMs;
+    private string _lastSignalCycleStatusSignature = string.Empty;
 
     private sealed record PendingOpenRequest(
         string PairId,
@@ -627,6 +629,7 @@ public sealed class DashboardViewModel : ObservableObject
         $"System: {_systemLogTotalCount} lines · {_systemLogWarningCount} warnings · {_systemLogErrorCount} errors";
     public ObservableCollection<TradePairRealtimeProfitRowViewModel> TradeRealtimeProfitRows { get; } = [];
     public ObservableCollection<HistoryPairProfitRowViewModel> HistoryRealtimeProfitRows { get; } = [];
+    public ObservableCollection<SignalCycleStatus> SignalCycleStatuses { get; } = [];
     public string HistoryRealtimeProfitSummary
     {
         get => _historyRealtimeProfitSummary;
@@ -7042,13 +7045,11 @@ public sealed class DashboardViewModel : ObservableObject
                     point: result.Point,
                     openPts: result.OpenPts,
                     confirmGapPts: result.ConfirmGapPts,
-                    holdConfirmMs: result.HoldConfirmMs,
                     openPriceFreezeMs: result.OpenPriceFreezeMs,
                     closePts: result.ClosePts,
                     closeConfirmGapPts: result.CloseConfirmGapPts,
                     closeTpProfit: result.CloseTpProfit,
                     closeConfirmTpProfit: result.CloseConfirmTpProfit,
-                    closeHoldConfirmMs: result.CloseHoldConfirmMs,
                     closePriceFreezeMs: result.ClosePriceFreezeMs,
                     startTimeHold: result.StartTimeHold,
                     endTimeHold: result.EndTimeHold,
@@ -7056,8 +7057,6 @@ public sealed class DashboardViewModel : ObservableObject
                     maxGap: result.MaxGap,
                     limitMaxGap: result.LimitMaxGap,
                     maxSpread: result.MaxSpread,
-                    openMaxTimesTick: result.OpenMaxTimesTick,
-                    closeMaxTimesTick: result.CloseMaxTimesTick,
                     openPendingTimeMs: result.OpenPendingTimeMs,
                     closePendingTimeMs: result.ClosePendingTimeMs,
                     delayOpenAMs: result.DelayOpenAMs,
@@ -7082,6 +7081,8 @@ public sealed class DashboardViewModel : ObservableObject
                     rdStartPostOpenLockSeconds: result.RdStartPostOpenLockSeconds,
                     rdEndPostOpenLockSeconds: result.RdEndPostOpenLockSeconds,
                     minProfitToClose: result.MinProfitToClose);
+                _runtimeConfigState.UpdateSignalCycleSize(result.SignalCycleSize);
+                SafeVmLog($"[CONFIG] signal_cycle_size={result.SignalCycleSize}");
                 _runtimeConfigState.UpdateGapStability(
                     result.OpenGapStability!,
                     result.CloseGapStability!);
@@ -7112,7 +7113,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
                     DbInlineData =
-                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={result.RdStartSameActionLockSeconds}..{result.RdEndSameActionLockSeconds}s | open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | sos_trigger_a_open_distance_pts={result.SosTriggerAOpenDistancePts} | sos_trigger_after_seconds={result.SosTriggerAfterSeconds} | sos_close_confirm_gap_pts={result.SosCloseConfirmGapPts} | sos_close_gap_pts={result.SosCloseGapPts} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={result.SansJson}";
+                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | signal_cycle_size={result.SignalCycleSize} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={result.RdStartSameActionLockSeconds}..{result.RdEndSameActionLockSeconds}s | open_price_freeze_ms={result.OpenPriceFreezeMs} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_price_freeze_ms={result.ClosePriceFreezeMs} | sos_trigger_a_open_distance_pts={result.SosTriggerAOpenDistancePts} | sos_trigger_after_seconds={result.SosTriggerAfterSeconds} | sos_close_confirm_gap_pts={result.SosCloseConfirmGapPts} | sos_close_gap_pts={result.SosCloseGapPts} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={result.SansJson}";
                     IsDbInlineDataVisible = true;
                 }
                 else
@@ -7241,17 +7242,13 @@ public sealed class DashboardViewModel : ObservableObject
                 new GapSignalConfirmationConfig(
                     ConfirmGapPts: _runtimeConfigState.CurrentConfirmGapPts,
                     OpenPts: _runtimeConfigState.CurrentOpenPts,
-                    HoldConfirmMs: _runtimeConfigState.CurrentHoldConfirmMs,
                     CloseConfirmGapPts: _runtimeConfigState.CurrentCloseConfirmGapPts,
                     ClosePts: _runtimeConfigState.CurrentClosePts,
                     CloseConfirmTpProfit: _runtimeConfigState.CurrentCloseConfirmTpProfit,
                     CloseTpProfit: _runtimeConfigState.CurrentCloseTpProfit,
                     CloseMaxTpProfit: _runtimeConfigState.CurrentCloseMaxTpProfit,
-                    CloseHoldConfirmMs: _runtimeConfigState.CurrentCloseHoldConfirmMs,
                     StartTimeHold: _runtimeConfigState.CurrentStartTimeHold,
                     EndTimeHold: _runtimeConfigState.CurrentEndTimeHold,
-                    OpenMaxTimesTick: _runtimeConfigState.CurrentOpenMaxTimesTick,
-                    CloseMaxTimesTick: _runtimeConfigState.CurrentCloseMaxTimesTick,
                     LimitMaxGap: _runtimeConfigState.CurrentLimitMaxGap,
                     LimitMaxTp: _runtimeConfigState.CurrentLimitMaxTp,
                     SosTriggerAOpenDistancePts: _runtimeConfigState.CurrentSosTriggerAOpenDistancePts,
@@ -7262,7 +7259,8 @@ public sealed class DashboardViewModel : ObservableObject
                     CloseGapStability: closeGapStability,
                     DiagnosticConfigId: _gapDiagnosticsConfigId,
                     DiagnosticSymbol: $"{metrics.ExchangeA.Symbol}|{metrics.ExchangeB.Symbol}",
-                    DiagnosticMaxGap: _runtimeConfigState.CurrentMaxGap));
+                    DiagnosticMaxGap: _runtimeConfigState.CurrentMaxGap,
+                    SignalCycleSize: _runtimeConfigState.CurrentSignalCycleSize));
 
             if (portfolioResult.UiNotices is { Count: > 0 })
             {
@@ -7290,7 +7288,7 @@ public sealed class DashboardViewModel : ObservableObject
             }
 
             // Guard: kiểm tra điều kiện lọc trước khi vào lệnh
-            var holdMs = trigger.Action == GapSignalAction.Open
+            var priceFreezeMs = trigger.Action == GapSignalAction.Open
                 ? _runtimeConfigState.CurrentOpenPriceFreezeMs
                 : _runtimeConfigState.CurrentClosePriceFreezeMs;
             var guardConfig = new SignalEntryGuard.GuardConfig(
@@ -7299,7 +7297,7 @@ public sealed class DashboardViewModel : ObservableObject
                 MaxSpread: _runtimeConfigState.CurrentMaxSpread,
                 PointMultiplier: _runtimeConfigState.CurrentPoint);
             var guardResult = SignalEntryGuard.Check(
-                trigger, metrics, guardConfig, _priceHistory, holdMs);
+                trigger, metrics, guardConfig, _priceHistory, priceFreezeMs);
             var signalSummary = BuildAutoSignalSummary(trigger);
             SetLastSignalStatus("DETECTED", signalSummary);
             var signalContext = GetOrCreateSignalContext(trigger);
@@ -7840,6 +7838,59 @@ public sealed class DashboardViewModel : ObservableObject
 
         GapBuy = FormatIntegerOrDash(metrics.GapBuy);
         GapSell = FormatIntegerOrDash(metrics.GapSell);
+        RefreshSignalCycleStatuses();
+    }
+
+    private void RefreshSignalCycleStatuses()
+    {
+        var configuredSize = Math.Max(1, _runtimeConfigState.CurrentSignalCycleSize);
+        var nowUtc = DateTime.UtcNow;
+        var statuses = _portfolioCoordinator.GetSignalCycleStatuses()
+            .Select(status => ApplyTerminalCycleObservation(status, nowUtc))
+            .Select(status => status.RequiredCount > 0
+                ? status
+                : status with { RequiredCount = configuredSize })
+            .ToArray();
+        var signature = string.Join(
+            '|',
+            statuses.Select(status =>
+                $"{status.Kind}:{status.SlotId}:{status.CycleId}:{status.CurrentCount}:" +
+                $"{status.RequiredCount}:{status.Status}:{status.LastValue}:{status.LastReason}"));
+        if (string.Equals(signature, _lastSignalCycleStatusSignature, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastSignalCycleStatusSignature = signature;
+        SignalCycleStatuses.Clear();
+        foreach (var status in statuses)
+        {
+            SignalCycleStatuses.Add(status);
+        }
+    }
+
+    private static SignalCycleStatus ApplyTerminalCycleObservation(
+        SignalCycleStatus status,
+        DateTime nowUtc)
+    {
+        var isTerminal = status.LastEvent is "Triggered" or "Reset" or "Completed";
+        if (!isTerminal
+            || !status.LastEventAtUtc.HasValue
+            || nowUtc - status.LastEventAtUtc.Value > TerminalCycleStatusDisplayDuration
+            || nowUtc < status.LastEventAtUtc.Value)
+        {
+            return status;
+        }
+
+        return status with
+        {
+            CycleId = status.LastEventCycleId,
+            CurrentCount = status.LastEventCount,
+            Status = status.LastEvent,
+            LastValue = status.LastEventValue,
+            LastReason = status.LastEventReason,
+            UpdatedAtUtc = status.LastEventAtUtc
+        };
     }
 
     private string BuildAutoSignalSummary(GapSignalTriggerResult trigger)

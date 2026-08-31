@@ -141,6 +141,135 @@ public sealed class GapStableOpenIntegrationTests
     }
 
     [Fact]
+    public void FixedSizeTen_TriggersOnlyOnTenthGapAndIgnoresHoldTime()
+    {
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(confirm: 50, open: 100, holdMs: 999_999) with
+        {
+            SignalCycleSize = 10
+        };
+
+        for (var index = 0; index < 9; index++)
+        {
+            Assert.Empty(Process(engine, config, index, gapBuy: 100 + index));
+        }
+
+        var trigger = Assert.Single(Process(engine, config, 9, gapBuy: 109));
+        Assert.Equal(10, trigger.BuyGaps.Count);
+    }
+
+    [Fact]
+    public void FixedSizeOne_CanTriggerFromFirstQualifiedGap()
+    {
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(confirm: 50, open: 100, holdMs: 999_999) with
+        {
+            SignalCycleSize = 1
+        };
+
+        var trigger = Assert.Single(Process(engine, config, 0, gapBuy: 120));
+
+        Assert.Equal([120], trigger.BuyGaps);
+    }
+
+    [Fact]
+    public void ConfirmFailure_DiscardsCycleAndDoesNotCountFailingGap()
+    {
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(confirm: 50, open: 100, holdMs: 0) with
+        {
+            SignalCycleSize = 3
+        };
+
+        Assert.Empty(Process(engine, config, 0, gapBuy: 100));
+        Assert.Empty(Process(engine, config, 1, gapBuy: 110));
+        Assert.Empty(Process(engine, config, 2, gapBuy: 49));
+        Assert.Empty(Process(engine, config, 3, gapBuy: 120));
+        Assert.Empty(Process(engine, config, 4, gapBuy: 130));
+        var trigger = Assert.Single(Process(engine, config, 5, gapBuy: 140));
+
+        Assert.Equal([120, 130, 140], trigger.BuyGaps);
+    }
+
+    [Fact]
+    public void DuplicateSnapshot_DoesNotIncreaseCycleCount()
+    {
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(confirm: 50, open: 100, holdMs: 0) with
+        {
+            SignalCycleSize = 3
+        };
+        var first = new GapSignalSnapshot(
+            Start,
+            ExchangeABid: 1.1000m,
+            ExchangeAAsk: 1.1001m,
+            ExchangeBBid: 1.1101m,
+            ExchangeBAsk: 1.1102m,
+            GapBuy: 100,
+            GapSell: null,
+            PointMultiplier: 100);
+
+        Assert.Empty(engine.ProcessSnapshot(first, config));
+        Assert.Empty(engine.ProcessSnapshot(first, config));
+        Assert.Empty(Process(engine, config, 1, gapBuy: 110));
+        var trigger = Assert.Single(Process(engine, config, 2, gapBuy: 120));
+
+        Assert.Equal([100, 110, 120], trigger.BuyGaps);
+    }
+
+    [Fact]
+    public void StabilityMinSamples_DoesNotControlFixedCycleSize()
+    {
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(confirm: 50, open: 100, holdMs: 0) with
+        {
+            SignalCycleSize = 3,
+            OpenGapStability = Stability with { MinStableSamples = 10 }
+        };
+
+        Assert.Empty(Process(engine, config, 0, gapBuy: 100));
+        Assert.Empty(Process(engine, config, 1, gapBuy: 110));
+        Assert.Single(Process(engine, config, 2, gapBuy: 120));
+    }
+
+    [Fact]
+    public void CycleSizeChange_ResetsCollectedGapsBeforeUsingNewSize()
+    {
+        var engine = new GapSignalConfirmationEngine();
+        var sizeThree = Config(confirm: 50, open: 100, holdMs: 0) with
+        {
+            SignalCycleSize = 3
+        };
+        var sizeTwo = sizeThree with { SignalCycleSize = 2 };
+
+        Assert.Empty(Process(engine, sizeThree, 0, gapBuy: 100));
+        Assert.Empty(Process(engine, sizeThree, 1, gapBuy: 110));
+        Assert.Empty(Process(engine, sizeTwo, 2, gapBuy: 120));
+        var trigger = Assert.Single(Process(engine, sizeTwo, 3, gapBuy: 130));
+
+        Assert.Equal([120, 130], trigger.BuyGaps);
+    }
+
+    [Fact]
+    public void FinalGapBelowOpenTarget_CompletesWithoutSignalAndStartsFreshNextCycle()
+    {
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(confirm: 50, open: 100, holdMs: 0) with
+        {
+            SignalCycleSize = 3
+        };
+
+        Assert.Empty(Process(engine, config, 0, gapBuy: 60));
+        Assert.Empty(Process(engine, config, 1, gapBuy: 70));
+        Assert.Empty(Process(engine, config, 2, gapBuy: 80));
+        Assert.Empty(Process(engine, config, 3, gapBuy: 100));
+        Assert.Empty(Process(engine, config, 4, gapBuy: 110));
+        var trigger = Assert.Single(Process(engine, config, 5, gapBuy: 120));
+
+        Assert.Equal([100, 110, 120], trigger.BuyGaps);
+    }
+
+    [Fact]
     public void LimitMaxGapDisabled_AllowsVeryLargeStableCycle()
     {
         var engine = new GapSignalConfirmationEngine();
@@ -154,7 +283,7 @@ public sealed class GapStableOpenIntegrationTests
     }
 
     [Fact]
-    public void OpenMaxTimesTick_StillRejectsAndResetsStableCycle()
+    public void OpenMaxTimesTick_IsIgnoredByFixedSizeOpenCycle()
     {
         var engine = new GapSignalConfirmationEngine();
         var config = Config(
@@ -165,10 +294,78 @@ public sealed class GapStableOpenIntegrationTests
 
         Assert.Empty(Process(engine, config, 0, gapBuy: 100));
         Assert.Empty(Process(engine, config, 1, gapBuy: 110));
-        Assert.Empty(Process(engine, config, 2, gapBuy: 120));
+        Assert.Single(Process(engine, config, 2, gapBuy: 120));
+    }
 
-        // State đã reset sau khi vượt max tick; tick kế tiếp chỉ bắt đầu Cycle mới.
-        Assert.Empty(Process(engine, config, 3, gapBuy: 130));
+    [Fact]
+    public void CycleStatusSnapshot_IsReadOnlyAndReflectsProgressAndReset()
+    {
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(confirm: 50, open: 100, holdMs: 0) with
+        {
+            SignalCycleSize = 10
+        };
+
+        Assert.Empty(Process(engine, config, 0, gapBuy: 100));
+        Assert.Empty(Process(engine, config, 1, gapBuy: 110));
+
+        var collecting = Assert.Single(engine.GetCycleStatuses(), status =>
+            status.Kind == SignalCycleKind.OpenBuy);
+        Assert.Equal(2, collecting.CurrentCount);
+        Assert.Equal(10, collecting.RequiredCount);
+        Assert.Equal("Collecting", collecting.Status);
+        Assert.Equal(110d, collecting.LastValue);
+
+        var secondRead = Assert.Single(engine.GetCycleStatuses(), status =>
+            status.Kind == SignalCycleKind.OpenBuy);
+        Assert.Equal(collecting, secondRead);
+
+        Assert.Empty(Process(engine, config, 2, gapBuy: 49));
+        var reset = Assert.Single(engine.GetCycleStatuses(), status =>
+            status.Kind == SignalCycleKind.OpenBuy);
+        Assert.Equal(0, reset.CurrentCount);
+        Assert.Equal(10, reset.RequiredCount);
+        Assert.Equal("Empty", reset.Status);
+        Assert.Contains("confirm threshold", reset.LastReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CycleLifecycle_PreservesTriggeredEventAndDuplicateDoesNotMoveTimestamp()
+    {
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(confirm: 50, open: 100, holdMs: 0) with
+        {
+            SignalCycleSize = 3
+        };
+
+        var firstSnapshot = new GapSignalSnapshot(
+            Start,
+            ExchangeABid: 1.1000m,
+            ExchangeAAsk: 1.1001m,
+            ExchangeBBid: 1.1101m,
+            ExchangeBAsk: 1.1102m,
+            GapBuy: 100,
+            GapSell: null,
+            PointMultiplier: 100);
+        Assert.Empty(engine.ProcessSnapshot(firstSnapshot, config));
+        var beforeDuplicate = Assert.Single(engine.GetCycleStatuses(), status =>
+            status.Kind == SignalCycleKind.OpenBuy);
+
+        Assert.Empty(engine.ProcessSnapshot(firstSnapshot, config));
+        var afterDuplicate = Assert.Single(engine.GetCycleStatuses(), status =>
+            status.Kind == SignalCycleKind.OpenBuy);
+        Assert.Equal(beforeDuplicate.LastEventAtUtc, afterDuplicate.LastEventAtUtc);
+        Assert.Equal(1, afterDuplicate.CurrentCount);
+
+        Assert.Empty(Process(engine, config, 1, gapBuy: 110));
+        var trigger = Assert.Single(Process(engine, config, 2, gapBuy: 120));
+        var completed = Assert.Single(engine.GetCycleStatuses(), status =>
+            status.Kind == SignalCycleKind.OpenBuy);
+
+        Assert.Equal("Triggered", completed.LastEvent);
+        Assert.Equal(trigger.DiagnosticCycleId, completed.LastEventCycleId);
+        Assert.Equal(3, completed.LastEventCount);
+        Assert.Equal(Start.AddSeconds(2), completed.LastEventAtUtc);
     }
 
     private static GapSignalConfirmationConfig Config(
@@ -183,7 +380,8 @@ public sealed class GapStableOpenIntegrationTests
             HoldConfirmMs: holdMs,
             LimitMaxGap: limitMaxGap,
             OpenMaxTimesTick: openMaxTimesTick,
-            OpenGapStability: Stability);
+            OpenGapStability: Stability,
+            SignalCycleSize: 3);
 
     private static IReadOnlyList<GapSignalTriggerResult> Process(
         GapSignalConfirmationEngine engine,
