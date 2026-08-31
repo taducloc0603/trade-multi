@@ -262,6 +262,26 @@ TradeDesktop.Tests/            # xUnit tests
 - Grid Close per-pair dùng chung `TradeRealtimeProfitRows` với profit realtime. KHÔNG `Clear()` rồi tạo lại
   toàn bộ collection mỗi UI refresh: Button có thể bị thay giữa mouse-down/mouse-up làm WPF nuốt click
   (người dùng phải bấm 2-3 lần). Phải giữ instance theo `Stt`, chỉ update property/move/insert/remove khi cần.
+- `SignalCycleStatuses` cũng theo quy tắc trên: `SyncSignalCycleStatuses` đồng bộ theo khóa
+  `(Kind, SlotId)`, chỉ Remove/Insert/Move/thay ô đã đổi. Panel có throttle RIÊNG
+  `SignalCycleStatusRenderMinIntervalMs=500` (chậm hơn nhịp render 200ms) vì số dòng nhân theo
+  số slot và `LastValue` đổi gần như mỗi tick.
+
+### UI thread budget khi nhiều slot (đã gặp treo ở ~9 lệnh)
+- `OnSnapshotReceived` bọc TOÀN BỘ thân hàm trong `Dispatcher.Invoke` → mọi signal engine, guard và
+  log chạy trên UI thread mỗi 50ms, chi phí **tỉ lệ tuyến tính với số slot**. Đây là trần khả năng
+  mở rộng hiện tại; muốn vượt phải đưa logic sang một context nền ĐƠN LUỒNG (giữ tuần tự) và
+  chuyển luôn phần `Dispatcher.Invoke` trong `RunOrderInfoPollingAsync` sang cùng context đó,
+  nếu không sẽ đẻ race trên state slot.
+- Log lặp mỗi tick PHẢI đi qua `ISlotLogger.LogVerbose` (→ `LogFileOnly`), không dùng `Log`:
+  mỗi dòng realtime tốn thêm `SystemLogItem.Parse` + một chặng Dispatcher, nhân theo số slot.
+  Hiện áp dụng cho `[*_CYCLE][PROGRESS]` và `[TP_CYCLE][PROGRESS]`. Các event chuyển trạng thái
+  (STARTED/RESET/COMPLETED/TRIGGERED) tần suất thấp nên vẫn giữ realtime.
+- `SignalLogItems` có ~80 chỗ gọi thẳng `Insert(0, ...)` trên UI thread. KHÔNG chuyển riêng lẻ
+  một đường nào sang `BeginInvoke` — sẽ xáo thứ tự hiển thị của panel Signal. Muốn tối ưu thì
+  gom nhiều dòng vào MỘT lần `Invoke`, hoặc chuyển toàn bộ sang cùng một hàng đợi. Lưu ý caller
+  chính đã ở trên UI thread nên `Dispatcher.Invoke` chạy inline (`CheckAccess`), gần như miễn phí —
+  đây KHÔNG phải nguồn gây treo.
 
 ### Profit feed cho quyết định TP (logic-critical, KHÔNG throttle theo UI)
 - `slot.LastProfitSnapshot` nuôi quyết định TP + priority-close PHẢI được refresh **mỗi tick**,

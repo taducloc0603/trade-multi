@@ -149,7 +149,10 @@ public sealed class DashboardViewModel : ObservableObject
     // only runs at this minimum interval to keep CPU low when a position is open.
     private const long SnapshotUiRenderMinIntervalMs = 200;
     private static readonly TimeSpan TerminalCycleStatusDisplayDuration = TimeSpan.FromSeconds(5);
+    // Panel Signal Cycle là quan sát thuần: throttle riêng, chậm hơn nhịp render chính.
+    private const long SignalCycleStatusRenderMinIntervalMs = 500;
     private long _lastSnapshotUiRenderTickMs;
+    private long _lastSignalCycleStatusRenderTickMs;
     private string _lastSignalCycleStatusSignature = string.Empty;
 
     private sealed record PendingOpenRequest(
@@ -7843,6 +7846,17 @@ public sealed class DashboardViewModel : ObservableObject
 
     private void RefreshSignalCycleStatuses()
     {
+        // Panel này thuần quan sát nên có throttle riêng, chậm hơn nhịp render 200ms:
+        // nội dung đổi gần như mỗi tick (LastValue là gap hiện tại) và số dòng nhân theo
+        // số slot đang mở, nên bám nhịp render sẽ sinh một loạt CollectionChanged liên tục.
+        var renderTickMs = Environment.TickCount64;
+        if ((renderTickMs - _lastSignalCycleStatusRenderTickMs) < SignalCycleStatusRenderMinIntervalMs)
+        {
+            return;
+        }
+
+        _lastSignalCycleStatusRenderTickMs = renderTickMs;
+
         var configuredSize = Math.Max(1, _runtimeConfigState.CurrentSignalCycleSize);
         var nowUtc = DateTime.UtcNow;
         var statuses = _portfolioCoordinator.GetSignalCycleStatuses()
@@ -7862,11 +7876,90 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         _lastSignalCycleStatusSignature = signature;
-        SignalCycleStatuses.Clear();
-        foreach (var status in statuses)
+        SyncSignalCycleStatuses(statuses);
+    }
+
+    /// <summary>
+    /// Đồng bộ collection theo khóa (Kind, SlotId), chỉ Remove/Insert/Move/thay ô đã đổi.
+    /// KHÔNG <c>Clear()</c> rồi <c>Add()</c> lại: Reset huỷ toàn bộ container của ItemsControl
+    /// và dựng lại tất cả, chi phí nhân theo số slot đang mở — đúng pitfall đã gặp ở
+    /// <c>TradeRealtimeProfitRows</c>.
+    /// </summary>
+    private void SyncSignalCycleStatuses(IReadOnlyList<SignalCycleStatus> statuses)
+    {
+        for (var index = SignalCycleStatuses.Count - 1; index >= 0; index--)
         {
-            SignalCycleStatuses.Add(status);
+            var existing = SignalCycleStatuses[index];
+            var stillPresent = false;
+            for (var probe = 0; probe < statuses.Count; probe++)
+            {
+                if (statuses[probe].Kind == existing.Kind && statuses[probe].SlotId == existing.SlotId)
+                {
+                    stillPresent = true;
+                    break;
+                }
+            }
+
+            if (!stillPresent)
+            {
+                SignalCycleStatuses.RemoveAt(index);
+            }
         }
+
+        for (var index = 0; index < statuses.Count; index++)
+        {
+            var status = statuses[index];
+            if (index >= SignalCycleStatuses.Count)
+            {
+                SignalCycleStatuses.Add(status);
+                continue;
+            }
+
+            var current = SignalCycleStatuses[index];
+            if (current.Kind == status.Kind && current.SlotId == status.SlotId)
+            {
+                // Record => value equality: chỉ thay khi nội dung thực sự khác.
+                if (!current.Equals(status))
+                {
+                    SignalCycleStatuses[index] = status;
+                }
+
+                continue;
+            }
+
+            var existingIndex = IndexOfSignalCycleStatus(status.Kind, status.SlotId);
+            if (existingIndex >= 0)
+            {
+                SignalCycleStatuses.Move(existingIndex, index);
+                if (!SignalCycleStatuses[index].Equals(status))
+                {
+                    SignalCycleStatuses[index] = status;
+                }
+            }
+            else
+            {
+                SignalCycleStatuses.Insert(index, status);
+            }
+        }
+
+        while (SignalCycleStatuses.Count > statuses.Count)
+        {
+            SignalCycleStatuses.RemoveAt(SignalCycleStatuses.Count - 1);
+        }
+    }
+
+    private int IndexOfSignalCycleStatus(SignalCycleKind kind, int? slotId)
+    {
+        for (var index = 0; index < SignalCycleStatuses.Count; index++)
+        {
+            var item = SignalCycleStatuses[index];
+            if (item.Kind == kind && item.SlotId == slotId)
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     private static SignalCycleStatus ApplyTerminalCycleObservation(
@@ -8427,6 +8520,10 @@ public sealed class DashboardViewModel : ObservableObject
     {
         try
         {
+            // GIỮ Invoke đồng bộ: ~80 chỗ khác trong file này gọi thẳng
+            // SignalLogItems.Insert(0, ...) trên UI thread. Nếu riêng đường này defer bằng
+            // BeginInvoke thì thứ tự hiển thị của panel Signal bị xáo. Ngoài ra caller chính
+            // đã ở trên UI thread nên Invoke chạy inline (CheckAccess), không tốn marshalling.
             System.Windows.Application.Current.Dispatcher.Invoke(() => SignalLogItems.Insert(0, message));
         }
         catch
@@ -8443,10 +8540,17 @@ public sealed class DashboardViewModel : ObservableObject
             // dev-4 projection and must not render the long structured line.
             _tradeSessionFileLogger.Log(item.ToString());
             // Insert at index 0 in reverse so the visible order remains A then B like dev-4.
-            foreach (var minimal in BuildMinimalSignalProjection(item).Reverse())
+            // Gom cả nhóm vào MỘT lần Invoke thay vì một Invoke cho mỗi dòng. Vẫn dùng Invoke
+            // đồng bộ (không BeginInvoke) để giữ đúng thứ tự với ~80 chỗ gọi thẳng
+            // SignalLogItems.Insert(0, ...) khác trong file này.
+            var minimals = BuildMinimalSignalProjection(item).Reverse().ToArray();
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
-                System.Windows.Application.Current.Dispatcher.Invoke(() => SignalLogItems.Insert(0, minimal));
-            }
+                foreach (var minimal in minimals)
+                {
+                    SignalLogItems.Insert(0, minimal);
+                }
+            });
         }
         catch
         {

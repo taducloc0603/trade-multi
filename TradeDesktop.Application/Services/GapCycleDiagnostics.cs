@@ -265,11 +265,22 @@ public static class GapCycleDiagnostics
         }
 
         var cycleName = action == "CLOSE" ? "NORMAL_CLOSE" : action;
-        logger.Log(
+        var line =
             $"[{cycleName}_CYCLE][{eventName}] cycle_id={Text(cycle.CycleId)} signal_id=- " +
             $"action={action} side={side} slot_id={Value(slotId)} " +
             $"count={cycle.SampleCount}/{policy.SignalCycleSize} gap={Value(newGap)} " +
-            $"confirmation_mode=FIXED_SIZE reason=\"{Escape(cycle.Reason)}\"");
+            $"confirmation_mode=FIXED_SIZE reason=\"{Escape(cycle.Reason)}\"";
+
+        // PROGRESS lặp lại mỗi tick cho MỖI cycle của MỖI slot -> chỉ ghi file, không
+        // đẩy lên đường realtime UI. STARTED/RESET/COMPLETED là sự kiện chuyển trạng thái,
+        // tần suất thấp, vẫn giữ realtime để theo dõi trực tiếp.
+        if (eventName == "PROGRESS")
+        {
+            logger.LogVerbose(line);
+            return;
+        }
+
+        logger.Log(line);
     }
 
     private static string Format(

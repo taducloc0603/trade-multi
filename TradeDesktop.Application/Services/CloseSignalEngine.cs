@@ -661,11 +661,27 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         FixedSizeCycleUpdate update,
         double profit,
         string result,
-        string signalId = "") =>
-        _logger?.Log(
+        string signalId = "")
+    {
+        if (_logger is null)
+        {
+            return;
+        }
+
+        var line =
             $"[TP_CYCLE][{eventName}] cycle_id={update.CycleId} " +
             $"signal_id={(string.IsNullOrWhiteSpace(signalId) ? "-" : signalId)} " +
             $"slot_id={_slotId?.ToString() ?? "-"} count={update.Count}/{update.RequiredSize} " +
             $"profit={profit.ToString("R", System.Globalization.CultureInfo.InvariantCulture)} " +
-            $"confirmation_mode=FIXED_SIZE result={result}");
+            $"confirmation_mode=FIXED_SIZE result={result}";
+
+        // PROGRESS lặp mỗi tick cho mỗi slot -> chỉ ghi file, không đẩy lên realtime UI.
+        if (eventName == "PROGRESS")
+        {
+            _logger.LogVerbose(line);
+            return;
+        }
+
+        _logger.Log(line);
+    }
 }

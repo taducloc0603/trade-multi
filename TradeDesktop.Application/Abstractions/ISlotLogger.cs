@@ -8,6 +8,15 @@ namespace TradeDesktop.Application.Abstractions;
 public interface ISlotLogger
 {
     void Log(string message);
+
+    /// <summary>
+    /// Kênh cho log lặp lại mỗi tick (ví dụ <c>[*_CYCLE][PROGRESS]</c>). Implementation nên
+    /// ghi file nhưng KHÔNG publish realtime lên UI: mỗi dòng realtime phải qua
+    /// <c>SystemLogItem.Parse</c> + đường Dispatcher, chi phí đó nhân theo số slot đang mở
+    /// và đủ sức làm nghẽn UI thread. Mặc định forward về <see cref="Log"/> để các
+    /// implementation cũ (test fake) không phải sửa.
+    /// </summary>
+    void LogVerbose(string message) => Log(message);
 }
 
 /// <summary>
