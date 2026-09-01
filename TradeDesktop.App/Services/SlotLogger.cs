@@ -5,7 +5,7 @@ namespace TradeDesktop.App.Services;
 /// <summary>
 /// Forward Application-layer ISlotLogger calls to App-layer ITradeSessionFileLogger.
 /// </summary>
-public sealed class SlotLogger : ISlotLogger, IGapStabilityRawLogger
+public sealed class SlotLogger : ISlotLogger, IGapStabilityRawLogger, ISignalOutcomeRawLogger
 {
     private readonly ITradeSessionFileLogger _sessionLogger;
 
@@ -22,4 +22,7 @@ public sealed class SlotLogger : ISlotLogger, IGapStabilityRawLogger
 
     public void LogGapStabilityRaw(string message) =>
         _sessionLogger.LogGapStabilityRaw(message);
+
+    public void LogSignalOutcomeRaw(string message) =>
+        _sessionLogger.LogSignalOutcomeRaw(message);
 }

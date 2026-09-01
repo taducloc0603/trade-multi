@@ -44,7 +44,8 @@
 17. [[NOTIFY]](#notify--telegram-notifications)
 18. [[MMF_TRADES] / [MMF_HISTORY]](#mmf_trades--mmf_history--shared-memory-change-detection)
 19. [[MANUAL]](#manual--manual-trade-operations)
-20. [Debug by scenario](#debug-by-scenario)
+20. [[SIGNAL_OUTCOME]](#signal_outcome--gap-sau-signal-file-rieng)
+21. [Debug by scenario](#debug-by-scenario)
 
 ---
 
@@ -509,6 +510,58 @@ non-auto barrier hoặc ngữ cảnh slot. Gate chạy trước MT4/MT5 executor
 
 ---
 
+## [SIGNAL_OUTCOME] — Gap sau signal (file riêng)
+
+**File nguồn:** `TradeDesktop.Application/Services/SignalGapOutcomeTracker.cs`
+· hook trong `TradeDesktop.App/ViewModels/DashboardViewModel.cs`
+
+**File log:** `~/Desktop/trade-log/{yyyyMMdd_HHmmss}-signal-outcome.log` — kênh RIÊNG, tách khỏi
+`trade-log.log` và `gap-stability-raw.log`, dùng chung rotation 50 MB.
+
+**Dùng để làm gì:** Đánh giá hậu nghiệm chất lượng signal. Các log `[OPEN_CYCLE]` /
+`[NORMAL_CLOSE_CYCLE]` chỉ cho biết gap TRƯỚC lúc trigger; file này ghi thêm gap của **50 tick
+kế tiếp** để so sánh signal với diễn biến thị trường thật.
+
+**Phạm vi:** signal OPEN và signal CLOSE loại **Normal**, và chỉ những signal **thực sự được
+dispatch**. SOS close, TP close, và signal bị guard/qualifying/quota chặn đều không xuất hiện.
+
+**Mỗi signal đúng 2 dòng:**
+
+| Event | Ghi khi nào | Nội dung |
+|-------|-------------|----------|
+| `[SIGNAL]` | signal được dispatch (đã có STT) | giá A/B, gap tại signal, ngưỡng config, `signal_gaps` |
+| `[END]` | đủ 50 tick (~2.5 s sau) | `signal_gaps` + `future_gaps` (50 giá trị) + `elapsed_ms` |
+
+**Ví dụ:**
+```
+[SIGNAL_OUTCOME][SIGNAL] stt=7 pair_id=AUTO-0003-8412553 signal_id=3f2a1c90... cycle_id=OPEN-BUY-000417 slot_id=3 action=OPEN side=BUY trigger_type=OpenByGapBuy triggered_at=2026-08-31T03:15:32.140Z symbol="XAUUSD|XAUUSD.s" point=100 confirm_gap_pts=25 open_pts=30 ... gap_buy=40 gap_sell=-20 track_gap=BUY gap_at_signal=40 gaps_order=oldest_to_newest gaps_unit=point signal_gaps="38|39|40|40|41|40|40|39|40|40" future_ticks_planned=50
+[SIGNAL_OUTCOME][END]    stt=7 pair_id=AUTO-0003-8412553 signal_id=3f2a1c90... action=OPEN side=BUY track_gap=BUY status=COMPLETED captured=50/50 skipped_null_ticks=0 gap_at_signal=40 elapsed_ms=2554 ... signal_gaps="38|...|40" future_gaps="40|41|43|44|...|33"
+```
+
+**Các trường quan trọng:**
+- `stt` — **đúng số STT hiển thị trên UI của lệnh** (cột STT grid Trade/History, nút `Close(n)`,
+  panel Signal). Cùng nguồn `ResolveStt(pairId)` nên tra ngược log ↔ màn hình luôn khớp.
+  Vì `PositionSlot.PairId` bất biến, **OPEN và CLOSE của cùng một lệnh có cùng `stt`** — lọc
+  `stt=7` là ra trọn vòng đời lệnh đó. STT reset mỗi lần bấm Start (cùng nhịp với grid).
+- `gap_at_signal` — gap tại thời điểm signal, là mốc để so sánh với `future_gaps`.
+- `signal_gaps` — dãy gap của chu kỳ đã xác nhận signal; lặp lại ở cả 2 dòng để dòng `[END]`
+  tự đủ dữ liệu paste vào Excel.
+- `future_gaps` — 50 gap của 50 tick kế tiếp, kể cả khi gap không đổi. Đơn vị point, cũ → mới.
+- `track_gap` — chiều gap theo dõi (`BUY` → `GapBuy`, `SELL` → `GapSell`), theo `PrimarySide`.
+- `status` — `COMPLETED` (đủ 50 tick) · `SESSION_STOP` (dừng session giữa chừng) ·
+  `STALE` (feed tick đứt > 30 s) · `EVICTED` (vượt 16 trace đồng thời). `captured=N/50` cho
+  biết dòng có đủ dữ liệu không.
+
+**Case đặc biệt:**
+- Có dòng `[SIGNAL]` mà không có `[END]` cùng `stt` → session dừng trước khi đủ 50 tick, hoặc
+  feed tick đứt. Kiểm tra `[MARKET]`.
+- `skipped_null_ticks` lớn → MMF trả gap null nhiều, suspect mất kết nối một sàn.
+- `stt=-` → UI chưa cấp số cho pair đó tại thời điểm ghi (hiếm; thường chỉ xảy ra với slot vừa
+  restore sau restart mà grid chưa render). Đường log **không bao giờ tự cấp số mới** để tránh
+  làm lệch thứ tự đánh số của grid, nên dùng `pair_id` để dò ngược trong trường hợp này.
+
+---
+
 ## Debug by scenario
 
 | Vấn đề | Log cần xem |
@@ -523,3 +576,4 @@ non-auto barrier hoặc ngữ cảnh slot. Gate chạy trước MT4/MT5 executor
 | Telegram không nhận | `[NOTIFY]` |
 | Half-open (1 leg thành công, 1 leg thất bại) | `[ROUTER][WARN]`, `[MT4][WARN]`, `[MT5][WARN]`, `[CYCLE][ERROR]` |
 | Orphan slot sau restart | `[RECOVERY][WARN] foundA=false`, `[PERSIST]` |
+| Signal đúng hay sai (đánh giá chất lượng) | file `-signal-outcome.log`: `[SIGNAL_OUTCOME][END]`, lọc theo `stt` |

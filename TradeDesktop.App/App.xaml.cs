@@ -44,7 +44,15 @@ public partial class App : System.Windows.Application
                         .AddInfrastructure(configuration);
 
                     services.AddSingleton<ITradeSessionFileLogger, TradeSessionFileLogger>();
-                    services.AddSingleton<ISlotLogger, SlotLogger>();
+                    // Một instance SlotLogger duy nhất phục vụ cả 3 kênh log (main, gap raw,
+                    // signal outcome) để không nhân bản forwarder cho cùng session logger.
+                    services.AddSingleton<SlotLogger>();
+                    services.AddSingleton<ISlotLogger>(sp => sp.GetRequiredService<SlotLogger>());
+                    services.AddSingleton<ISignalOutcomeRawLogger>(sp => sp.GetRequiredService<SlotLogger>());
+                    // Factory tường minh: ctor còn các tham số int có default, không phụ thuộc
+                    // vào việc container có điền default value hay không (lỗi ở đây = crash startup).
+                    services.AddSingleton(sp =>
+                        new SignalGapOutcomeTracker(sp.GetRequiredService<ISignalOutcomeRawLogger>()));
                     services.AddHttpClient<ITelegramNotifier, TelegramNotifier>();
                     services.AddSingleton<RuntimeConfigState>();
                     services.AddSingleton<IMt5ManualTradeService, Mt5ManualTradeService>();

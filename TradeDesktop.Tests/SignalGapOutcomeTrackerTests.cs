@@ -1,0 +1,546 @@
+using TradeDesktop.Application.Abstractions;
+using TradeDesktop.Application.Models;
+using TradeDesktop.Application.Services;
+
+namespace TradeDesktop.Tests;
+
+public sealed class SignalGapOutcomeTrackerTests
+{
+    private static readonly DateTime Start =
+        new(2026, 8, 31, 3, 15, 32, DateTimeKind.Utc);
+
+    // ---------- Pha attach ----------
+
+    [Fact]
+    public void OnSignalPending_WritesNothingUntilAttach()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.OnTick(Tick(1, gapBuy: 41));
+
+        Assert.Empty(logger.Lines);
+    }
+
+    [Fact]
+    public void AttachStt_WritesSignalLine()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+
+        var line = Assert.Single(logger.Lines);
+        Assert.Contains("[SIGNAL_OUTCOME][SIGNAL]", line, StringComparison.Ordinal);
+        Assert.Contains("stt=7", line, StringComparison.Ordinal);
+        Assert.Contains("pair_id=AUTO-0003-8412553", line, StringComparison.Ordinal);
+        Assert.Contains("gap_at_signal=40", line, StringComparison.Ordinal);
+        Assert.Contains("signal_gaps=\"38|39|40\"", line, StringComparison.Ordinal);
+        Assert.Contains("track_gap=BUY", line, StringComparison.Ordinal);
+        Assert.Contains("action=OPEN side=BUY", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AttachStt_FillsSlotIdKnownOnlyAtDispatch()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 2);
+
+        // OPEN: lúc signal chưa có slot; slot chỉ được cấp trong luồng dispatch.
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553", slotId: 5);
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        tracker.OnTick(Tick(2, gapBuy: 42));
+
+        Assert.All(logger.Lines, line => Assert.Contains("slot_id=5", line, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AttachStt_WithoutSlotId_KeepsSignalSlotId()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 1);
+
+        // CLOSE: slot đã có sẵn từ lúc mở trace, không cần override.
+        tracker.OnSignalPending(NormalCloseSignal());
+        tracker.AttachStt("sig-1", 4, "AUTO-0001-8399102");
+        tracker.OnTick(Tick(1, gapSell: -21));
+
+        Assert.All(logger.Lines, line => Assert.Contains("slot_id=3", line, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AttachStt_WithUnknownStt_WritesDashAndKeepsPairId()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 1);
+
+        // UI chưa cấp số cho pair này: đường log KHÔNG được tự cấp số mới,
+        // nên ghi stt=- và dò ngược bằng pair_id.
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", null, "AUTO-0003-8412553");
+        tracker.OnTick(Tick(1, gapBuy: 41));
+
+        Assert.Equal(2, logger.Lines.Count);
+        Assert.All(logger.Lines, line =>
+        {
+            Assert.Contains("stt=-", line, StringComparison.Ordinal);
+            Assert.Contains("pair_id=AUTO-0003-8412553", line, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void AttachGrace_IsWiderThanObservationWindow()
+    {
+        var logger = new CaptureLogger();
+        var tracker = new SignalGapOutcomeTracker(logger, futureTickCount: 3);
+
+        // Dispatch chậm (chờ physical mutex, click native) vẫn phải ghi được:
+        // grace mặc định phải rộng hơn nhiều so với cửa sổ 50 tick.
+        tracker.OnSignalPending(OpenSignal());
+        for (var i = 1; i <= 120; i++)
+        {
+            tracker.OnTick(Tick(i, gapBuy: 40 + (i % 3)));
+        }
+
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+
+        Assert.Equal(2, logger.Lines.Count);
+        Assert.Contains("captured=3/3", logger.Lines[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NeverAttached_DropsTraceSilently()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 3, attachGraceTicks: 4);
+
+        tracker.OnSignalPending(OpenSignal());
+        for (var i = 1; i <= 10; i++)
+        {
+            tracker.OnTick(Tick(i, gapBuy: 40 + i));
+        }
+
+        Assert.Empty(logger.Lines);
+
+        // Trace đã bị gỡ: attach muộn cũng không sinh dòng nào.
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        Assert.Empty(logger.Lines);
+    }
+
+    [Fact]
+    public void AttachStt_IsIdempotent()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        tracker.AttachStt("sig-1", 9, "AUTO-9999-1");
+
+        var line = Assert.Single(logger.Lines);
+        Assert.Contains("stt=7", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AttachAfterWindowFilled_WritesBothLines()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 3, attachGraceTicks: 10);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        tracker.OnTick(Tick(2, gapBuy: 42));
+        tracker.OnTick(Tick(3, gapBuy: 43));
+        Assert.Empty(logger.Lines);
+
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+
+        Assert.Equal(2, logger.Lines.Count);
+        Assert.Contains("[SIGNAL_OUTCOME][SIGNAL]", logger.Lines[0], StringComparison.Ordinal);
+        Assert.Contains("[SIGNAL_OUTCOME][END]", logger.Lines[1], StringComparison.Ordinal);
+        Assert.Contains("captured=3/3", logger.Lines[1], StringComparison.Ordinal);
+        Assert.Contains("future_gaps=\"41|42|43\"", logger.Lines[1], StringComparison.Ordinal);
+    }
+
+    // ---------- Cửa sổ quan sát ----------
+
+    [Fact]
+    public void ExactlyWindowTicks_EmitsSingleEndLine()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 3);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        tracker.OnTick(Tick(2, gapBuy: 42));
+        Assert.Single(logger.Lines);
+
+        tracker.OnTick(Tick(3, gapBuy: 43));
+        Assert.Equal(2, logger.Lines.Count);
+
+        // Tick sau khi trace đóng không sinh thêm dòng nào.
+        tracker.OnTick(Tick(4, gapBuy: 44));
+        Assert.Equal(2, logger.Lines.Count);
+    }
+
+    [Fact]
+    public void TickAtSignalTime_IsNotCounted()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 3);
+
+        // gap tại signal = 40; tick đầu tiên feed vào là tick SAU signal.
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        tracker.OnTick(Tick(2, gapBuy: 42));
+        tracker.OnTick(Tick(3, gapBuy: 43));
+
+        var end = logger.Lines[1];
+        Assert.Contains("gap_at_signal=40", end, StringComparison.Ordinal);
+        Assert.Contains("future_gaps=\"41|42|43\"", end, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConstantGap_StillRecordsEveryTick()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 3);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        tracker.OnTick(Tick(1, gapBuy: 40));
+        tracker.OnTick(Tick(2, gapBuy: 40));
+        tracker.OnTick(Tick(3, gapBuy: 40));
+
+        Assert.Contains("captured=3/3", logger.Lines[1], StringComparison.Ordinal);
+        Assert.Contains("future_gaps=\"40|40|40\"", logger.Lines[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NullGapTick_IsSkipped()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 3);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        tracker.OnTick(Tick(2, gapBuy: null));
+        tracker.OnTick(Tick(3, gapBuy: 42));
+        tracker.OnTick(Tick(4, gapBuy: 43));
+
+        var end = logger.Lines[1];
+        Assert.Contains("captured=3/3", end, StringComparison.Ordinal);
+        Assert.Contains("skipped_null_ticks=1", end, StringComparison.Ordinal);
+        Assert.Contains("future_gaps=\"41|42|43\"", end, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EndLine_RepeatsSignalGapsBeforeFutureGaps()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 2);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        tracker.OnTick(Tick(2, gapBuy: 42));
+
+        var end = logger.Lines[1];
+        var signalGapsIndex = end.IndexOf("signal_gaps=\"38|39|40\"", StringComparison.Ordinal);
+        var futureGapsIndex = end.IndexOf("future_gaps=\"41|42\"", StringComparison.Ordinal);
+        Assert.True(signalGapsIndex >= 0);
+        Assert.True(futureGapsIndex > signalGapsIndex);
+    }
+
+    [Fact]
+    public void EndLine_ReportsElapsedMs()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 3);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        tracker.OnTick(Tick(2, gapBuy: 42));
+        tracker.OnTick(Tick(3, gapBuy: 43));
+
+        // Tick cách nhau 50ms: tick1 -> tick3 là 100ms.
+        Assert.Contains("elapsed_ms=100", logger.Lines[1], StringComparison.Ordinal);
+    }
+
+    // ---------- STT giữa OPEN và CLOSE ----------
+
+    [Fact]
+    public void SameStt_ForOpenAndCloseOfSamePair()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 2);
+        const string PairId = "AUTO-0003-8412553";
+
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-open"));
+        tracker.AttachStt("sig-open", 7, PairId);
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        tracker.OnTick(Tick(2, gapBuy: 42));
+
+        tracker.OnSignalPending(NormalCloseSignal(signalId: "sig-close"));
+        tracker.AttachStt("sig-close", 7, PairId);
+        tracker.OnTick(Tick(3, gapSell: -21));
+        tracker.OnTick(Tick(4, gapSell: -22));
+
+        Assert.Equal(4, logger.Lines.Count);
+        Assert.All(logger.Lines, line =>
+        {
+            Assert.Contains("stt=7", line, StringComparison.Ordinal);
+            Assert.Contains($"pair_id={PairId}", line, StringComparison.Ordinal);
+        });
+        Assert.Contains("action=OPEN", logger.Lines[0], StringComparison.Ordinal);
+        Assert.Contains("action=CLOSE", logger.Lines[2], StringComparison.Ordinal);
+        Assert.Contains("slot_id=3", logger.Lines[2], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Stt_MatchesBetweenSignalAndEnd_WhenTracesOverlap()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 3);
+
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-a"));
+        tracker.AttachStt("sig-a", 1, "AUTO-0001-1");
+        tracker.OnTick(Tick(1, gapBuy: 41));
+
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-b"));
+        tracker.AttachStt("sig-b", 2, "AUTO-0002-2");
+
+        tracker.OnTick(Tick(2, gapBuy: 42));
+        tracker.OnTick(Tick(3, gapBuy: 43)); // sig-a đủ 3 tick -> END
+        tracker.OnTick(Tick(4, gapBuy: 44)); // sig-b đủ 3 tick -> END
+
+        var endA = Assert.Single(logger.Lines.Where(l =>
+            l.Contains("[SIGNAL_OUTCOME][END]", StringComparison.Ordinal)
+            && l.Contains("signal_id=sig-a", StringComparison.Ordinal)));
+        var endB = Assert.Single(logger.Lines.Where(l =>
+            l.Contains("[SIGNAL_OUTCOME][END]", StringComparison.Ordinal)
+            && l.Contains("signal_id=sig-b", StringComparison.Ordinal)));
+
+        Assert.Contains("stt=1", endA, StringComparison.Ordinal);
+        Assert.Contains("future_gaps=\"41|42|43\"", endA, StringComparison.Ordinal);
+        Assert.Contains("stt=2", endB, StringComparison.Ordinal);
+        Assert.Contains("future_gaps=\"42|43|44\"", endB, StringComparison.Ordinal);
+    }
+
+    // ---------- Vòng đời / an toàn ----------
+
+    [Fact]
+    public void OverlappingSignals_TrackedIndependently()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 2);
+
+        for (var i = 1; i <= 3; i++)
+        {
+            tracker.OnSignalPending(OpenSignal(signalId: $"sig-{i}"));
+            tracker.AttachStt($"sig-{i}", i, $"AUTO-000{i}-{i}");
+            tracker.OnTick(Tick(i, gapBuy: 40 + i));
+        }
+
+        tracker.OnTick(Tick(4, gapBuy: 44));
+        tracker.OnTick(Tick(5, gapBuy: 45));
+
+        var ends = logger.Lines
+            .Where(l => l.Contains("[SIGNAL_OUTCOME][END]", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(3, ends.Count);
+        Assert.All(ends, line => Assert.Contains("captured=2/2", line, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MaxConcurrentTraces_EvictsOldest()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50, maxConcurrentTraces: 2);
+
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-1"));
+        tracker.AttachStt("sig-1", 1, "AUTO-0001-1");
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-2"));
+        tracker.AttachStt("sig-2", 2, "AUTO-0002-2");
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-3"));
+
+        var evicted = Assert.Single(logger.Lines.Where(l =>
+            l.Contains("status=EVICTED", StringComparison.Ordinal)));
+        Assert.Contains("signal_id=sig-1", evicted, StringComparison.Ordinal);
+        Assert.Contains("captured=0/50", evicted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FlushAll_EmitsPartialEnd()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        tracker.OnTick(Tick(2, gapBuy: 42));
+
+        tracker.FlushAll("SESSION_STOP");
+
+        var end = logger.Lines[1];
+        Assert.Contains("status=SESSION_STOP", end, StringComparison.Ordinal);
+        Assert.Contains("captured=2/50", end, StringComparison.Ordinal);
+        Assert.Contains("future_gaps=\"41|42\"", end, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FlushAll_SkipsTracesNotYetAttached()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        tracker.FlushAll("SESSION_STOP");
+
+        Assert.Empty(logger.Lines);
+    }
+
+    [Fact]
+    public void Reset_DropsOpenTracesWithoutEmitting()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        logger.Lines.Clear();
+
+        tracker.Reset();
+        tracker.OnTick(Tick(2, gapBuy: 42));
+
+        Assert.Empty(logger.Lines);
+    }
+
+    [Fact]
+    public void StaleTrace_TimesOut()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50, staleTraceMs: 0 + 1);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        Thread.Sleep(20);
+        tracker.OnTick(Tick(1, gapBuy: 41));
+
+        var end = Assert.Single(logger.Lines.Where(l =>
+            l.Contains("[SIGNAL_OUTCOME][END]", StringComparison.Ordinal)));
+        Assert.Contains("status=STALE", end, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NullBaselineGap_DoesNotOpenTrace()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger);
+
+        tracker.OnSignalPending(OpenSignal() with { GapBuy = null });
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        tracker.OnTick(Tick(1, gapBuy: 41));
+
+        Assert.Empty(logger.Lines);
+    }
+
+    [Fact]
+    public void TrackGap_FollowsPrimarySide()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 2);
+
+        tracker.OnSignalPending(NormalCloseSignal());
+        tracker.AttachStt("sig-1", 4, "AUTO-0001-8399102");
+        tracker.OnTick(Tick(1, gapBuy: 41, gapSell: -21));
+        tracker.OnTick(Tick(2, gapBuy: 42, gapSell: -22));
+
+        Assert.Contains("track_gap=SELL", logger.Lines[0], StringComparison.Ordinal);
+        Assert.Contains("gap_at_signal=-20", logger.Lines[1], StringComparison.Ordinal);
+        Assert.Contains("future_gaps=\"-21|-22\"", logger.Lines[1], StringComparison.Ordinal);
+    }
+
+    // ---------- Phạm vi theo dõi ----------
+
+    [Theory]
+    [InlineData(GapSignalAction.Open, CloseSignalReason.Gap, CloseGapMode.Normal, true)]
+    [InlineData(GapSignalAction.Open, CloseSignalReason.Tp, CloseGapMode.Sos, true)]
+    [InlineData(GapSignalAction.Close, CloseSignalReason.Gap, CloseGapMode.Normal, true)]
+    [InlineData(GapSignalAction.Close, CloseSignalReason.Gap, CloseGapMode.Sos, false)]
+    [InlineData(GapSignalAction.Close, CloseSignalReason.Tp, CloseGapMode.Normal, false)]
+    [InlineData(GapSignalAction.Close, CloseSignalReason.Tp, CloseGapMode.Sos, false)]
+    public void ShouldTrack_CoversOpenAndNormalCloseOnly(
+        GapSignalAction action,
+        CloseSignalReason reason,
+        CloseGapMode mode,
+        bool expected)
+        => Assert.Equal(expected, SignalGapOutcomeTracker.ShouldTrack(action, reason, mode));
+
+    // ---------- Helpers ----------
+
+    private static SignalGapOutcomeTracker NewTracker(
+        CaptureLogger logger,
+        int futureTickCount = 50,
+        int maxConcurrentTraces = 16,
+        int staleTraceMs = 30_000,
+        int attachGraceTicks = 600)
+        => new(logger, futureTickCount, maxConcurrentTraces, staleTraceMs, attachGraceTicks);
+
+    private static SignalOutcomeTick Tick(int index, int? gapBuy = null, int? gapSell = null)
+        => new(Start.AddMilliseconds(index * 50), gapBuy, gapSell);
+
+    private static SignalOutcomeSignal OpenSignal(string signalId = "sig-1")
+        => new(
+            SignalId: signalId,
+            CycleId: "OPEN-BUY-000417",
+            SlotId: null,
+            Action: GapSignalAction.Open,
+            Side: GapSignalSide.Buy,
+            TriggerType: GapSignalTriggerType.OpenByGapBuy,
+            TriggeredAtUtc: Start,
+            Symbol: "XAUUSD|XAUUSD.s",
+            PointMultiplier: 100,
+            ABid: 2411.35m,
+            AAsk: 2411.55m,
+            BBid: 2411.95m,
+            BAsk: 2412.15m,
+            GapBuy: 40,
+            GapSell: -20,
+            SignalGaps: new[] { 38, 39, 40 },
+            ConfirmGapPts: 25,
+            OpenPts: 30,
+            CloseConfirmGapPts: 20,
+            ClosePts: 15,
+            LimitMaxGap: 120,
+            MaxGap: 80,
+            SignalCycleSize: 3);
+
+    private static SignalOutcomeSignal NormalCloseSignal(string signalId = "sig-1")
+        => OpenSignal(signalId) with
+        {
+            CycleId = "NORMAL_CLOSE-SELL-000512",
+            SlotId = 3,
+            Action = GapSignalAction.Close,
+            Side = GapSignalSide.Sell,
+            TriggerType = GapSignalTriggerType.CloseByGapSell
+        };
+
+    private sealed class CaptureLogger : ISignalOutcomeRawLogger
+    {
+        public List<string> Lines { get; } = new();
+
+        public void LogSignalOutcomeRaw(string message) => Lines.Add(message);
+    }
+}

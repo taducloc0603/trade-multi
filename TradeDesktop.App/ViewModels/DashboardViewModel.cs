@@ -51,6 +51,7 @@ public sealed class DashboardViewModel : ObservableObject
     private string _gapDiagnosticsConfigId = string.Empty;
     private readonly ITelegramNotifier _telegramNotifier;
     private readonly IHwndHealthChecker _hwndHealthChecker;
+    private readonly SignalGapOutcomeTracker _signalGapOutcomeTracker;
     private readonly string _normalizedHostName;
     private readonly CancellationTokenSource _orderInfoPollingCts = new();
     private readonly Dictionary<string, ulong> _lastTradeTimestampByMap = new(StringComparer.Ordinal);
@@ -425,7 +426,8 @@ public sealed class DashboardViewModel : ObservableObject
         IMt5ManualTradeService mt5ManualTradeService,
         ITradeSessionFileLogger tradeSessionFileLogger,
         ITelegramNotifier telegramNotifier,
-        IHwndHealthChecker hwndHealthChecker)
+        IHwndHealthChecker hwndHealthChecker,
+        SignalGapOutcomeTracker signalGapOutcomeTracker)
     {
         _serviceProvider = serviceProvider;
         _runtimeConfigState = runtimeConfigState;
@@ -453,6 +455,7 @@ public sealed class DashboardViewModel : ObservableObject
         _systemLogFlushTimer.Start();
         _telegramNotifier = telegramNotifier;
         _hwndHealthChecker = hwndHealthChecker;
+        _signalGapOutcomeTracker = signalGapOutcomeTracker;
 
         var normalizedHostName = _machineIdentityService.GetHostName();
         _normalizedHostName = normalizedHostName;
@@ -1049,6 +1052,8 @@ public sealed class DashboardViewModel : ObservableObject
         // Wipe display state on Start only — Stop giữ nguyên để xem P&L cuối session
         _sttByPairId.Clear();
         _nextStt = 1;
+        // Reset cùng nhịp với _sttByPairId: file signal-outcome mới cũng bắt đầu từ dãy STT mới.
+        _signalGapOutcomeTracker.Reset();
         _profitSnapshotByTicket.Clear();
         TradeRealtimeProfitRows.Clear();
         HistoryRealtimeProfitRows.Clear();
@@ -1098,6 +1103,8 @@ public sealed class DashboardViewModel : ObservableObject
         _lastSignalPairId = null;
         LastSignalText = "-";
         GapCycleDiagnostics.FlushSummaries(_tradeSessionFileLogger.Log);
+        // Ghi nốt các trace chưa thu đủ cửa sổ quan sát trước khi đóng file.
+        _signalGapOutcomeTracker.FlushAll("SESSION_STOP");
         _tradeSessionFileLogger.StopSession(DateTimeOffset.Now);
         return Task.CompletedTask;
     }
@@ -2042,6 +2049,9 @@ public sealed class DashboardViewModel : ObservableObject
                 var displayStt = ResolveDisplayStt(pairId, slot);
                 SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "B", "SELL", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
                 SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "A", "BUY", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                // Dùng lại displayStt đã tính ở trên: không cấp thêm số STT nào.
+                AttachSignalOutcomeStt(
+                    signalContext.SignalId.ToString("N"), pairId, displayStt, signalContext.SlotId);
                 _autoSlot++;
             });
         }
@@ -2273,6 +2283,9 @@ public sealed class DashboardViewModel : ObservableObject
                 var displayStt = ResolveDisplayStt(pairId, slot);
                 SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "B", "BUY", symbolB, priceB, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
                 SignalLogItems.Insert(0, SignalLogFormatter.FormatAutoOpen(now, displayStt, "A", "SELL", symbolA, priceA, triggerGapLabel, triggerLastGap, triggerAllGaps, spreadText));
+                // Dùng lại displayStt đã tính ở trên: không cấp thêm số STT nào.
+                AttachSignalOutcomeStt(
+                    signalContext.SignalId.ToString("N"), pairId, displayStt, signalContext.SlotId);
                 _autoSlot++;
             });
         }
@@ -6665,6 +6678,16 @@ public sealed class DashboardViewModel : ObservableObject
         return next.ToString(CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Đọc STT đã cấp cho pairId mà KHÔNG cấp mới. Dùng cho các đường CHỈ LOGGING:
+    /// <see cref="ResolveStt"/> có side effect (tăng <c>_nextStt</c>), nên gọi nó từ một
+    /// đường log có thể làm lệch thứ tự đánh số mà grid Trade/History hiển thị.
+    /// </summary>
+    private int? TryGetExistingStt(string? pairId)
+        => !string.IsNullOrWhiteSpace(pairId) && _sttByPairId.TryGetValue(pairId, out var existing)
+            ? existing
+            : null;
+
     private static string FormatOpenExecutionDebug(ulong openEaTimeLocal, long? appOpenRequestRawMs, long? openExecutionMs)
     {
         return FormatExecutionMs(openExecutionMs);
@@ -7217,6 +7240,11 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
+            // Feed gap cho các trace signal-outcome đang mở. Đặt TRƯỚC ProcessSnapshot để một
+            // trace mở tại tick T không tự đếm chính tick T — dãy future_gaps là các tick SAU
+            // signal. Chỉ logging: không đọc/ghi state của engine hay coordinator.
+            TrackSignalOutcomeTick(metrics);
+
             var openGapStability = _runtimeConfigState.CurrentOpenGapStability;
             var closeGapStability = _runtimeConfigState.CurrentCloseGapStability;
             if (openGapStability is null || closeGapStability is null)
@@ -7437,6 +7465,7 @@ public sealed class DashboardViewModel : ObservableObject
 
             // Auto-execute trade from signal trigger
             SetLastSignalStatus("DISPATCHING");
+            TrackSignalOutcomeIfNeeded(trigger, signalContext, closeTargetSlot, metrics);
             if (trigger.Action == GapSignalAction.Open)
             {
                 _ = DispatchOpenTriggerAsync(trigger);
@@ -8951,6 +8980,110 @@ public sealed class DashboardViewModel : ObservableObject
         AddSignalLog(SignalLifecycleLogFormatter.Create(eventType, description, level, fields.ToArray()));
         context.FinalOutcomeLogged = true;
         CleanupSignalContext(context);
+    }
+
+    /// <summary>
+    /// Feed gap của tick hiện tại vào các trace signal-outcome đang mở. Chỉ logging —
+    /// mọi lỗi được nuốt để không bao giờ ảnh hưởng đường quyết định giao dịch.
+    /// </summary>
+    private void TrackSignalOutcomeTick(DashboardMetrics metrics)
+    {
+        try
+        {
+            _signalGapOutcomeTracker.OnTick(
+                new SignalOutcomeTick(metrics.TimestampUtc, metrics.GapBuy, metrics.GapSell));
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[VM][WARN] Signal outcome tick failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Mở trace signal-outcome tại đúng tick signal được dispatch. CLOSE đã có pairId sẵn
+    /// nên gắn STT ngay; OPEN phải chờ <c>AttachStt</c> trong AutoBuyAsync/AutoSellAsync
+    /// vì pairId chỉ được sinh ra bên trong luồng dispatch.
+    /// </summary>
+    private void TrackSignalOutcomeIfNeeded(
+        GapSignalTriggerResult trigger,
+        SignalLifecycleContext signalContext,
+        PositionSlot? closeTargetSlot,
+        DashboardMetrics metrics)
+    {
+        try
+        {
+            if (!SignalGapOutcomeTracker.ShouldTrack(
+                    trigger.Action,
+                    trigger.CloseReason,
+                    trigger.CloseGapMode))
+            {
+                return;
+            }
+
+            var isBuy = trigger.PrimarySide == GapSignalSide.Buy;
+            var signalId = signalContext.SignalId.ToString("N");
+            _signalGapOutcomeTracker.OnSignalPending(new SignalOutcomeSignal(
+                SignalId: signalId,
+                CycleId: trigger.DiagnosticCycleId,
+                SlotId: closeTargetSlot?.SlotId,
+                Action: trigger.Action,
+                Side: trigger.PrimarySide,
+                TriggerType: trigger.TriggerType,
+                TriggeredAtUtc: trigger.TriggeredAtUtc,
+                Symbol: $"{metrics.ExchangeA.Symbol}|{metrics.ExchangeB.Symbol}",
+                PointMultiplier: trigger.PointMultiplier,
+                ABid: metrics.ExchangeA.Bid,
+                AAsk: metrics.ExchangeA.Ask,
+                BBid: metrics.ExchangeB.Bid,
+                BAsk: metrics.ExchangeB.Ask,
+                GapBuy: metrics.GapBuy,
+                GapSell: metrics.GapSell,
+                SignalGaps: isBuy ? trigger.BuyGaps : trigger.SellGaps,
+                ConfirmGapPts: _runtimeConfigState.CurrentConfirmGapPts,
+                OpenPts: _runtimeConfigState.CurrentOpenPts,
+                CloseConfirmGapPts: _runtimeConfigState.CurrentCloseConfirmGapPts,
+                ClosePts: _runtimeConfigState.CurrentClosePts,
+                LimitMaxGap: _runtimeConfigState.CurrentLimitMaxGap,
+                MaxGap: _runtimeConfigState.CurrentMaxGap,
+                SignalCycleSize: _runtimeConfigState.CurrentSignalCycleSize));
+
+            // CLOSE: slot đã tồn tại nên STT hiển thị trên UI có ngay, gắn luôn.
+            // pairId của slot là bất biến nên số này trùng với số đã ghi lúc OPEN.
+            // Dùng TryGetExistingStt (chỉ đọc): không được cấp số mới từ đường log.
+            if (closeTargetSlot is not null)
+            {
+                AttachSignalOutcomeStt(
+                    signalId,
+                    closeTargetSlot.PairId,
+                    TryGetExistingStt(closeTargetSlot.PairId));
+            }
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[VM][WARN] Signal outcome tracking failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Gắn STT (số hiển thị trên UI của lệnh) cho trace và ghi dòng <c>[SIGNAL]</c>.
+    /// Dùng đúng <see cref="ResolveDisplayStt"/> mà grid Trade/History dùng nên số trong
+    /// file log luôn khớp số trên màn hình, và OPEN/CLOSE cùng pairId cho cùng một số.
+    /// </summary>
+    private void AttachSignalOutcomeStt(string signalId, string? pairId, int? stt, int? slotId = null)
+    {
+        if (string.IsNullOrWhiteSpace(pairId))
+        {
+            return;
+        }
+
+        try
+        {
+            _signalGapOutcomeTracker.AttachStt(signalId, stt, pairId, slotId);
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[VM][WARN] Signal outcome attach failed: {ex.Message}");
+        }
     }
 
     private void LogGapStabilityGuard(
