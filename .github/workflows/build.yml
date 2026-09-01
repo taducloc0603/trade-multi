@@ -2,7 +2,7 @@ name: Build and Release Windows App
 
 on:
   push:
-    branches: [ dev, dev-5-check-ticks ]
+    branches: [ dev, dev-5-check-ticks-log-gap ]
   workflow_dispatch:
 
 permissions:
