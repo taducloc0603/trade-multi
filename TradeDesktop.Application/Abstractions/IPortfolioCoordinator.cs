@@ -154,7 +154,8 @@ public sealed record PortfolioSnapshotResult(
     GapSignalTriggerResult? OpenTrigger,
     PositionSlot? CloseTargetSlot,
     GapSignalTriggerResult? CloseTrigger,
-    IReadOnlyList<PortfolioUiNotice>? UiNotices = null)
+    IReadOnlyList<PortfolioUiNotice>? UiNotices = null,
+    IReadOnlyList<PortfolioBlockedSignal>? BlockedSignals = null)
 {
     public static PortfolioSnapshotResult Empty { get; } = new(null, null, null);
 }
@@ -163,6 +164,18 @@ public sealed record PortfolioUiNotice(
     string Code,
     int SlotId,
     string Message);
+
+/// <summary>
+/// CHỈ LOGGING. Một signal đã được engine xác nhận nhưng bị <c>ProcessSnapshot</c> vứt bỏ
+/// (quota, opposite-side lock, post-close lock, min-profit, mất quyền close), nên không bao giờ
+/// đi tiếp tới ViewModel qua đường thường. Surface ra đây để ghi được vào signal-outcome log.
+/// KHÔNG dùng cho bất kỳ quyết định giao dịch nào.
+/// </summary>
+public sealed record PortfolioBlockedSignal(
+    GapSignalTriggerResult Trigger,
+    /// <summary>Chuỗi thô của coordinator; caller chuẩn hoá thành token.</summary>
+    string BlockReason,
+    PositionSlot? CloseTargetSlot);
 
 /// <summary>
 /// Phase 7: monitoring snapshot. Caller logs periodically to track health + skip

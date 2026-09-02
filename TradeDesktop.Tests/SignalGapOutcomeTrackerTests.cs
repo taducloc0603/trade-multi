@@ -33,7 +33,7 @@ public sealed class SignalGapOutcomeTrackerTests
         tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
 
         var line = Assert.Single(logger.Lines);
-        Assert.Contains("[SIGNAL_OUTCOME][SIGNAL]", line, StringComparison.Ordinal);
+        Assert.Contains("[SIGNAL_OUTCOME][SIGNAL][EXEC]", line, StringComparison.Ordinal);
         Assert.Contains("stt=7", line, StringComparison.Ordinal);
         Assert.Contains("pair_id=AUTO-0003-8412553", line, StringComparison.Ordinal);
         Assert.Contains("gap_at_signal=40", line, StringComparison.Ordinal);
@@ -111,8 +111,12 @@ public sealed class SignalGapOutcomeTrackerTests
         Assert.Contains("captured=3/3", logger.Lines[1], StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Trace không dispatch cũng không báo chặn => ghi UNRESOLVED làm chỉ báo coverage,
+    /// thay vì bỏ im lặng (sẽ che mất gate chưa hook).
+    /// </summary>
     [Fact]
-    public void NeverAttached_DropsTraceSilently()
+    public void UnattachedTrace_AfterGrace_EmitsBlockedUnresolved()
     {
         var logger = new CaptureLogger();
         var tracker = NewTracker(logger, futureTickCount: 3, attachGraceTicks: 4);
@@ -123,11 +127,16 @@ public sealed class SignalGapOutcomeTrackerTests
             tracker.OnTick(Tick(i, gapBuy: 40 + i));
         }
 
-        Assert.Empty(logger.Lines);
+        Assert.Equal(2, logger.Lines.Count);
+        Assert.Contains("[SIGNAL_OUTCOME][SIGNAL][BLOCKED]", logger.Lines[0], StringComparison.Ordinal);
+        Assert.Contains("[SIGNAL_OUTCOME][END][BLOCKED]", logger.Lines[1], StringComparison.Ordinal);
+        Assert.All(logger.Lines, line =>
+            Assert.Contains("block_reason=UNRESOLVED", line, StringComparison.Ordinal));
+        Assert.Contains("captured=3/3", logger.Lines[1], StringComparison.Ordinal);
 
-        // Trace đã bị gỡ: attach muộn cũng không sinh dòng nào.
+        // Trace đã đóng: attach muộn cũng không sinh dòng nào.
         tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
-        Assert.Empty(logger.Lines);
+        Assert.Equal(2, logger.Lines.Count);
     }
 
     [Fact]
@@ -159,8 +168,8 @@ public sealed class SignalGapOutcomeTrackerTests
         tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
 
         Assert.Equal(2, logger.Lines.Count);
-        Assert.Contains("[SIGNAL_OUTCOME][SIGNAL]", logger.Lines[0], StringComparison.Ordinal);
-        Assert.Contains("[SIGNAL_OUTCOME][END]", logger.Lines[1], StringComparison.Ordinal);
+        Assert.Contains("[SIGNAL_OUTCOME][SIGNAL][EXEC]", logger.Lines[0], StringComparison.Ordinal);
+        Assert.Contains("[SIGNAL_OUTCOME][END][EXEC]", logger.Lines[1], StringComparison.Ordinal);
         Assert.Contains("captured=3/3", logger.Lines[1], StringComparison.Ordinal);
         Assert.Contains("future_gaps=\"41|42|43\"", logger.Lines[1], StringComparison.Ordinal);
     }
@@ -323,10 +332,10 @@ public sealed class SignalGapOutcomeTrackerTests
         tracker.OnTick(Tick(4, gapBuy: 44)); // sig-b đủ 3 tick -> END
 
         var endA = Assert.Single(logger.Lines.Where(l =>
-            l.Contains("[SIGNAL_OUTCOME][END]", StringComparison.Ordinal)
+            l.Contains("[SIGNAL_OUTCOME][END][EXEC]", StringComparison.Ordinal)
             && l.Contains("signal_id=sig-a", StringComparison.Ordinal)));
         var endB = Assert.Single(logger.Lines.Where(l =>
-            l.Contains("[SIGNAL_OUTCOME][END]", StringComparison.Ordinal)
+            l.Contains("[SIGNAL_OUTCOME][END][EXEC]", StringComparison.Ordinal)
             && l.Contains("signal_id=sig-b", StringComparison.Ordinal)));
 
         Assert.Contains("stt=1", endA, StringComparison.Ordinal);
@@ -354,7 +363,7 @@ public sealed class SignalGapOutcomeTrackerTests
         tracker.OnTick(Tick(5, gapBuy: 45));
 
         var ends = logger.Lines
-            .Where(l => l.Contains("[SIGNAL_OUTCOME][END]", StringComparison.Ordinal))
+            .Where(l => l.Contains("[SIGNAL_OUTCOME][END][EXEC]", StringComparison.Ordinal))
             .ToList();
         Assert.Equal(3, ends.Count);
         Assert.All(ends, line => Assert.Contains("captured=2/2", line, StringComparison.Ordinal));
@@ -410,6 +419,235 @@ public sealed class SignalGapOutcomeTrackerTests
         Assert.Empty(logger.Lines);
     }
 
+    // ---------- Signal bị chặn ----------
+
+    [Fact]
+    public void MarkBlocked_WritesSignalLineWithBlockedTagAndReason()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.MarkBlocked("sig-1", "POST_CLOSE_LOCK");
+
+        var line = Assert.Single(logger.Lines);
+        Assert.Contains("[SIGNAL_OUTCOME][SIGNAL][BLOCKED]", line, StringComparison.Ordinal);
+        Assert.Contains("block_reason=POST_CLOSE_LOCK", line, StringComparison.Ordinal);
+        Assert.Contains("stt=-", line, StringComparison.Ordinal);
+        Assert.Contains("signal_gaps=\"38|39|40\"", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MarkBlocked_ThenTicks_WritesEndBlockedWithFullFutureGaps()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 3);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.MarkBlocked("sig-1", "POST_CLOSE_LOCK");
+        tracker.OnTick(Tick(1, gapBuy: 41));
+        tracker.OnTick(Tick(2, gapBuy: 42));
+        tracker.OnTick(Tick(3, gapBuy: 43));
+
+        Assert.Equal(2, logger.Lines.Count);
+        Assert.Contains("[SIGNAL_OUTCOME][END][BLOCKED]", logger.Lines[1], StringComparison.Ordinal);
+        Assert.Contains("block_reason=POST_CLOSE_LOCK", logger.Lines[1], StringComparison.Ordinal);
+        Assert.Contains("captured=3/3", logger.Lines[1], StringComparison.Ordinal);
+        Assert.Contains("future_gaps=\"41|42|43\"", logger.Lines[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MarkBlocked_SameReasonStreak_OnlyFirstLogged()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        for (var i = 1; i <= 5; i++)
+        {
+            tracker.OnSignalPending(OpenSignal(signalId: $"sig-{i}"));
+            tracker.MarkBlocked($"sig-{i}", "POST_CLOSE_LOCK");
+        }
+
+        var signalLines = logger.Lines
+            .Where(l => l.Contains("[SIGNAL_OUTCOME][SIGNAL][BLOCKED]", StringComparison.Ordinal))
+            .ToList();
+        Assert.Single(signalLines);
+        Assert.Contains("signal_id=sig-1", signalLines[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BlockStreak_ClosedByIdle_EmitsSummaryWithCounts()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50, blockStreakIdleMs: 1);
+
+        for (var i = 1; i <= 5; i++)
+        {
+            tracker.OnSignalPending(OpenSignal(signalId: $"sig-{i}"));
+            tracker.MarkBlocked($"sig-{i}", "POST_CLOSE_LOCK");
+        }
+
+        Thread.Sleep(20);
+        tracker.OnTick(Tick(1, gapBuy: 41));
+
+        var summary = Assert.Single(logger.Lines.Where(l =>
+            l.Contains("[SIGNAL_OUTCOME][BLOCK_STREAK]", StringComparison.Ordinal)));
+        Assert.Contains("block_reason=POST_CLOSE_LOCK", summary, StringComparison.Ordinal);
+        Assert.Contains("blocked_count=5", summary, StringComparison.Ordinal);
+        Assert.Contains("suppressed_count=4", summary, StringComparison.Ordinal);
+        Assert.Contains("logged_signal_id=sig-1", summary, StringComparison.Ordinal);
+        Assert.Contains("last_signal_id=sig-5", summary, StringComparison.Ordinal);
+        Assert.Contains("closed_by=IDLE", summary, StringComparison.Ordinal);
+        Assert.Contains("action=OPEN side=BUY", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BlockStreak_ClosedByExecOnSameActionSide()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-blocked"));
+        tracker.MarkBlocked("sig-blocked", "POST_CLOSE_LOCK");
+
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-exec"));
+        tracker.AttachStt("sig-exec", 7, "AUTO-0003-8412553");
+
+        var summary = Assert.Single(logger.Lines.Where(l =>
+            l.Contains("[SIGNAL_OUTCOME][BLOCK_STREAK]", StringComparison.Ordinal)));
+        Assert.Contains("closed_by=EXEC", summary, StringComparison.Ordinal);
+        Assert.Contains("blocked_count=1", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BlockStreak_ExecOnDifferentSide_DoesNotCloseStreak()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-blocked"));
+        tracker.MarkBlocked("sig-blocked", "POST_CLOSE_LOCK");
+
+        // Close vị thế Buy => Action khác OPEN, không đóng streak của OPEN/BUY.
+        tracker.OnSignalPending(NormalCloseSignal(signalId: "sig-exec"));
+        tracker.AttachStt("sig-exec", 4, "AUTO-0001-8399102");
+
+        Assert.DoesNotContain(logger.Lines, l =>
+            l.Contains("[SIGNAL_OUTCOME][BLOCK_STREAK]", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BlockStreak_DifferentReason_OpensSecondStreak()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-1"));
+        tracker.MarkBlocked("sig-1", "POST_CLOSE_LOCK");
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-2"));
+        tracker.MarkBlocked("sig-2", "QUOTA_BUY_FULL");
+
+        var signalLines = logger.Lines
+            .Where(l => l.Contains("[SIGNAL_OUTCOME][SIGNAL][BLOCKED]", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(2, signalLines.Count);
+        Assert.Contains("block_reason=POST_CLOSE_LOCK", signalLines[0], StringComparison.Ordinal);
+        Assert.Contains("block_reason=QUOTA_BUY_FULL", signalLines[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MarkBlocked_AfterAttachStt_IsIgnored()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.AttachStt("sig-1", 7, "AUTO-0003-8412553");
+        tracker.MarkBlocked("sig-1", "POST_CLOSE_LOCK");
+
+        var line = Assert.Single(logger.Lines);
+        Assert.Contains("[SIGNAL_OUTCOME][SIGNAL][EXEC]", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("block_reason=", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MarkBlocked_UnknownSignalId_IsNoOp()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        tracker.MarkBlocked("khong-ton-tai", "POST_CLOSE_LOCK");
+
+        Assert.Empty(logger.Lines);
+    }
+
+    [Fact]
+    public void MarkBlocked_Twice_SameSignal_IsIdempotent()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.MarkBlocked("sig-1", "POST_CLOSE_LOCK");
+        tracker.MarkBlocked("sig-1", "QUOTA_BUY_FULL");
+
+        var line = Assert.Single(logger.Lines);
+        Assert.Contains("block_reason=POST_CLOSE_LOCK", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FlushAll_EmitsPendingStreakSummaries()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-1"));
+        tracker.MarkBlocked("sig-1", "POST_CLOSE_LOCK");
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-2"));
+        tracker.MarkBlocked("sig-2", "POST_CLOSE_LOCK");
+
+        tracker.FlushAll("SESSION_STOP");
+
+        var summary = Assert.Single(logger.Lines.Where(l =>
+            l.Contains("[SIGNAL_OUTCOME][BLOCK_STREAK]", StringComparison.Ordinal)));
+        Assert.Contains("closed_by=FLUSH", summary, StringComparison.Ordinal);
+        Assert.Contains("blocked_count=2", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Reset_ClearsStreaksWithoutEmitting()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50);
+
+        tracker.OnSignalPending(OpenSignal());
+        tracker.MarkBlocked("sig-1", "POST_CLOSE_LOCK");
+        logger.Lines.Clear();
+
+        tracker.Reset();
+        tracker.OnTick(Tick(1, gapBuy: 41));
+
+        Assert.Empty(logger.Lines);
+    }
+
+    [Fact]
+    public void StreakCap_EvictsOldest_EmitsEvictedSummary()
+    {
+        var logger = new CaptureLogger();
+        var tracker = NewTracker(logger, futureTickCount: 50, maxConcurrentStreaks: 2);
+
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-1"));
+        tracker.MarkBlocked("sig-1", "REASON_A");
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-2"));
+        tracker.MarkBlocked("sig-2", "REASON_B");
+        tracker.OnSignalPending(OpenSignal(signalId: "sig-3"));
+        tracker.MarkBlocked("sig-3", "REASON_C");
+
+        var evicted = Assert.Single(logger.Lines.Where(l =>
+            l.Contains("closed_by=EVICTED", StringComparison.Ordinal)));
+        Assert.Contains("block_reason=REASON_A", evicted, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Reset_DropsOpenTracesWithoutEmitting()
     {
@@ -439,7 +677,7 @@ public sealed class SignalGapOutcomeTrackerTests
         tracker.OnTick(Tick(1, gapBuy: 41));
 
         var end = Assert.Single(logger.Lines.Where(l =>
-            l.Contains("[SIGNAL_OUTCOME][END]", StringComparison.Ordinal)));
+            l.Contains("[SIGNAL_OUTCOME][END][EXEC]", StringComparison.Ordinal)));
         Assert.Contains("status=STALE", end, StringComparison.Ordinal);
     }
 
@@ -513,8 +751,17 @@ public sealed class SignalGapOutcomeTrackerTests
         int futureTickCount = 50,
         int maxConcurrentTraces = 16,
         int staleTraceMs = 30_000,
-        int attachGraceTicks = 600)
-        => new(logger, futureTickCount, maxConcurrentTraces, staleTraceMs, attachGraceTicks);
+        int attachGraceTicks = 600,
+        int blockStreakIdleMs = 3_000,
+        int maxConcurrentStreaks = 16)
+        => new(
+            logger,
+            futureTickCount,
+            maxConcurrentTraces,
+            staleTraceMs,
+            attachGraceTicks,
+            blockStreakIdleMs,
+            maxConcurrentStreaks);
 
     private static SignalOutcomeTick Tick(int index, int? gapBuy = null, int? gapSell = null)
         => new(Start.AddMilliseconds(index * 50), gapBuy, gapSell);

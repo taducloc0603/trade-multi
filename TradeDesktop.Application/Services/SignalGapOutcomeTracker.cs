@@ -62,31 +62,45 @@ public sealed class SignalGapOutcomeTracker
 {
     private const string SignalEvent = "SIGNAL";
     private const string EndEvent = "END";
+    private const string ExecTag = "EXEC";
+    private const string BlockedTag = "BLOCKED";
+
+    /// <summary>Lý do gán cho trace không được dispatch cũng không được báo chặn — xem <see cref="OnTick"/>.</summary>
+    public const string UnresolvedBlockReason = "UNRESOLVED";
 
     private readonly ISignalOutcomeRawLogger _logger;
     private readonly int _futureTickCount;
     private readonly int _maxConcurrentTraces;
     private readonly int _staleTraceMs;
     private readonly int _attachGraceTicks;
+    private readonly int _blockStreakIdleMs;
+    private readonly int _maxConcurrentStreaks;
     private readonly List<Trace> _traces = new();
+    private readonly Dictionary<(GapSignalAction Action, GapSignalSide Side, string Reason), BlockStreak> _streaks = new();
 
     public SignalGapOutcomeTracker(
         ISignalOutcomeRawLogger logger,
         int futureTickCount = 50,
-        int maxConcurrentTraces = 16,
+        // Mở trace cho cả signal bị chặn nên cần biên rộng hơn: cap quá thấp sẽ evict nhầm
+        // một trace EXEC đang thu dở (eviction ghi [END] status=EVICTED, tức cắt cụt dữ liệu thật).
+        int maxConcurrentTraces = 32,
         int staleTraceMs = 30_000,
         // ~30s ở nhịp tick 50ms. Phải rộng hơn NHIỀU so với cửa sổ 50 tick: đường dispatch
         // có thể chờ physical mutex không giới hạn, cộng DelayMs mỗi leg và thời gian click
         // native. Grace quá ngắn sẽ vứt bỏ bản ghi của một lệnh vào thật.
         // Cửa sổ chờ attach thực tế = min(attachGraceTicks nhịp tick, staleTraceMs đồng hồ),
         // tức ~30s ở cả hai đầu với giá trị mặc định.
-        int attachGraceTicks = 600)
+        int attachGraceTicks = 600,
+        int blockStreakIdleMs = 3_000,
+        int maxConcurrentStreaks = 16)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _futureTickCount = Math.Max(1, futureTickCount);
         _maxConcurrentTraces = Math.Max(1, maxConcurrentTraces);
         _staleTraceMs = Math.Max(0, staleTraceMs);
         _attachGraceTicks = Math.Max(1, attachGraceTicks);
+        _blockStreakIdleMs = Math.Max(0, blockStreakIdleMs);
+        _maxConcurrentStreaks = Math.Max(1, maxConcurrentStreaks);
     }
 
     /// <summary>
@@ -169,6 +183,9 @@ public sealed class SignalGapOutcomeTracker
             trace.SignalLineWritten = true;
             _logger.LogSignalOutcomeRaw(FormatSignalLine(trace));
 
+            // Có lệnh vào thật cùng chiều => đợt bị chặn trước đó đã kết thúc.
+            CloseStreaksFor(trace.Signal.Action, trace.Signal.Side, "EXEC");
+
             // Dispatch chậm hơn cả cửa sổ quan sát: dữ liệu đã đủ, ghi luôn dòng END.
             if (trace.Count >= _futureTickCount)
             {
@@ -181,10 +198,101 @@ public sealed class SignalGapOutcomeTracker
     }
 
     /// <summary>
+    /// Đánh dấu một signal đã bị chặn, không vào lệnh. Ghi dòng <c>[SIGNAL][BLOCKED]</c> cho
+    /// signal ĐẦU TIÊN của mỗi đợt; các signal sau cùng lý do được gộp vào streak và không ghi
+    /// dòng nào — chống ngập file khi một lý do chặn kéo dài (engine reset cycle ngay khi phát
+    /// trigger nên signal có thể tái phát mỗi vài trăm ms).
+    /// No-op nếu signal chưa từng được track, hoặc đã ghi dòng <c>[SIGNAL]</c> rồi (EXEC luôn thắng).
+    /// </summary>
+    public void MarkBlocked(
+        string signalId,
+        string blockReason,
+        int? stt = null,
+        string? pairId = null,
+        int? slotId = null)
+    {
+        if (string.IsNullOrWhiteSpace(signalId))
+        {
+            return;
+        }
+
+        for (var i = 0; i < _traces.Count; i++)
+        {
+            var trace = _traces[i];
+            if (!string.Equals(trace.Signal.SignalId, signalId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // Đã dispatch (hoặc đã ghi BLOCKED) => giữ nguyên, không ghi đè nhãn.
+            if (trace.SignalLineWritten)
+            {
+                return;
+            }
+
+            MarkBlockedAt(i, trace, blockReason, stt, pairId, slotId);
+            return;
+        }
+    }
+
+    private void MarkBlockedAt(
+        int index,
+        Trace trace,
+        string blockReason,
+        int? stt,
+        string? pairId,
+        int? slotId)
+    {
+        var reason = string.IsNullOrWhiteSpace(blockReason) ? "UNKNOWN" : blockReason.Trim();
+        var key = (trace.Signal.Action, trace.Signal.Side, reason);
+        var nowUtc = DateTime.UtcNow;
+
+        if (_streaks.TryGetValue(key, out var streak))
+        {
+            // Đợt đang chạy: gộp, không ghi dòng nào.
+            streak.Count++;
+            streak.LastAtUtc = nowUtc;
+            streak.LastSignalId = trace.Signal.SignalId;
+            _traces.RemoveAt(index);
+            return;
+        }
+
+        if (_streaks.Count >= _maxConcurrentStreaks)
+        {
+            EvictOldestStreak();
+        }
+
+        _streaks[key] = new BlockStreak(trace.Signal.SignalId, nowUtc);
+
+        trace.BlockReason = reason;
+        trace.Stt = stt;
+        trace.PairId = pairId;
+        trace.SlotIdOverride = slotId;
+        trace.SignalLineWritten = true;
+        _logger.LogSignalOutcomeRaw(FormatSignalLine(trace));
+
+        // Bị chặn muộn hơn cả cửa sổ quan sát: dữ liệu đã đủ, ghi luôn dòng END.
+        if (trace.Count >= _futureTickCount)
+        {
+            EmitEndLine(trace, "COMPLETED");
+            _traces.RemoveAt(index);
+        }
+    }
+
+    /// <summary>
     /// Feed một tick vào mọi trace đang mở. O(số trace), không allocation.
     /// </summary>
     public void OnTick(in SignalOutcomeTick tick)
     {
+        // Phải kiểm cả _streaks: streak cuối của một đợt chỉ được flush từ đây, kể cả khi
+        // không còn trace nào đang mở.
+        if (_traces.Count == 0 && _streaks.Count == 0)
+        {
+            return;
+        }
+
+        CloseIdleStreaks();
+
         if (_traces.Count == 0)
         {
             return;
@@ -197,10 +305,13 @@ public sealed class SignalGapOutcomeTracker
             var trace = _traces[i];
             trace.TicksSinceOpen++;
 
-            // Chưa attach quá lâu => signal đã bị chặn ở gate phía sau, bỏ im lặng.
+            // Hết grace mà không dispatch cũng không báo chặn => có gate chưa hook. Ghi
+            // block_reason=UNRESOLVED (qua streak nên không ngập) làm chỉ báo coverage:
+            // file sạch UNRESOLVED nghĩa là mọi gate đã được bắt.
+            // Check này phải nằm TRƯỚC check stale, nếu không STALE sẽ nuốt mất UNRESOLVED.
             if (!trace.SignalLineWritten && trace.TicksSinceOpen > _attachGraceTicks)
             {
-                _traces.RemoveAt(i);
+                MarkBlockedAt(i, trace, UnresolvedBlockReason, stt: null, pairId: null, slotId: null);
                 continue;
             }
 
@@ -247,10 +358,129 @@ public sealed class SignalGapOutcomeTracker
         {
             EmitAndRemoveAt(i, status);
         }
+
+        CloseAllStreaks("FLUSH");
     }
 
-    /// <summary>Xoá mọi trace đang mở, không ghi gì. Dùng khi bắt đầu session mới.</summary>
-    public void Reset() => _traces.Clear();
+    /// <summary>Xoá mọi trace và streak đang mở, không ghi gì. Dùng khi bắt đầu session mới.</summary>
+    public void Reset()
+    {
+        _traces.Clear();
+        _streaks.Clear();
+    }
+
+    private void CloseIdleStreaks()
+    {
+        if (_streaks.Count == 0)
+        {
+            return;
+        }
+
+        var nowUtc = DateTime.UtcNow;
+        List<(GapSignalAction, GapSignalSide, string)>? expired = null;
+
+        foreach (var pair in _streaks)
+        {
+            if ((nowUtc - pair.Value.LastAtUtc).TotalMilliseconds > _blockStreakIdleMs)
+            {
+                (expired ??= new(2)).Add(pair.Key);
+            }
+        }
+
+        if (expired is null)
+        {
+            return;
+        }
+
+        foreach (var key in expired)
+        {
+            EmitStreakSummary(key, _streaks[key], "IDLE");
+            _streaks.Remove(key);
+        }
+    }
+
+    private void CloseStreaksFor(GapSignalAction action, GapSignalSide side, string closedBy)
+    {
+        if (_streaks.Count == 0)
+        {
+            return;
+        }
+
+        List<(GapSignalAction, GapSignalSide, string)>? matched = null;
+
+        foreach (var pair in _streaks)
+        {
+            if (pair.Key.Action == action && pair.Key.Side == side)
+            {
+                (matched ??= new(2)).Add(pair.Key);
+            }
+        }
+
+        if (matched is null)
+        {
+            return;
+        }
+
+        foreach (var key in matched)
+        {
+            EmitStreakSummary(key, _streaks[key], closedBy);
+            _streaks.Remove(key);
+        }
+    }
+
+    private void CloseAllStreaks(string closedBy)
+    {
+        if (_streaks.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var pair in _streaks)
+        {
+            EmitStreakSummary(pair.Key, pair.Value, closedBy);
+        }
+
+        _streaks.Clear();
+    }
+
+    private void EvictOldestStreak()
+    {
+        (GapSignalAction, GapSignalSide, string)? oldestKey = null;
+        var oldestAt = DateTime.MaxValue;
+
+        foreach (var pair in _streaks)
+        {
+            if (pair.Value.LastAtUtc < oldestAt)
+            {
+                oldestAt = pair.Value.LastAtUtc;
+                oldestKey = pair.Key;
+            }
+        }
+
+        if (oldestKey is null)
+        {
+            return;
+        }
+
+        EmitStreakSummary(oldestKey.Value, _streaks[oldestKey.Value], "EVICTED");
+        _streaks.Remove(oldestKey.Value);
+    }
+
+    private void EmitStreakSummary(
+        (GapSignalAction Action, GapSignalSide Side, string Reason) key,
+        BlockStreak streak,
+        string closedBy)
+    {
+        var durationMs = (int)Math.Max(0, (streak.LastAtUtc - streak.FirstAtUtc).TotalMilliseconds);
+        _logger.LogSignalOutcomeRaw(
+            "[SIGNAL_OUTCOME][BLOCK_STREAK] " +
+            $"action={ActionText(key.Action)} side={SideText(key.Side)} " +
+            $"block_reason={Text(key.Reason)} " +
+            $"blocked_count={Value(streak.Count)} suppressed_count={Value(streak.Count - 1)} " +
+            $"logged_signal_id={Text(streak.FirstSignalId)} last_signal_id={Text(streak.LastSignalId)} " +
+            $"first_at={Timestamp(streak.FirstAtUtc)} last_at={Timestamp(streak.LastAtUtc)} " +
+            $"duration_ms={Value(durationMs)} closed_by={Text(closedBy)}");
+    }
 
     private void EmitAndRemoveAt(int index, string status)
     {
@@ -269,8 +499,9 @@ public sealed class SignalGapOutcomeTracker
     {
         var s = trace.Signal;
         var sb = new StringBuilder(512);
-        sb.Append("[SIGNAL_OUTCOME][").Append(SignalEvent).Append("] ");
+        sb.Append("[SIGNAL_OUTCOME][").Append(SignalEvent).Append("][").Append(OutcomeTag(trace)).Append("] ");
         AppendIdentity(sb, trace);
+        AppendBlockReason(sb, trace);
         sb.Append("trigger_type=").Append(s.TriggerType)
           .Append(" triggered_at=").Append(Timestamp(s.TriggeredAtUtc))
           .Append(" symbol=\"").Append(Escape(Text(s.Symbol))).Append('"')
@@ -300,8 +531,9 @@ public sealed class SignalGapOutcomeTracker
     {
         var s = trace.Signal;
         var sb = new StringBuilder(768);
-        sb.Append("[SIGNAL_OUTCOME][").Append(EndEvent).Append("] ");
+        sb.Append("[SIGNAL_OUTCOME][").Append(EndEvent).Append("][").Append(OutcomeTag(trace)).Append("] ");
         AppendIdentity(sb, trace);
+        AppendBlockReason(sb, trace);
         sb.Append("track_gap=").Append(trace.TrackBuy ? "BUY" : "SELL")
           .Append(" status=").Append(Text(status))
           .Append(" captured=").Append(Value(trace.Count)).Append('/').Append(Value(_futureTickCount))
@@ -322,6 +554,28 @@ public sealed class SignalGapOutcomeTracker
     /// Phần định danh chung của cả 2 dòng: <c>stt</c> là ĐÚNG số STT hiển thị trên UI
     /// của lệnh (cùng nguồn <c>ResolveStt</c> theo pairId), nên tra ngược log ↔ grid khớp.
     /// </summary>
+    /// <summary>
+    /// Nhãn phân biệt ở đầu dòng: EXEC = lệnh đã được gửi tới sàn, BLOCKED = signal bị chặn.
+    /// </summary>
+    private static string OutcomeTag(Trace trace) => trace.BlockReason is null ? ExecTag : BlockedTag;
+
+    /// <summary>
+    /// <c>block_reason</c> CHỈ xuất hiện ở dòng BLOCKED, nên parser cũ đọc dòng EXEC không gặp field lạ.
+    /// </summary>
+    private static void AppendBlockReason(StringBuilder sb, Trace trace)
+    {
+        if (trace.BlockReason is not null)
+        {
+            sb.Append("block_reason=").Append(Text(trace.BlockReason)).Append(' ');
+        }
+    }
+
+    private static string ActionText(GapSignalAction action)
+        => action == GapSignalAction.Open ? "OPEN" : "CLOSE";
+
+    private static string SideText(GapSignalSide side)
+        => side == GapSignalSide.Buy ? "BUY" : "SELL";
+
     private static void AppendIdentity(StringBuilder sb, Trace trace)
     {
         var s = trace.Signal;
@@ -330,8 +584,8 @@ public sealed class SignalGapOutcomeTracker
           .Append(" signal_id=").Append(Text(s.SignalId))
           .Append(" cycle_id=").Append(Text(s.CycleId))
           .Append(" slot_id=").Append(Value(trace.SlotIdOverride ?? s.SlotId))
-          .Append(" action=").Append(s.Action == GapSignalAction.Open ? "OPEN" : "CLOSE")
-          .Append(" side=").Append(s.Side == GapSignalSide.Buy ? "BUY" : "SELL")
+          .Append(" action=").Append(ActionText(s.Action))
+          .Append(" side=").Append(SideText(s.Side))
           .Append(' ');
     }
 
@@ -386,11 +640,38 @@ public sealed class SignalGapOutcomeTracker
         public int? Stt { get; set; }
         public string? PairId { get; set; }
         public int? SlotIdOverride { get; set; }
+
+        /// <summary>null = signal đã vào lệnh (EXEC). Non-null = bị chặn, giá trị là lý do.</summary>
+        public string? BlockReason { get; set; }
         public bool SignalLineWritten { get; set; }
         public int Count { get; set; }
         public int SkippedNullTicks { get; set; }
         public int TicksSinceOpen { get; set; }
         public DateTime? FirstTickUtc { get; set; }
         public DateTime? LastTickUtc { get; set; }
+    }
+
+    /// <summary>
+    /// Một đợt signal bị chặn liên tiếp cùng (action, side, lý do). Signal đầu đợt được ghi đầy đủ
+    /// 2 dòng; các signal sau chỉ tăng <see cref="Count"/> và được tổng kết bằng một dòng
+    /// <c>[BLOCK_STREAK]</c> khi đợt kết thúc.
+    /// </summary>
+    private sealed class BlockStreak
+    {
+        public BlockStreak(string firstSignalId, DateTime firstAtUtc)
+        {
+            FirstSignalId = firstSignalId;
+            LastSignalId = firstSignalId;
+            FirstAtUtc = firstAtUtc;
+            LastAtUtc = firstAtUtc;
+            Count = 1;
+        }
+
+        public string FirstSignalId { get; }
+        public DateTime FirstAtUtc { get; }
+
+        public string LastSignalId { get; set; }
+        public DateTime LastAtUtc { get; set; }
+        public int Count { get; set; }
     }
 }

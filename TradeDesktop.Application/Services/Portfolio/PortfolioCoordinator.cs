@@ -211,6 +211,9 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var maxLifeTimeSec = _state.MaxLifeTimeBySecond;
         var eligibleCloses = new List<(PositionSlot slot, GapSignalTriggerResult trigger)>();
         var uiNotices = new List<PortfolioUiNotice>();
+        // CHỈ LOGGING: gom các signal đã xác nhận nhưng bị vứt bỏ bên dưới, để caller ghi được
+        // vào signal-outcome log. Lazy nên tick không có block nào thì không allocate.
+        List<PortfolioBlockedSignal>? blockedSignals = null;
         foreach (var slot in _state.GetLiveSlots())
         {
             if (slot.IsCloseExecutionPending) continue;
@@ -307,6 +310,10 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                             maxLifeTimeSec)));
                     _lastMinProfitStatusBySlot[slot.SlotId] = "BLOCK";
                 }
+                // Đặt NGOÀI khối throttle ở trên: tracker tự gộp theo lý do chặn, không mượn
+                // throttle của log MIN_PROFIT.
+                (blockedSignals ??= new(2)).Add(
+                    new PortfolioBlockedSignal(closeTrigger, "MIN_PROFIT_NOT_REACHED", slot));
                 continue;
             }
 
@@ -388,7 +395,11 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             }
             if (!claimed)
             {
-                return PortfolioSnapshotResult.Empty;
+                (blockedSignals ??= new(1)).Add(
+                    new PortfolioBlockedSignal(winner.trigger, "CLOSE_CLAIM_LOST", winner.slot));
+                // GIỮ NGUYÊN hành vi cũ: đường này vốn trả Empty, tức KHÔNG mang uiNotices ra
+                // ngoài. Truyền null cho UiNotices — không được "sửa cho đẹp" thành uiNotices.
+                return new PortfolioSnapshotResult(null, null, null, null, blockedSignals);
             }
 
             if (globalCooldownActive)
@@ -417,15 +428,16 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 OpenTrigger: null,
                 CloseTargetSlot: winner.slot,
                 CloseTrigger: winner.trigger,
-                UiNotices: uiNotices);
+                UiNotices: uiNotices,
+                BlockedSignals: blockedSignals);
         }
 
         // 4. Global cooldown vẫn chặn toàn bộ Open và close thường.
         if (globalCooldownActive)
         {
-            return uiNotices.Count == 0
+            return uiNotices.Count == 0 && blockedSignals is null
                 ? PortfolioSnapshotResult.Empty
-                : new PortfolioSnapshotResult(null, null, null, uiNotices);
+                : new PortfolioSnapshotResult(null, null, null, uiNotices, blockedSignals);
         }
 
         // OPEN path: only when no close is eligible and quota allows.
@@ -443,6 +455,10 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 if (!CanOpenNewSlot(side, out var blockReason))
                 {
                     LogOpenSkipThrottled(side, blockReason, effectiveNow);
+                    // blockReason là chuỗi tự do; caller chuẩn hoá thành token, không map ở đây
+                    // để tránh nhân đôi logic với ResolveCoordinatorBlockReasonCode.
+                    (blockedSignals ??= new(2)).Add(
+                        new PortfolioBlockedSignal(trigger, blockReason, null));
                     continue;
                 }
 
@@ -450,13 +466,14 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                     OpenTrigger: trigger,
                     CloseTargetSlot: null,
                     CloseTrigger: null,
-                    UiNotices: uiNotices);
+                    UiNotices: uiNotices,
+                    BlockedSignals: blockedSignals);
             }
         }
 
-        return uiNotices.Count == 0
+        return uiNotices.Count == 0 && blockedSignals is null
             ? PortfolioSnapshotResult.Empty
-            : new PortfolioSnapshotResult(null, null, null, uiNotices);
+            : new PortfolioSnapshotResult(null, null, null, uiNotices, blockedSignals);
     }
 
     // ===== Slot lifecycle =====

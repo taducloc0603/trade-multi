@@ -7309,6 +7309,10 @@ public sealed class DashboardViewModel : ObservableObject
                 }
             }
 
+            // Signal bị coordinator vứt bỏ (quota, opposite lock, post-close lock, min-profit):
+            // không bao giờ đi tiếp qua đường dưới nên phải ghi log ngay tại đây.
+            TrackBlockedSignalsFromCoordinator(portfolioResult, metrics);
+
             // Reduce the snapshot result to a single trigger for the legacy guard code path below.
             // For close trigger, also capture the target slot (Phase 1 cap=1: at most 1 slot).
             var trigger = portfolioResult.OpenTrigger ?? portfolioResult.CloseTrigger;
@@ -7347,6 +7351,10 @@ public sealed class DashboardViewModel : ObservableObject
                 _signalContextByPairId[closeTargetSlot.PairId] = signalContext;
                 _closeSignalContextBySlot[closeTargetSlot.SlotId] = signalContext;
             }
+            // Mở trace TRƯỚC guard/qualifying để bắt được cả signal bị các gate đó chặn.
+            // Vẫn cùng tick T như ProcessSnapshot (cả khối nằm trong một Dispatcher.Invoke)
+            // nên mốc future_gaps không đổi so với khi đặt ở điểm dispatch.
+            TrackSignalOutcomeIfNeeded(trigger, signalContext, closeTargetSlot, metrics);
             LogSignalDetected(trigger);
             if (!guardResult.CanTrade)
             {
@@ -7473,7 +7481,6 @@ public sealed class DashboardViewModel : ObservableObject
 
             // Auto-execute trade from signal trigger
             SetLastSignalStatus("DISPATCHING");
-            TrackSignalOutcomeIfNeeded(trigger, signalContext, closeTargetSlot, metrics);
             if (trigger.Action == GapSignalAction.Open)
             {
                 _ = DispatchOpenTriggerAsync(trigger);
@@ -8896,6 +8903,21 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
+        // Điểm tập trung duy nhất cho mọi block mà ViewModel nhìn thấy (guard, qualifying,
+        // watchdog, in-flight lock, trade gate, connection...). Guard FinalOutcomeLogged ở trên
+        // đảm bảo chạy đúng một lần mỗi signal.
+        // CHỈ "BLOCKED"/"CANCELLED". KHÔNG được thêm "FAILED": trong AutoBuyAsync,
+        // LogSignalOutcome(FAILED, EXECUTION_FAILED) chạy TRƯỚC Dispatcher.Invoke chứa
+        // AttachSignalOutcomeStt, nên hook FAILED sẽ gắn nhãn BLOCKED cho lệnh đã gửi tới sàn.
+        if (outcome is "BLOCKED" or "CANCELLED")
+        {
+            MarkSignalOutcomeBlocked(
+                context.SignalId.ToString("N"),
+                reasonCode,
+                pairId ?? context.PairId,
+                slotId ?? context.SlotId);
+        }
+
         var prefix = context.Action == GapSignalAction.Close
             ? "SIGNAL_CLOSE"
             : context.IsHedge ? "SIGNAL_HEDGE" : "SIGNAL_OPEN";
@@ -9008,14 +9030,31 @@ public sealed class DashboardViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Mở trace signal-outcome tại đúng tick signal được dispatch. CLOSE đã có pairId sẵn
-    /// nên gắn STT ngay; OPEN phải chờ <c>AttachStt</c> trong AutoBuyAsync/AutoSellAsync
-    /// vì pairId chỉ được sinh ra bên trong luồng dispatch.
+    /// Mở trace signal-outcome tại đúng tick signal. Đặt SỚM (ngay khi signal được xác nhận,
+    /// trước mọi guard) để bắt được cả signal bị chặn; nhãn EXEC/BLOCKED được quyết định sau
+    /// bởi <see cref="AttachSignalOutcomeStt"/> hoặc <see cref="MarkSignalOutcomeBlocked"/>.
     /// </summary>
     private void TrackSignalOutcomeIfNeeded(
         GapSignalTriggerResult trigger,
         SignalLifecycleContext signalContext,
         PositionSlot? closeTargetSlot,
+        DashboardMetrics metrics)
+        => OpenSignalOutcomeTrace(
+            signalContext.SignalId.ToString("N"),
+            trigger,
+            closeTargetSlot?.SlotId,
+            metrics);
+
+    /// <summary>
+    /// Mở trace cho một signal. Chưa ghi gì ra file — chờ EXEC (dispatch thật) hoặc BLOCKED.
+    /// Tách riêng khỏi <see cref="TrackSignalOutcomeIfNeeded"/> vì signal bị chặn trong
+    /// <c>PortfolioCoordinator</c> không có <c>SignalLifecycleContext</c>, phải dùng thẳng
+    /// <c>trigger.DiagnosticSignalId</c>.
+    /// </summary>
+    private void OpenSignalOutcomeTrace(
+        string signalId,
+        GapSignalTriggerResult trigger,
+        int? slotId,
         DashboardMetrics metrics)
     {
         try
@@ -9032,11 +9071,10 @@ public sealed class DashboardViewModel : ObservableObject
             // PrimarySide là chiều vị thế đang đóng, còn engine điền gap list theo chiều gap
             // đã kích hoạt close (Buy position đóng bằng GapSell -> gaps nằm ở SellGaps).
             var isBuy = SignalGapOutcomeTracker.TracksBuyGap(trigger.TriggerType);
-            var signalId = signalContext.SignalId.ToString("N");
             _signalGapOutcomeTracker.OnSignalPending(new SignalOutcomeSignal(
                 SignalId: signalId,
                 CycleId: trigger.DiagnosticCycleId,
-                SlotId: closeTargetSlot?.SlotId,
+                SlotId: slotId,
                 Action: trigger.Action,
                 Side: trigger.PrimarySide,
                 TriggerType: trigger.TriggerType,
@@ -9058,14 +9096,68 @@ public sealed class DashboardViewModel : ObservableObject
                 MaxGap: _runtimeConfigState.CurrentMaxGap,
                 SignalCycleSize: _runtimeConfigState.CurrentSignalCycleSize));
 
-            // KHÔNG attach ở đây, kể cả khi CLOSE đã có sẵn pairId. Sau điểm này CLOSE còn
-            // qua nhiều gate có thể chặn (_closeDispatchInFlight, transition gate, non-auto
-            // barrier, ShouldSkipTradeOp). Attach ở AutoCloseOrderAsync sau khi đã dispatch
-            // thật, đối xứng với OPEN — nếu bị chặn thì trace hết grace và bị bỏ im lặng.
+            // KHÔNG gắn nhãn ở đây, kể cả khi CLOSE đã có sẵn pairId. Sau điểm này signal còn
+            // qua nhiều gate có thể chặn. Nhãn EXEC gắn tại AutoBuy/AutoSell/AutoCloseOrderAsync
+            // sau khi đã dispatch thật; nhãn BLOCKED gắn qua LogSignalOutcome.
         }
         catch (Exception ex)
         {
             SafeVmLog($"[VM][WARN] Signal outcome tracking failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Mở trace + gắn nhãn BLOCKED ngay cho các signal bị <c>PortfolioCoordinator</c> vứt bỏ
+    /// (quota, opposite-side lock, post-close lock, min-profit, mất quyền close). Những signal
+    /// này không bao giờ đi tiếp nên ViewModel không có <c>SignalLifecycleContext</c> cho chúng.
+    /// </summary>
+    private void TrackBlockedSignalsFromCoordinator(
+        PortfolioSnapshotResult portfolioResult,
+        DashboardMetrics metrics)
+    {
+        var blocked = portfolioResult.BlockedSignals;
+        if (blocked is null || blocked.Count == 0)
+        {
+            return;
+        }
+
+        for (var i = 0; i < blocked.Count; i++)
+        {
+            var item = blocked[i];
+            // DiagnosticSignalId cũng là nguồn của SignalLifecycleContext.SignalId nên id khớp
+            // nếu signal này về sau đi tiếp qua đường thường.
+            var signalId = item.Trigger.DiagnosticSignalId;
+            OpenSignalOutcomeTrace(signalId, item.Trigger, item.CloseTargetSlot?.SlotId, metrics);
+            MarkSignalOutcomeBlocked(
+                signalId,
+                item.BlockReason,
+                item.CloseTargetSlot?.PairId,
+                item.CloseTargetSlot?.SlotId);
+        }
+    }
+
+    /// <summary>
+    /// Gắn nhãn BLOCKED cho trace và ghi dòng <c>[SIGNAL][BLOCKED]</c> (signal đầu mỗi đợt).
+    /// </summary>
+    private void MarkSignalOutcomeBlocked(string signalId, string blockReason, string? pairId, int? slotId)
+    {
+        try
+        {
+            // Các call site nằm sau await; việc continuation quay về UI thread chỉ là giả định
+            // ngầm, mà tracker không thread-safe -> chốt cứng bằng Invoke (inline khi đã ở UI thread).
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                _signalGapOutcomeTracker.MarkBlocked(
+                    signalId,
+                    // Chuẩn hoá: blockReason của coordinator là chuỗi tự do, để nguyên sẽ làm
+                    // nổ số lượng key streak.
+                    ResolveCoordinatorBlockReasonCode(blockReason),
+                    TryGetExistingStt(pairId),
+                    pairId,
+                    slotId));
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[VM][WARN] Signal outcome block marking failed: {ex.Message}");
         }
     }
 

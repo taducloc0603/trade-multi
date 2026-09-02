@@ -522,30 +522,44 @@ non-auto barrier hoặc ngữ cảnh slot. Gate chạy trước MT4/MT5 executor
 `[NORMAL_CLOSE_CYCLE]` chỉ cho biết gap TRƯỚC lúc trigger; file này ghi thêm gap của **50 tick
 kế tiếp** để so sánh signal với diễn biến thị trường thật.
 
-**Phạm vi:** signal OPEN và signal CLOSE loại **Normal**, và chỉ những signal **thực sự được
-dispatch**. SOS close, TP close đều không xuất hiện.
+**Phạm vi:** signal OPEN và signal CLOSE loại **Normal**. SOS close và TP close không xuất hiện.
 
-**Signal bị chặn không được ghi.** Trace mở tại tick signal nhưng chỉ ghi ra file khi lệnh đã
-được gửi thật; trace không tới được điểm đó sẽ bị bỏ im lặng sau ~30 s. Bao gồm mọi gate:
-quota/cooldown/opposite-lock (lọc trong `PortfolioCoordinator`), `SignalEntryGuard`, qualifying
-count, và cả các gate nằm sâu trong đường dispatch — với OPEN là watchdog, opposite price guard,
-in-flight lock, pending cycle, allocate slot; với CLOSE là `_closeDispatchInFlight`, transition
-gate, non-auto barrier, `ShouldSkipTradeOp`.
+**Signal bị chặn CŨNG được ghi**, phân biệt bằng tag thứ ba ở đầu dòng:
 
-Ngoại lệ có chủ đích: nếu lệnh đã được gửi tới sàn nhưng **thất bại ở router**, signal vẫn được
-ghi — giữ đúng ngữ nghĩa "đã vào lệnh" và khớp với hành vi của panel Signal.
+| Tag | Nghĩa |
+|-----|-------|
+| `[EXEC]` | Lệnh đã được gửi tới sàn |
+| `[BLOCKED]` | Signal bị chặn, không vào lệnh — kèm `block_reason=` |
+
+Ngoại lệ có chủ đích: lệnh đã gửi tới sàn nhưng **thất bại ở router** vẫn là `[EXEC]` — giữ đúng
+ngữ nghĩa "đã vào lệnh" và khớp với hành vi panel Signal.
+
+**Chống ngập — gộp theo lý do chặn.** Engine reset cycle ngay khi phát trigger, nên một post-close
+lock 30 s với `signal_cycle_size=4` có thể sinh ~150 signal bị chặn. Vì vậy mỗi đợt (cùng
+action + side + lý do) chỉ signal **đầu tiên** được ghi đủ 2 dòng; các signal sau được gộp và
+tổng kết bằng một dòng `[BLOCK_STREAK]` khi đợt kết thúc (`closed_by=IDLE|EXEC|FLUSH|EVICTED`).
+
+**Ba trường hợp KHÔNG thể ghi** — engine không được tick nên không có signal nào tồn tại. Đây là
+giới hạn cố ý (tick engine = đổi state machine, vi phạm Rule E), không phải log bị thiếu:
+1. **Quota tổng đầy** — chặn trước khi gọi open engine.
+2. **Global cooldown** và **non-auto close in-flight** — return trước mọi engine.
+3. **Close gate holding / post-open lock** — close engine không tick.
 
 **Mỗi signal đúng 2 dòng:**
 
 | Event | Ghi khi nào | Nội dung |
 |-------|-------------|----------|
-| `[SIGNAL]` | signal được dispatch (đã có STT) | giá A/B, gap tại signal, ngưỡng config, `signal_gaps` |
+| `[SIGNAL]` | lệnh được gửi (EXEC), hoặc signal bị chặn (BLOCKED) | giá A/B, gap tại signal, ngưỡng config, `signal_gaps` |
 | `[END]` | đủ 50 tick (~2.5 s sau) | `signal_gaps` + `future_gaps` (50 giá trị) + `elapsed_ms` |
 
 **Ví dụ:**
 ```
-[SIGNAL_OUTCOME][SIGNAL] stt=7 pair_id=AUTO-0003-8412553 signal_id=3f2a1c90... cycle_id=OPEN-BUY-000417 slot_id=3 action=OPEN side=BUY trigger_type=OpenByGapBuy triggered_at=2026-08-31T03:15:32.140Z symbol="XAUUSD|XAUUSD.s" point=100 confirm_gap_pts=25 open_pts=30 ... gap_buy=40 gap_sell=-20 track_gap=BUY gap_at_signal=40 gaps_order=oldest_to_newest gaps_unit=point signal_gaps="38|39|40|40|41|40|40|39|40|40" future_ticks_planned=50
-[SIGNAL_OUTCOME][END]    stt=7 pair_id=AUTO-0003-8412553 signal_id=3f2a1c90... action=OPEN side=BUY track_gap=BUY status=COMPLETED captured=50/50 skipped_null_ticks=0 gap_at_signal=40 elapsed_ms=2554 ... signal_gaps="38|...|40" future_gaps="40|41|43|44|...|33"
+[SIGNAL_OUTCOME][SIGNAL][EXEC] stt=7 pair_id=AUTO-0003-8412553 signal_id=3f2a1c90... cycle_id=OPEN-BUY-000417 slot_id=3 action=OPEN side=BUY trigger_type=OpenByGapBuy triggered_at=2026-08-31T03:15:32.140Z symbol="XAUUSD|XAUUSD.s" point=100 confirm_gap_pts=25 open_pts=30 ... gap_buy=40 gap_sell=-20 track_gap=BUY gap_at_signal=40 gaps_order=oldest_to_newest gaps_unit=point signal_gaps="38|39|40|40|41|40|40|39|40|40" future_ticks_planned=50
+[SIGNAL_OUTCOME][END][EXEC]    stt=7 pair_id=AUTO-0003-8412553 signal_id=3f2a1c90... action=OPEN side=BUY track_gap=BUY status=COMPLETED captured=50/50 skipped_null_ticks=0 gap_at_signal=40 elapsed_ms=2554 ... signal_gaps="38|...|40" future_gaps="40|41|43|44|...|33"
+
+[SIGNAL_OUTCOME][SIGNAL][BLOCKED] stt=- pair_id=- signal_id=9a1b... cycle_id=OPEN-BUY-000418 slot_id=- action=OPEN side=BUY block_reason=POST_CLOSE_LOCK trigger_type=OpenByGapBuy ... signal_gaps="30|41|48|56" future_ticks_planned=50
+[SIGNAL_OUTCOME][END][BLOCKED]    stt=- pair_id=- signal_id=9a1b... action=OPEN side=BUY block_reason=POST_CLOSE_LOCK track_gap=BUY status=COMPLETED captured=50/50 ... future_gaps="55|54|..."
+[SIGNAL_OUTCOME][BLOCK_STREAK] action=OPEN side=BUY block_reason=POST_CLOSE_LOCK blocked_count=147 suppressed_count=146 logged_signal_id=9a1b... last_signal_id=c7d2... first_at=... last_at=... duration_ms=29845 closed_by=IDLE
 ```
 
 **Các trường quan trọng:**
@@ -561,8 +575,14 @@ ghi — giữ đúng ngữ nghĩa "đã vào lệnh" và khớp với hành vi c
   lấy theo `TriggerType`. Với signal CLOSE nó **khác** `side`: `side` là chiều của vị thế đang
   đóng, còn một vị thế Buy được đóng bằng gap Sell đảo chiều — nên `side=BUY track_gap=SELL`
   là bình thường và đúng. `gap_at_signal`, `signal_gaps`, `future_gaps` đều bám theo `track_gap`.
+- `block_reason` — **chỉ có ở dòng BLOCKED**, nên parser đọc dòng EXEC không gặp field lạ.
+  Giá trị thường gặp: `QUOTA_BUY_FULL`/`QUOTA_SELL_FULL`, `OPPOSITE_SIDE_LOCK`, `POST_CLOSE_LOCK`,
+  `MIN_PROFIT_NOT_REACHED`, `SCHEDULE_SLEEPING`, `CLOSE_CLAIM_LOST`, `LATENCY_GUARD`,
+  `SPREAD_GUARD`, `MAX_GAP_GUARD`, `QUALIFYING_NOT_REACHED`, `SIDE_DISABLED`, `WATCHDOG_PAUSED`,
+  `DUPLICATE_SIGNAL`, `UNRESOLVED_PENDING_CYCLE`, `CONNECTION_UNHEALTHY`, `TRADE_GATE_BLOCKED`,
+  `SIGNAL_EXPIRED`.
 - `status` — `COMPLETED` (đủ 50 tick) · `SESSION_STOP` (dừng session giữa chừng) ·
-  `STALE` (feed tick đứt > 30 s) · `EVICTED` (vượt 16 trace đồng thời). `captured=N/50` cho
+  `STALE` (feed tick đứt > 30 s) · `EVICTED` (vượt 32 trace đồng thời). `captured=N/50` cho
   biết dòng có đủ dữ liệu không.
 
 **Case đặc biệt:**
@@ -572,6 +592,11 @@ ghi — giữ đúng ngữ nghĩa "đã vào lệnh" và khớp với hành vi c
 - `signal_gaps=""` trên signal CLOSE → **bug đã sửa**: gap list từng bị chọn theo `PrimarySide`
   thay vì `TriggerType`, nên với close vị thế Buy (gaps nằm ở `SellGaps`) sẽ đọc trúng list rỗng
   và `future_gaps` bám sai chiều gap. Log cũ trước bản sửa không dùng để phân tích được.
+- `block_reason=UNRESOLVED` → **dấu hiệu hồi quy**: có một gate chặn signal chưa được hook vào
+  log. File bình thường không bao giờ có dòng này. Hai dòng của nó xuất hiện trễ ~30 s so với
+  thứ tự thời gian, nên khi phân tích phải sort theo `triggered_at`, không theo vị trí dòng.
+- Dòng `[BLOCKED]` luôn có `stt=-` và `pair_id=-` với OPEN (chưa có lệnh nên chưa có STT).
+  Với CLOSE thì có STT vì pair đã tồn tại.
 - `stt=-` → UI chưa cấp số cho pair đó tại thời điểm ghi (hiếm; thường chỉ xảy ra với slot vừa
   restore sau restart mà grid chưa render). Đường log **không bao giờ tự cấp số mới** để tránh
   làm lệch thứ tự đánh số của grid, nên dùng `pair_id` để dò ngược trong trường hợp này.
