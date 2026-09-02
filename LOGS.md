@@ -523,7 +523,17 @@ non-auto barrier hoặc ngữ cảnh slot. Gate chạy trước MT4/MT5 executor
 kế tiếp** để so sánh signal với diễn biến thị trường thật.
 
 **Phạm vi:** signal OPEN và signal CLOSE loại **Normal**, và chỉ những signal **thực sự được
-dispatch**. SOS close, TP close, và signal bị guard/qualifying/quota chặn đều không xuất hiện.
+dispatch**. SOS close, TP close đều không xuất hiện.
+
+**Signal bị chặn không được ghi.** Trace mở tại tick signal nhưng chỉ ghi ra file khi lệnh đã
+được gửi thật; trace không tới được điểm đó sẽ bị bỏ im lặng sau ~30 s. Bao gồm mọi gate:
+quota/cooldown/opposite-lock (lọc trong `PortfolioCoordinator`), `SignalEntryGuard`, qualifying
+count, và cả các gate nằm sâu trong đường dispatch — với OPEN là watchdog, opposite price guard,
+in-flight lock, pending cycle, allocate slot; với CLOSE là `_closeDispatchInFlight`, transition
+gate, non-auto barrier, `ShouldSkipTradeOp`.
+
+Ngoại lệ có chủ đích: nếu lệnh đã được gửi tới sàn nhưng **thất bại ở router**, signal vẫn được
+ghi — giữ đúng ngữ nghĩa "đã vào lệnh" và khớp với hành vi của panel Signal.
 
 **Mỗi signal đúng 2 dòng:**
 

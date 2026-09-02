@@ -2515,6 +2515,14 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 // Phase 1 Auto Close log
                 var now = DateTime.Now;
+                // Điểm này đã qua toàn bộ gate chặn close và đã dispatch thật -> ghi dòng
+                // [SIGNAL] của signal-outcome. TryGetExistingStt chỉ đọc: pair đã mở nên đã
+                // có STT, và vì PairId bất biến nên số này trùng số đã ghi lúc OPEN.
+                AttachSignalOutcomeStt(
+                    signalContext.SignalId.ToString("N"),
+                    targetSlot?.PairId,
+                    TryGetExistingStt(targetSlot?.PairId),
+                    targetSlot?.SlotId);
                 var isCloseBuy = trigger.TriggerType is GapSignalTriggerType.CloseByGapBuy;
                 var triggerGapLabel = isCloseBuy ? "Gap BUY" : "Gap SELL";
                 var triggerLastGap = isCloseBuy ? trigger.LastBuyGap : trigger.LastSellGap;
@@ -9050,16 +9058,10 @@ public sealed class DashboardViewModel : ObservableObject
                 MaxGap: _runtimeConfigState.CurrentMaxGap,
                 SignalCycleSize: _runtimeConfigState.CurrentSignalCycleSize));
 
-            // CLOSE: slot đã tồn tại nên STT hiển thị trên UI có ngay, gắn luôn.
-            // pairId của slot là bất biến nên số này trùng với số đã ghi lúc OPEN.
-            // Dùng TryGetExistingStt (chỉ đọc): không được cấp số mới từ đường log.
-            if (closeTargetSlot is not null)
-            {
-                AttachSignalOutcomeStt(
-                    signalId,
-                    closeTargetSlot.PairId,
-                    TryGetExistingStt(closeTargetSlot.PairId));
-            }
+            // KHÔNG attach ở đây, kể cả khi CLOSE đã có sẵn pairId. Sau điểm này CLOSE còn
+            // qua nhiều gate có thể chặn (_closeDispatchInFlight, transition gate, non-auto
+            // barrier, ShouldSkipTradeOp). Attach ở AutoCloseOrderAsync sau khi đã dispatch
+            // thật, đối xứng với OPEN — nếu bị chặn thì trace hết grace và bị bỏ im lặng.
         }
         catch (Exception ex)
         {
