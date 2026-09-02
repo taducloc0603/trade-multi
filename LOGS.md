@@ -547,7 +547,10 @@ dispatch**. SOS close, TP close, và signal bị guard/qualifying/quota chặn �
 - `signal_gaps` — dãy gap của chu kỳ đã xác nhận signal; lặp lại ở cả 2 dòng để dòng `[END]`
   tự đủ dữ liệu paste vào Excel.
 - `future_gaps` — 50 gap của 50 tick kế tiếp, kể cả khi gap không đổi. Đơn vị point, cũ → mới.
-- `track_gap` — chiều gap theo dõi (`BUY` → `GapBuy`, `SELL` → `GapSell`), theo `PrimarySide`.
+- `track_gap` — chiều gap **thực sự kích hoạt signal** (`BUY` → `GapBuy`, `SELL` → `GapSell`),
+  lấy theo `TriggerType`. Với signal CLOSE nó **khác** `side`: `side` là chiều của vị thế đang
+  đóng, còn một vị thế Buy được đóng bằng gap Sell đảo chiều — nên `side=BUY track_gap=SELL`
+  là bình thường và đúng. `gap_at_signal`, `signal_gaps`, `future_gaps` đều bám theo `track_gap`.
 - `status` — `COMPLETED` (đủ 50 tick) · `SESSION_STOP` (dừng session giữa chừng) ·
   `STALE` (feed tick đứt > 30 s) · `EVICTED` (vượt 16 trace đồng thời). `captured=N/50` cho
   biết dòng có đủ dữ liệu không.
@@ -556,6 +559,9 @@ dispatch**. SOS close, TP close, và signal bị guard/qualifying/quota chặn �
 - Có dòng `[SIGNAL]` mà không có `[END]` cùng `stt` → session dừng trước khi đủ 50 tick, hoặc
   feed tick đứt. Kiểm tra `[MARKET]`.
 - `skipped_null_ticks` lớn → MMF trả gap null nhiều, suspect mất kết nối một sàn.
+- `signal_gaps=""` trên signal CLOSE → **bug đã sửa**: gap list từng bị chọn theo `PrimarySide`
+  thay vì `TriggerType`, nên với close vị thế Buy (gaps nằm ở `SellGaps`) sẽ đọc trúng list rỗng
+  và `future_gaps` bám sai chiều gap. Log cũ trước bản sửa không dùng để phân tích được.
 - `stt=-` → UI chưa cấp số cho pair đó tại thời điểm ghi (hiếm; thường chỉ xảy ra với slot vừa
   restore sau restart mà grid chưa render). Đường log **không bao giờ tự cấp số mới** để tránh
   làm lệch thứ tự đánh số của grid, nên dùng `pair_id` để dò ngược trong trường hợp này.

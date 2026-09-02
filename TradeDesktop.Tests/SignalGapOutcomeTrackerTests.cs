@@ -456,8 +456,13 @@ public sealed class SignalGapOutcomeTrackerTests
         Assert.Empty(logger.Lines);
     }
 
+    /// <summary>
+    /// Regression: close một vị thế BUY có PrimarySide=Buy nhưng được kích hoạt bởi gap Sell.
+    /// Nếu chọn gap list/chiều theo PrimarySide thì signal_gaps sẽ RỖNG (BuyGaps rỗng) và
+    /// future_gaps bám sai chiều gap. Phải khoá theo TriggerType.
+    /// </summary>
     [Fact]
-    public void TrackGap_FollowsPrimarySide()
+    public void TrackGap_FollowsTriggerType_NotPrimarySide()
     {
         var logger = new CaptureLogger();
         var tracker = NewTracker(logger, futureTickCount: 2);
@@ -467,10 +472,23 @@ public sealed class SignalGapOutcomeTrackerTests
         tracker.OnTick(Tick(1, gapBuy: 41, gapSell: -21));
         tracker.OnTick(Tick(2, gapBuy: 42, gapSell: -22));
 
+        // side là chiều VỊ THẾ (Buy), track_gap là chiều GAP kích hoạt close (Sell).
+        Assert.Contains("side=BUY", logger.Lines[0], StringComparison.Ordinal);
         Assert.Contains("track_gap=SELL", logger.Lines[0], StringComparison.Ordinal);
+        Assert.Contains("signal_gaps=\"-18|-2|-4|-6\"", logger.Lines[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("signal_gaps=\"\"", logger.Lines[0], StringComparison.Ordinal);
+
         Assert.Contains("gap_at_signal=-20", logger.Lines[1], StringComparison.Ordinal);
         Assert.Contains("future_gaps=\"-21|-22\"", logger.Lines[1], StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData(GapSignalTriggerType.OpenByGapBuy, true)]
+    [InlineData(GapSignalTriggerType.OpenByGapSell, false)]
+    [InlineData(GapSignalTriggerType.CloseByGapBuy, true)]
+    [InlineData(GapSignalTriggerType.CloseByGapSell, false)]
+    public void TracksBuyGap_KeysOnTriggerType(GapSignalTriggerType triggerType, bool expected)
+        => Assert.Equal(expected, SignalGapOutcomeTracker.TracksBuyGap(triggerType));
 
     // ---------- Phạm vi theo dõi ----------
 
@@ -527,14 +545,20 @@ public sealed class SignalGapOutcomeTrackerTests
             MaxGap: 80,
             SignalCycleSize: 3);
 
+    /// <summary>
+    /// Close một vị thế BUY: engine đóng bằng gap Sell đảo chiều, nên
+    /// <c>PrimarySide=Buy</c> (chiều vị thế) nhưng gaps nằm ở <c>SellGaps</c>
+    /// và <c>BuyGaps</c> rỗng — đúng như CloseSignalEngine.cs:320-321.
+    /// </summary>
     private static SignalOutcomeSignal NormalCloseSignal(string signalId = "sig-1")
         => OpenSignal(signalId) with
         {
             CycleId = "NORMAL_CLOSE-SELL-000512",
             SlotId = 3,
             Action = GapSignalAction.Close,
-            Side = GapSignalSide.Sell,
-            TriggerType = GapSignalTriggerType.CloseByGapSell
+            Side = GapSignalSide.Buy,
+            TriggerType = GapSignalTriggerType.CloseByGapSell,
+            SignalGaps = new[] { -18, -2, -4, -6 }
         };
 
     private sealed class CaptureLogger : ISignalOutcomeRawLogger

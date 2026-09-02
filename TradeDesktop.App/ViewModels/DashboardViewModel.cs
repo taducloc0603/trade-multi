@@ -9020,7 +9020,10 @@ public sealed class DashboardViewModel : ObservableObject
                 return;
             }
 
-            var isBuy = trigger.PrimarySide == GapSignalSide.Buy;
+            // Chọn gap list theo TriggerType, KHÔNG theo PrimarySide: với CLOSE thì
+            // PrimarySide là chiều vị thế đang đóng, còn engine điền gap list theo chiều gap
+            // đã kích hoạt close (Buy position đóng bằng GapSell -> gaps nằm ở SellGaps).
+            var isBuy = SignalGapOutcomeTracker.TracksBuyGap(trigger.TriggerType);
             var signalId = signalContext.SignalId.ToString("N");
             _signalGapOutcomeTracker.OnSignalPending(new SignalOutcomeSignal(
                 SignalId: signalId,

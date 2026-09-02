@@ -100,6 +100,19 @@ public sealed class SignalGapOutcomeTracker
                 && mode == CloseGapMode.Normal);
 
     /// <summary>
+    /// Chiều gap thực sự dẫn dắt signal — dùng để chọn đúng gap list, gap baseline và chiều
+    /// gap theo dõi cho <c>future_gaps</c>.
+    ///
+    /// CẢNH BÁO: KHÔNG được suy ra từ <c>PrimarySide</c>. Với CLOSE, <c>PrimarySide</c> là chiều
+    /// của VỊ THẾ đang đóng, không phải chiều gap: một vị thế Buy được đóng bằng gap Sell đảo
+    /// chiều, nên <c>CloseSignalEngine</c> điền <c>SellGaps</c> và để <c>BuyGaps</c> rỗng
+    /// (CloseSignalEngine.cs:320-321) trong khi <c>PrimarySide</c> vẫn là Buy. Chỉ
+    /// <c>TriggerType</c> mới khớp với gap list mà engine đã điền ở cả hai nhánh Open/Close.
+    /// </summary>
+    public static bool TracksBuyGap(GapSignalTriggerType triggerType)
+        => triggerType is GapSignalTriggerType.OpenByGapBuy or GapSignalTriggerType.CloseByGapBuy;
+
+    /// <summary>
     /// Mở trace tại đúng tick signal. Chưa ghi ra file — chờ <see cref="AttachStt"/>.
     /// Bỏ qua nếu gap của chiều đang theo dõi không có giá trị (không có baseline để so).
     /// </summary>
@@ -107,7 +120,7 @@ public sealed class SignalGapOutcomeTracker
     {
         ArgumentNullException.ThrowIfNull(signal);
 
-        var trackBuy = signal.Side == GapSignalSide.Buy;
+        var trackBuy = TracksBuyGap(signal.TriggerType);
         var baseline = trackBuy ? signal.GapBuy : signal.GapSell;
         if (baseline is null)
         {
