@@ -413,9 +413,22 @@ LOG_MAX_FILE_SIZE_MB=50
 LOG_QUEUE_CAPACITY=50000
 ```
 
-### 11.2 Log rotation
+### 11.2 File theo phiên và rotation
+
+Mỗi lần bấm **Start**, `TradeSessionFileLogger` mở **4 file** trong `Desktop/trade-log/`, cùng
+prefix `{yyyyMMdd_HHmmss}` để dễ ghép nhóm theo phiên. Cả 4 đóng lại khi bấm **Stop**.
+
+| File | Nội dung | Nhịp ghi |
+|------|----------|----------|
+| `-trade-log.log` | Log chính: VM, router, MT4/MT5, guard, recovery, watchdog, slot | Theo sự kiện |
+| `-gap-stability-raw.log` | `[GAP_STABILITY_RAW]` — dãy gap của chu kỳ đã hoàn tất | Mỗi cycle completed |
+| `-signal-outcome.log` | `[SIGNAL_OUTCOME]` — gap quanh thời điểm signal OPEN / NORMAL CLOSE | Mỗi signal |
+| `-gap-tick.log` | `[GAP_TICK]` — gap **mỗi tick** kèm giá thô, spread, latency | ~20 dòng/giây |
+
+Rotation:
 
 - Khi file log đạt ngưỡng `LOG_MAX_FILE_SIZE_MB`, hệ thống tự động tạo file mới với suffix `.001.log`, `.002.log`, ...
+- Mỗi file được rotate độc lập, đếm byte riêng.
 - Mỗi file mới có header continuation ghi rõ session gốc, thời điểm rotate, host name.
 - File structure ví dụ:
 
@@ -424,14 +437,42 @@ Desktop/trade-log/
 ├── 20260424_143020-trade-log.log       (50MB, full)
 ├── 20260424_143020-trade-log.001.log   (50MB, full)
 ├── 20260424_143020-trade-log.002.log   (đang ghi)
+├── 20260424_143020-gap-stability-raw.log
+├── 20260424_143020-signal-outcome.log
+├── 20260424_143020-gap-tick.log        (~12MB/giờ → rotate sau ~4 giờ)
 └── 20260424_150000-trade-log.log       (session khác)
 ```
+
+Nếu riêng file `-gap-tick.log` mở lỗi (đĩa đầy, file bị khoá), phiên **vẫn chạy đủ 3 kênh còn
+lại**; main log ghi một dòng `[LOGGER][WARN] Gap tick file disabled for this session: ...`.
+
+#### Định dạng `-gap-tick.log`
+
+Timestamp chỉ có giờ `HH:mm:ss.fff` (ngày của phiên nằm ở dòng `Date:` trong header) và là
+**thời điểm của tick**, không phải thời điểm ghi file:
+
+```
+[14:32:07.412] [GAP_TICK] gap_buy=12 gap_sell=-3 a_sym=XAUUSD a_bid=2412.35 a_ask=2412.55
+  a_spread=20 a_lat=8 b_sym=XAUUSD.m b_bid=2412.67 b_ask=2412.88 b_spread=21 b_lat=11 point=100
+```
+
+Giá trị không sẵn sàng tại tick ghi là `-`. Dòng được dựng bởi
+`TradeDesktop.Application/Services/GapTickLineFormatter.cs` (hàm thuần, dùng `InvariantCulture`
+nên dấu thập phân luôn là dấu chấm bất kể locale máy).
 
 ### 11.3 Level filter
 
 - Method `Log(string message)` tự suy level từ substring: `][ERROR]` → Error, `][WARN]` → Warn, `][DEBUG]` → Debug, còn lại → Info.
 - Method `Log(TradeLogLevel level, string message)` dùng level truyền vào trực tiếp.
 - Dòng log có level thấp hơn `LOG_LEVEL` sẽ bị bỏ qua, không ghi vào file.
+- **Ngoại lệ có chủ ý — `-gap-tick.log`:** `LogGapTickRaw` KHÔNG đi qua `LogCore` nên không bị
+  `LOG_LEVEL` lọc; đặt `LOG_LEVEL=WARN` vẫn ghi đủ gap. Lý do: file gap là dữ liệu phân tích,
+  tắt nó theo level log sẽ tạo lỗ hổng dữ liệu im lặng. Cũng vì vậy caller phải tự cung cấp
+  nguyên văn cả dòng kể cả prefix thời gian. Đây không phải bug — đừng "sửa" bằng cách nối lại
+  vào `LogCore`.
+- Khi queue đầy, dòng gap-tick bị drop được đếm RIÊNG và chỉ báo trong `[LOGGER][HEALTH]`
+  (`dropped_gap_tick=`), không sinh `[LOGGER][WARN] Dropped ...` ra main log/panel Signal —
+  tránh 20 dòng/giây làm nhiễu chỗ theo dõi lỗi giao dịch.
 
 ### 11.4 UI menu
 

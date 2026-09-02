@@ -23,5 +23,12 @@ public interface ITradeSessionFileLogger
     void LogFileOnly(string message);
     void LogGapStabilityRaw(string message);
     void LogSignalOutcomeRaw(string message);
+
+    /// <summary>
+    /// Ghi một dòng gap theo tick vào file <c>*-gap-tick.log</c> của phiên.
+    /// Caller cung cấp NGUYÊN VĂN cả dòng (kể cả prefix <c>[HH:mm:ss.fff]</c>) vì timestamp
+    /// phải là thời điểm của tick, không phải thời điểm enqueue.
+    /// </summary>
+    void LogGapTickRaw(string message);
     void StopSession(DateTimeOffset stoppedAtLocal);
 }

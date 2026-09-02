@@ -7226,6 +7226,10 @@ public sealed class DashboardViewModel : ObservableObject
             _runtimeConfigState.UpdateDashboardMetrics(metrics);
             IsLoading = false;
 
+            // Ghi gap mỗi tick ra file riêng của phiên. Đặt TRƯỚC mọi throttle UI để file giữ
+            // đủ nhịp tick, không bị thưa theo nhịp vẽ panel.
+            LogGapTick(metrics);
+
             // Throttle UI-heavy work; diagnostics and logic still run every tick.
             var nowTickMs = Environment.TickCount64;
             var canRenderUi = (nowTickMs - _lastSnapshotUiRenderTickMs) >= SnapshotUiRenderMinIntervalMs;
@@ -9010,6 +9014,33 @@ public sealed class DashboardViewModel : ObservableObject
         AddSignalLog(SignalLifecycleLogFormatter.Create(eventType, description, level, fields.ToArray()));
         context.FinalOutcomeLogged = true;
         CleanupSignalContext(context);
+    }
+
+    /// <summary>
+    /// Ghi gap của tick hiện tại vào file <c>*-gap-tick.log</c> của phiên (Start → Stop).
+    /// Chỉ logging — mọi lỗi được nuốt để không bao giờ ảnh hưởng đường quyết định giao dịch.
+    /// </summary>
+    private void LogGapTick(DashboardMetrics metrics)
+    {
+        try
+        {
+            // Gate bằng cờ cục bộ, KHÔNG dùng _tradeSessionFileLogger.IsSessionActive: property đó
+            // lấy lock `_sync` mà drain thread giữ quanh mỗi lần ghi file (AutoFlush → flush syscall
+            // từng dòng). Gọi nó mỗi tick sẽ kéo UI thread vào tranh chấp lock của logger 20 lần/giây
+            // — đúng lúc log dồn dập. Đường ghi thật vẫn tự fail-safe: LogGapTickRaw no-op khi
+            // hàng đợi phiên chưa/không còn tồn tại.
+            if (!IsTradingLogicEnabled)
+            {
+                return;
+            }
+
+            _tradeSessionFileLogger.LogGapTickRaw(
+                GapTickLineFormatter.Format(metrics, _runtimeConfigState.CurrentPoint));
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[VM][WARN] Gap tick log failed: {ex.Message}");
+        }
     }
 
     /// <summary>

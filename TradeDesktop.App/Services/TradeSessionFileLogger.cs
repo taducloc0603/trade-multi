@@ -16,7 +16,8 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     {
         Main = 0,
         GapStabilityRaw = 1,
-        SignalOutcome = 2
+        SignalOutcome = 2,
+        GapTick = 3
     }
 
     private sealed record QueuedLog(string Line, LogChannel Channel);
@@ -29,18 +30,22 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     private StreamWriter? _writer;
     private StreamWriter? _gapStabilityRawWriter;
     private StreamWriter? _signalOutcomeWriter;
+    private StreamWriter? _gapTickWriter;
     private DateTimeOffset? _sessionStartedAt;
     private string? _sessionHostName;
     private string? _sessionFileBasePath;
     private string? _gapStabilityRawFileBasePath;
     private string? _signalOutcomeFileBasePath;
+    private string? _gapTickFileBasePath;
     private long _currentFileBytes;
     private long _currentGapStabilityRawFileBytes;
     private long _currentSignalOutcomeFileBytes;
+    private long _currentGapTickFileBytes;
     private long _maxFileSizeBytes = 50L * 1024 * 1024;
     private int _rotationIndex;
     private int _gapStabilityRawRotationIndex;
     private int _signalOutcomeRotationIndex;
+    private int _gapTickRotationIndex;
     private TradeLogLevel _minLevel = TradeLogLevel.Info;
     private BlockingCollection<QueuedLog>? _writeQueue;
     private Task? _drainTask;
@@ -50,6 +55,8 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     private long _writtenMainLogCount;
     private long _writtenGapRawLogCount;
     private long _writtenSignalOutcomeLogCount;
+    private long _writtenGapTickLogCount;
+    private long _droppedGapTickLogCount;
     private long _queueHighWaterMark;
     private DateTimeOffset _nextHealthLogAt;
 
@@ -99,15 +106,19 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 _rotationIndex = 0;
                 _gapStabilityRawRotationIndex = 0;
                 _signalOutcomeRotationIndex = 0;
+                _gapTickRotationIndex = 0;
                 _currentFileBytes = 0;
                 _currentGapStabilityRawFileBytes = 0;
                 _currentSignalOutcomeFileBytes = 0;
+                _currentGapTickFileBytes = 0;
                 Interlocked.Exchange(ref _droppedLogCount, 0);
                 Interlocked.Exchange(ref _totalDroppedLogCount, 0);
                 Interlocked.Exchange(ref _enqueuedLogCount, 0);
                 Interlocked.Exchange(ref _writtenMainLogCount, 0);
                 Interlocked.Exchange(ref _writtenGapRawLogCount, 0);
                 Interlocked.Exchange(ref _writtenSignalOutcomeLogCount, 0);
+                Interlocked.Exchange(ref _writtenGapTickLogCount, 0);
+                Interlocked.Exchange(ref _droppedGapTickLogCount, 0);
                 Interlocked.Exchange(ref _queueHighWaterMark, 0);
                 _nextHealthLogAt = startedAtLocal.Add(HealthLogInterval);
                 _sessionHostName = hostName;
@@ -121,6 +132,9 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 _signalOutcomeFileBasePath = Path.Combine(
                     logDirectory,
                     $"{startedAtLocal:yyyyMMdd_HHmmss}-signal-outcome");
+                _gapTickFileBasePath = Path.Combine(
+                    logDirectory,
+                    $"{startedAtLocal:yyyyMMdd_HHmmss}-gap-tick");
 
                 var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
                 _writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
@@ -154,6 +168,32 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                     AutoFlush = true
                 };
 
+                // Kênh gap tick là diagnostics phụ. Mở file trong try/catch RIÊNG để một lỗi
+                // ở đây (đĩa đầy, file bị khoá) không rơi vào catch lớn của StartSession —
+                // rơi vào đó thì _writeQueue không được tạo và CẢ PHIÊN mất log.
+                string? gapTickOpenError = null;
+                try
+                {
+                    var gapTickPath = $"{_gapTickFileBasePath}.log";
+                    var gapTickStream = new FileStream(
+                        gapTickPath,
+                        FileMode.Create,
+                        FileAccess.Write,
+                        FileShare.ReadWrite);
+                    _gapTickWriter = new StreamWriter(
+                        gapTickStream,
+                        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+                    {
+                        AutoFlush = true
+                    };
+                }
+                catch (Exception ex)
+                {
+                    _gapTickWriter = null;
+                    gapTickOpenError = ex.Message;
+                    SafeDebug($"StartSession gap tick file open failed: {ex}");
+                }
+
                 _sessionStartedAt = startedAtLocal;
                 CurrentLogFilePath = filePath;
 
@@ -177,6 +217,28 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                     "| gaps_unit=point gaps_order=oldest_to_newest " +
                     "| status=COMPLETED|SESSION_STOP|STALE|EVICTED " +
                     "| pham vi=signal OPEN va NORMAL CLOSE da dispatch");
+                WriteGapTickLineCore(
+                    $"[{startedAtLocal:HH:mm:ss.fff}] ===== GAP TICK START =====");
+                // Các dòng dữ liệu chỉ có giờ, nên ngày của phiên phải nằm ở header.
+                WriteGapTickLineCore(
+                    $"[{startedAtLocal:HH:mm:ss.fff}] Date: {startedAtLocal:yyyy-MM-dd}");
+                WriteGapTickLineCore(
+                    $"[{startedAtLocal:HH:mm:ss.fff}] Host: {hostName}");
+                WriteGapTickLineCore(
+                    $"[{startedAtLocal:HH:mm:ss.fff}] [GAP_TICK][LEGEND] " +
+                    "moi dong = mot tick snapshot tu shared memory " +
+                    "| timestamp=gio local cua tick (HH:mm:ss.fff) " +
+                    "| gap_buy=(B.Bid-A.Ask) gap_sell=(B.Ask-A.Bid) gaps_unit=point " +
+                    "| a_*=san A b_*=san B (bid/ask=gia tho, spread=point, lat=latency ms) " +
+                    "| point=he so nhan point dang dung " +
+                    "| '-' = gia tri khong san sang tai tick do");
+                if (gapTickOpenError is not null)
+                {
+                    // Báo vào main log để không im lặng mất file gap; phiên vẫn chạy đủ 3 kênh cũ.
+                    WriteLineCore(
+                        $"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] [LOGGER][WARN] " +
+                        $"Gap tick file disabled for this session: {gapTickOpenError}");
+                }
 
                 _writeQueue = new BlockingCollection<QueuedLog>(ResolveQueueCapacityFromEnvironment());
                 queueToStart = _writeQueue;
@@ -219,6 +281,50 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
             message,
             publishRealtime: false,
             channel: LogChannel.SignalOutcome);
+
+    /// <summary>
+    /// Ghi nguyên văn một dòng gap theo tick. Không đi qua <see cref="LogCore"/> vì:
+    /// (1) timestamp phải là thời điểm của tick do caller cung cấp, không phải thời điểm
+    /// enqueue; (2) không được lọc theo <c>_minLevel</c> để <c>LOG_LEVEL=Warn</c> không
+    /// làm tắt file gap. Dùng <c>TryAdd</c> non-blocking để không bao giờ chặn UI thread.
+    /// </summary>
+    public void LogGapTickRaw(string message)
+    {
+        var queue = _writeQueue;
+        if (queue is null || queue.IsAddingCompleted)
+        {
+            return;
+        }
+
+        try
+        {
+            if (queue.TryAdd(new QueuedLog(message, LogChannel.GapTick)))
+            {
+                Interlocked.Increment(ref _enqueuedLogCount);
+                UpdateQueueHighWaterMark(queue.Count);
+            }
+            else
+            {
+                // Bộ đếm RIÊNG: _droppedLogCount sinh ra dòng [LOGGER][WARN] trong main log và
+                // publish realtime lên panel Signal. Gap tick chảy ~20 dòng/giây nên nếu tính
+                // chung sẽ spam đúng chỗ operator theo dõi lỗi giao dịch. Drop ở đây chỉ báo
+                // trong [LOGGER][HEALTH].
+                Interlocked.Increment(ref _droppedGapTickLogCount);
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // Queue was disposed concurrently with stop; drop silently.
+        }
+        catch (InvalidOperationException)
+        {
+            // Queue was completed between the IsAddingCompleted check and TryAdd; drop silently.
+        }
+        catch (Exception ex)
+        {
+            SafeDebug($"LogGapTickRaw enqueue failed: {ex}");
+        }
+    }
 
     private void LogCore(
         TradeLogLevel level,
@@ -291,6 +397,16 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                     {
                         WriteDroppedLogSummaryIfNeeded();
                         WriteLoggerHealthIfDue(queue);
+
+                        // Kênh gap tick chảy mỗi ~50ms. Ghi thẳng và KHÔNG chạm vào
+                        // pendingGapRaw: nếu nó flush bản ghi đang chờ thì cửa sổ gộp
+                        // gap-stability hiện có sẽ bị thu hẹp — đổi behavior sẵn có.
+                        if (queuedLog.Channel == LogChannel.GapTick)
+                        {
+                            WriteGapTickLineCore(queuedLog.Line);
+                            continue;
+                        }
+
                         if (pendingGapRaw is not null)
                         {
                             if (TryMergeCloseGapRaw(pendingGapRaw, queuedLog, out var merged))
@@ -347,6 +463,9 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 break;
             case LogChannel.SignalOutcome:
                 WriteSignalOutcomeLineCore(queuedLog.Line);
+                break;
+            case LogChannel.GapTick:
+                WriteGapTickLineCore(queuedLog.Line);
                 break;
             default:
                 WriteLineCore(queuedLog.Line);
@@ -512,7 +631,9 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
             $"written_main={Interlocked.Read(ref _writtenMainLogCount)} " +
             $"written_gap_raw={Interlocked.Read(ref _writtenGapRawLogCount)} " +
             $"written_signal_outcome={Interlocked.Read(ref _writtenSignalOutcomeLogCount)} " +
-            $"dropped_info={Interlocked.Read(ref _totalDroppedLogCount)}");
+            $"written_gap_tick={Interlocked.Read(ref _writtenGapTickLogCount)} " +
+            $"dropped_info={Interlocked.Read(ref _totalDroppedLogCount)} " +
+            $"dropped_gap_tick={Interlocked.Read(ref _droppedGapTickLogCount)}");
     }
 
     private void PublishRealtimeLog(DateTime timestamp, string message, TradeLogLevel level)
@@ -642,23 +763,35 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 _signalOutcomeWriter.Flush();
                 _signalOutcomeWriter.Dispose();
             }
+
+            if (_gapTickWriter is not null)
+            {
+                WriteGapTickLineCore(
+                    $"[{stoppedAtLocal:HH:mm:ss.fff}] ===== GAP TICK STOP =====");
+                _gapTickWriter.Flush();
+                _gapTickWriter.Dispose();
+            }
         }
         finally
         {
             _writer = null;
             _gapStabilityRawWriter = null;
             _signalOutcomeWriter = null;
+            _gapTickWriter = null;
             _sessionStartedAt = null;
             _sessionHostName = null;
             _sessionFileBasePath = null;
             _gapStabilityRawFileBasePath = null;
             _signalOutcomeFileBasePath = null;
+            _gapTickFileBasePath = null;
             _currentFileBytes = 0;
             _currentGapStabilityRawFileBytes = 0;
             _currentSignalOutcomeFileBytes = 0;
+            _currentGapTickFileBytes = 0;
             _rotationIndex = 0;
             _gapStabilityRawRotationIndex = 0;
             _signalOutcomeRotationIndex = 0;
+            _gapTickRotationIndex = 0;
             CurrentLogFilePath = null;
         }
     }
@@ -717,6 +850,61 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         _signalOutcomeWriter.WriteLine(line);
         _currentSignalOutcomeFileBytes += lineBytes;
         Interlocked.Increment(ref _writtenSignalOutcomeLogCount);
+    }
+
+    private void WriteGapTickLineCore(string line)
+    {
+        if (_gapTickWriter is null)
+        {
+            return;
+        }
+
+        var lineBytes = Encoding.UTF8.GetByteCount(line + Environment.NewLine);
+        if (_currentGapTickFileBytes + lineBytes > _maxFileSizeBytes
+            && _currentGapTickFileBytes > 0)
+        {
+            RotateGapTickFile();
+        }
+
+        _gapTickWriter.WriteLine(line);
+        _currentGapTickFileBytes += lineBytes;
+        Interlocked.Increment(ref _writtenGapTickLogCount);
+    }
+
+    private void RotateGapTickFile()
+    {
+        if (_gapTickWriter is null
+            || _sessionStartedAt is null
+            || string.IsNullOrWhiteSpace(_gapTickFileBasePath))
+        {
+            return;
+        }
+
+        try
+        {
+            _gapTickRotationIndex++;
+            var nextFilePath = $"{_gapTickFileBasePath}.{_gapTickRotationIndex:000}.log";
+            var stream = new FileStream(nextFilePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+            var nextWriter = new StreamWriter(
+                stream,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+            {
+                AutoFlush = true
+            };
+
+            _gapTickWriter.Flush();
+            _gapTickWriter.Dispose();
+            _gapTickWriter = nextWriter;
+            _currentGapTickFileBytes = 0;
+
+            WriteGapTickLineCore(
+                $"Continuation of Gap Tick session {_sessionStartedAt.Value:yyyy-MM-dd HH:mm:ss} " +
+                $"part {_gapTickRotationIndex:000}");
+        }
+        catch (Exception ex)
+        {
+            SafeDebug($"RotateGapTickFile failed: {ex}");
+        }
     }
 
     private void RotateSignalOutcomeFile()

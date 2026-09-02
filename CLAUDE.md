@@ -226,6 +226,17 @@ TradeDesktop.Tests/            # xUnit tests
 - Categories: `[VM]`, `[MMF_TRADES]`, `[CYCLE]`, `[ROUTER]`, `[MT4]`, `[MT5]`,
   `[GUARD]`, `[RECOVERY]`, `[WATCHDOG]`, `[SLOT]` (Phase 2+),
   `[CLOSE_SELECT]` (Phase 4), `[METRICS]` (Phase 7+).
+- Mỗi phiên Start mở **4 file** cùng prefix `{yyyyMMdd_HHmmss}`: `-trade-log`,
+  `-gap-stability-raw`, `-signal-outcome`, `-gap-tick`. Xem README §11.2.
+- `-gap-tick.log` là ngoại lệ format: timestamp chỉ `HH:mm:ss.fff` (ngày ở header), là thời điểm
+  TICK chứ không phải lúc ghi, và **không bị `LOG_LEVEL` lọc**. Vì vậy `LogGapTickRaw` nhận
+  nguyên văn cả dòng và KHÔNG đi qua `LogCore` — đừng nối lại vào `LogCore`.
+- Thêm channel mới vào `TradeSessionFileLogger` phải: (1) mở file trong `try/catch` RIÊNG — lỗi
+  mở file của một kênh phụ mà rơi vào `catch` lớn của `StartSession` sẽ làm `_writeQueue` không
+  được tạo và **cả phiên mất log**; (2) nếu kênh ghi tần suất cao thì đếm drop bằng counter riêng,
+  báo trong `[LOGGER][HEALTH]`, không dùng `_droppedLogCount` (nó sinh WARN ra main log + panel
+  Signal); (3) không được chạm `pendingGapRaw` trong `DrainQueue` — sẽ thu hẹp cửa sổ gộp
+  gap-stability đang có.
 
 ### Async patterns
 - `Task.Run` cho I/O không UI.
@@ -282,6 +293,12 @@ TradeDesktop.Tests/            # xUnit tests
   gom nhiều dòng vào MỘT lần `Invoke`, hoặc chuyển toàn bộ sang cùng một hàng đợi. Lưu ý caller
   chính đã ở trên UI thread nên `Dispatcher.Invoke` chạy inline (`CheckAccess`), gần như miễn phí —
   đây KHÔNG phải nguồn gây treo.
+- **KHÔNG gọi `ITradeSessionFileLogger.IsSessionActive` trên đường chạy mỗi tick.** Property đó
+  lấy `lock(_sync)`, mà drain thread của logger giữ đúng lock ấy quanh MỖI lần ghi file
+  (`AutoFlush=true` → một flush syscall từng dòng). Gọi mỗi tick sẽ kéo UI thread vào tranh chấp
+  lock của logger, nặng nhất đúng lúc log dồn dập. Đường log bình thường (`LogCore` → `TryAdd`)
+  không khoá — giữ nguyên như vậy. Muốn gate theo phiên trong `OnSnapshotReceived` thì dùng
+  `IsTradingLogicEnabled` (field read thuần); các `Log*Raw` đã tự no-op khi `_writeQueue` null.
 
 ### Profit feed cho quyết định TP (logic-critical, KHÔNG throttle theo UI)
 - `slot.LastProfitSnapshot` nuôi quyết định TP + priority-close PHẢI được refresh **mỗi tick**,
