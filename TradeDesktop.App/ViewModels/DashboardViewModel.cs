@@ -7070,13 +7070,13 @@ public sealed class DashboardViewModel : ObservableObject
             if (result.IsSuccess && result.Exists)
             {
                 ClearConfigError();
-                foreach (var warning in GapThresholdConfigWarnings.Evaluate(
+                foreach (var configWarning in GapThresholdConfigWarnings.Evaluate(
                     result.ConfirmGapPts,
                     result.OpenPts,
                     result.CloseConfirmGapPts,
                     result.ClosePts))
                 {
-                    SafeVmLog($"[DB][WARN] {warning}");
+                    SafeVmLog($"[DB][WARN] {configWarning}");
                 }
 
                 _runtimeConfigState.Update(
