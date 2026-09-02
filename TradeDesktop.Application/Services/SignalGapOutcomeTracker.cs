@@ -134,6 +134,14 @@ public sealed class SignalGapOutcomeTracker
     {
         ArgumentNullException.ThrowIfNull(signal);
 
+        // Không có id thì AttachStt/MarkBlocked đều không tìm lại được trace -> nó sẽ sống tới
+        // hết grace rồi phát UNRESOLVED giả, và tệ hơn là chiếm chỗ đẩy trace EXEC thật ra khỏi
+        // danh sách khi chạm cap. Từ chối ngay, cùng chuẩn với hai hàm gắn nhãn.
+        if (string.IsNullOrWhiteSpace(signal.SignalId))
+        {
+            return;
+        }
+
         var trackBuy = TracksBuyGap(signal.TriggerType);
         var baseline = trackBuy ? signal.GapBuy : signal.GapSell;
         if (baseline is null)
@@ -235,7 +243,8 @@ public sealed class SignalGapOutcomeTracker
         }
     }
 
-    private void MarkBlockedAt(
+    /// <returns><c>true</c> nếu trace đã được gỡ khỏi <see cref="_traces"/>.</returns>
+    private bool MarkBlockedAt(
         int index,
         Trace trace,
         string blockReason,
@@ -243,7 +252,7 @@ public sealed class SignalGapOutcomeTracker
         string? pairId,
         int? slotId)
     {
-        var reason = string.IsNullOrWhiteSpace(blockReason) ? "UNKNOWN" : blockReason.Trim();
+        var reason = NormalizeBlockReason(blockReason);
         var key = (trace.Signal.Action, trace.Signal.Side, reason);
         var nowUtc = DateTime.UtcNow;
 
@@ -254,7 +263,7 @@ public sealed class SignalGapOutcomeTracker
             streak.LastAtUtc = nowUtc;
             streak.LastSignalId = trace.Signal.SignalId;
             _traces.RemoveAt(index);
-            return;
+            return true;
         }
 
         if (_streaks.Count >= _maxConcurrentStreaks)
@@ -276,7 +285,10 @@ public sealed class SignalGapOutcomeTracker
         {
             EmitEndLine(trace, "COMPLETED");
             _traces.RemoveAt(index);
+            return true;
         }
+
+        return false;
     }
 
     /// <summary>
@@ -308,14 +320,24 @@ public sealed class SignalGapOutcomeTracker
             // Hết grace mà không dispatch cũng không báo chặn => có gate chưa hook. Ghi
             // block_reason=UNRESOLVED (qua streak nên không ngập) làm chỉ báo coverage:
             // file sạch UNRESOLVED nghĩa là mọi gate đã được bắt.
-            // Check này phải nằm TRƯỚC check stale, nếu không STALE sẽ nuốt mất UNRESOLVED.
             if (!trace.SignalLineWritten && trace.TicksSinceOpen > _attachGraceTicks)
             {
-                MarkBlockedAt(i, trace, UnresolvedBlockReason, stt: null, pairId: null, slotId: null);
-                continue;
+                // Chỉ bỏ qua tick này nếu trace đã bị gỡ; nếu còn sống thì vẫn thu gap của
+                // chính tick đó để captured không lệch 1.
+                if (MarkBlockedAt(i, trace, UnresolvedBlockReason, stt: null, pairId: null, slotId: null))
+                {
+                    continue;
+                }
             }
 
-            if (_staleTraceMs > 0 && nowMs - trace.OpenedAtTickMs > _staleTraceMs)
+            // STALE CHỈ áp cho trace ĐÃ gắn nhãn — nghĩa là "đã ghi [SIGNAL] nhưng feed tick đứt,
+            // không thu đủ cửa sổ". Nếu áp cho cả trace chưa gắn nhãn thì nó tranh với grace:
+            // attachGraceTicks(600) x PollInterval(50ms) = đúng 30_000ms = staleTraceMs, nên nhánh
+            // nào thắng phụ thuộc jitter, và STALE gỡ trace chưa gắn nhãn mà KHÔNG ghi gì
+            // (EmitAndRemoveAt chỉ ghi khi SignalLineWritten) => UNRESOLVED thành code chết.
+            if (trace.SignalLineWritten
+                && _staleTraceMs > 0
+                && nowMs - trace.OpenedAtTickMs > _staleTraceMs)
             {
                 EmitAndRemoveAt(i, "STALE");
                 continue;
@@ -471,6 +493,13 @@ public sealed class SignalGapOutcomeTracker
         BlockStreak streak,
         string closedBy)
     {
+        // Không nén được signal nào thì dòng tổng kết không thêm thông tin gì so với cặp
+        // [SIGNAL]/[END] đã ghi — bỏ đi để chặn đơn lẻ (guard, qualifying) chỉ tốn 2 dòng.
+        if (streak.Count <= 1)
+        {
+            return;
+        }
+
         var durationMs = (int)Math.Max(0, (streak.LastAtUtc - streak.FirstAtUtc).TotalMilliseconds);
         _logger.LogSignalOutcomeRaw(
             "[SIGNAL_OUTCOME][BLOCK_STREAK] " +
@@ -568,6 +597,24 @@ public sealed class SignalGapOutcomeTracker
         {
             sb.Append("block_reason=").Append(Text(trace.BlockReason)).Append(' ');
         }
+    }
+
+    /// <summary>
+    /// Ép lý do chặn về đúng MỘT token không khoảng trắng. Caller đã chuẩn hoá, nhưng tracker
+    /// sở hữu định dạng <c>key=value</c> nên phải tự bảo vệ: một chuỗi tự do lọt vào
+    /// <c>block_reason=</c> sẽ vỡ định dạng dòng và làm nổ số key streak.
+    /// </summary>
+    private static string NormalizeBlockReason(string? blockReason)
+    {
+        if (string.IsNullOrWhiteSpace(blockReason))
+        {
+            return "UNKNOWN";
+        }
+
+        var trimmed = blockReason.Trim();
+        var separator = trimmed.IndexOfAny([' ', '\t', '(', '"']);
+        var token = separator >= 0 ? trimmed[..separator] : trimmed;
+        return token.Length == 0 ? "UNKNOWN" : token;
     }
 
     private static string ActionText(GapSignalAction action)

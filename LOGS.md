@@ -538,6 +538,8 @@ ngữ nghĩa "đã vào lệnh" và khớp với hành vi panel Signal.
 lock 30 s với `signal_cycle_size=4` có thể sinh ~150 signal bị chặn. Vì vậy mỗi đợt (cùng
 action + side + lý do) chỉ signal **đầu tiên** được ghi đủ 2 dòng; các signal sau được gộp và
 tổng kết bằng một dòng `[BLOCK_STREAK]` khi đợt kết thúc (`closed_by=IDLE|EXEC|FLUSH|EVICTED`).
+Dòng `[BLOCK_STREAK]` **chỉ xuất hiện khi `blocked_count >= 2`** — chặn đơn lẻ (guard, qualifying)
+chỉ tốn đúng 2 dòng vì dòng tổng kết không thêm thông tin gì.
 
 **Ba trường hợp KHÔNG thể ghi** — engine không được tick nên không có signal nào tồn tại. Đây là
 giới hạn cố ý (tick engine = đổi state machine, vi phạm Rule E), không phải log bị thiếu:
@@ -582,8 +584,8 @@ giới hạn cố ý (tick engine = đổi state machine, vi phạm Rule E), kh�
   `DUPLICATE_SIGNAL`, `UNRESOLVED_PENDING_CYCLE`, `CONNECTION_UNHEALTHY`, `TRADE_GATE_BLOCKED`,
   `SIGNAL_EXPIRED`.
 - `status` — `COMPLETED` (đủ 50 tick) · `SESSION_STOP` (dừng session giữa chừng) ·
-  `STALE` (feed tick đứt > 30 s) · `EVICTED` (vượt 32 trace đồng thời). `captured=N/50` cho
-  biết dòng có đủ dữ liệu không.
+  `STALE` (trace **đã ghi dòng `[SIGNAL]`** nhưng feed tick đứt > 30 s nên không thu đủ cửa sổ) ·
+  `EVICTED` (vượt 32 trace đồng thời). `captured=N/50` cho biết dòng có đủ dữ liệu không.
 
 **Case đặc biệt:**
 - Có dòng `[SIGNAL]` mà không có `[END]` cùng `stt` → session dừng trước khi đủ 50 tick, hoặc

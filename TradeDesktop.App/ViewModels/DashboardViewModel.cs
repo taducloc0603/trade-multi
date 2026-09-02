@@ -9143,8 +9143,12 @@ public sealed class DashboardViewModel : ObservableObject
     {
         try
         {
-            // Các call site nằm sau await; việc continuation quay về UI thread chỉ là giả định
-            // ngầm, mà tracker không thread-safe -> chốt cứng bằng Invoke (inline khi đã ở UI thread).
+            // Tracker KHÔNG thread-safe nên mọi lối vào phải ở UI thread.
+            // Hôm nay các call site sau await vẫn chạy trên UI thread vì toàn bộ TradeDesktop.App
+            // không dùng ConfigureAwait(false) và luồng dispatch được khởi động từ trong
+            // Dispatcher.Invoke của OnSnapshotReceived -> Invoke ở đây chạy inline qua CheckAccess,
+            // gần như miễn phí. Invoke được giữ làm lưới an toàn: nếu sau này ai đó thêm
+            // ConfigureAwait(false) vào chuỗi dispatch thì lối vào này vẫn đúng thread.
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 _signalGapOutcomeTracker.MarkBlocked(
                     signalId,
