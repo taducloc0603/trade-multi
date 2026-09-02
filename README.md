@@ -61,8 +61,8 @@ Confirmation mode duy nhất là **FIXED_SIZE**: chu kỳ đếm **số lượng
 
 Config trước khi áp rule được chuẩn hóa:
 
-- `ConfirmGapPts = Abs(config.ConfirmGapPts)`
-- `OpenPts = Abs(config.OpenPts)`
+- `ConfirmGapPts = config.ConfirmGapPts` — **giữ nguyên dấu**, xem §3.2
+- `OpenPts = config.OpenPts` — **giữ nguyên dấu**, xem §3.2
 - `SignalCycleSize = config.SignalCycleSize` (`>= 1`, config `< 1` bị ConfigService từ chối)
 - `LimitMaxGap = Max(0, config.LimitMaxGap)` — `0` = disabled
 
@@ -91,6 +91,30 @@ Config trước khi áp rule được chuẩn hóa:
 
 > Bất kỳ điều kiện confirm nào fail -> reset chu kỳ của nhánh đó và loại luôn mẫu vừa fail.
 
+### 3.3 Ngưỡng mang dấu — `confirm_gap_pts` / `open_pts` được phép ÂM
+
+Hai cột này **giữ nguyên dấu** từ DB (giống cặp `sos_close_*_pts`), không còn bị `Math.Abs`
+ép dương ở bất kỳ tầng nào (config, engine, router).
+
+| Giá trị | Nhánh GapBuy | Nhánh GapSell | Ý nghĩa |
+|---|---|---|---|
+| `open_pts = +8` | `GapBuy >= +8` | `GapSell <= -8` | Chuẩn cũ — chỉ mở khi gap rộng hẳn về một phía |
+| `open_pts = -3` | `GapBuy >= -3` | `GapSell <= +3` | Nới về phía trong (cùng hướng SOS) — mở sớm khi gap còn hẹp/nghịch nhẹ |
+
+Hai hệ quả bắt buộc phải biết:
+
+- **Gate mẫu cuối chỉ có tác dụng khi `confirm_gap_pts < open_pts`** (so sánh **có dấu**). Nếu
+  `confirm >= open` thì mẫu nào qua confirm cũng tự qua gate cuối, chỉ còn `signal_cycle_size`
+  quyết định. `ConfigService` log `[DB][WARN]` cho cấu hình dạng này.
+- **Hai nhánh Open có thể cùng trigger trong một tick khi và chỉ khi cả hai ngưỡng `<= 0`.** Vì
+  `GapSell >= GapBuy` luôn đúng (Ask ≥ Bid), điều này bất khả thi với ngưỡng dương. Mô phỏng
+  20 000 tick cho thấy ~21.8 % số tick rơi vào vùng đó khi đặt `(-5, -3)`. `PortfolioCoordinator`
+  vẫn chỉ trả về **một** `OpenTrigger` mỗi snapshot, nên không có double-open; trigger còn lại bị
+  bỏ qua.
+- Tổ hợp "một giá trị âm, một giá trị `0`" **không có ý nghĩa**: `(0, âm)` tương đương `(0, 0)`,
+  còn `(âm, 0)` gần tương đương `(0, 0)` và chỉ tạo thêm cycle chạy không. Muốn nới về phía trong
+  phải đặt **cả hai** giá trị âm với `|confirm| > |open|`.
+
 > **`LimitMaxGap`** áp dụng trên mỗi tick — khác với `max_gap` trong `SignalEntryGuard` chỉ kiểm tra tại thời điểm trigger. Khi gap spike vượt ngưỡng, window reset ngay; khi gap về lại bình thường, window mở lại từ đầu.
 
 ---
@@ -101,8 +125,8 @@ File: `TradeDesktop.Application/Services/CloseSignalEngine.cs`
 
 Config close được chuẩn hóa:
 
-- `CloseConfirmGapPts = Abs(config.CloseConfirmGapPts)`
-- `ClosePts = Abs(config.ClosePts)`
+- `CloseConfirmGapPts = config.CloseConfirmGapPts` — **giữ nguyên dấu**, xem cuối §4
+- `ClosePts = config.ClosePts` — **giữ nguyên dấu**, xem cuối §4
 - `SignalCycleSize = config.SignalCycleSize` — dùng chung cho Normal Close, SOS Close và TP
 - `LimitMaxGap = Max(0, config.LimitMaxGap)` — `0` = disabled (dùng chung với open signal)
 - `LimitMaxTp = Abs(config.LimitMaxTp)` — `0` = disabled
@@ -123,6 +147,28 @@ Rule theo mode đã mở:
   - confirm: `GapBuy >= CloseConfirmGapPts`
   - tick cuối: `GapBuy >= ClosePts`
   - `LimitMaxGap` áp dụng tương tự
+
+**`close_confirm_gap_pts` / `close_pts` được phép ÂM.** Hai cột này giữ nguyên dấu từ DB, dùng
+đúng công thức trên với ngưỡng có dấu — `close_pts = -8` cho slot GapBuy nghĩa là `GapSell <= +8`,
+tức **chốt sớm khi gap chưa đảo chiều, thường là chốt lỗ** (bằng đúng hành vi SOS với abs 8).
+Ba lưu ý vận hành:
+
+- Gate mẫu cuối chỉ có tác dụng khi `close_confirm_gap_pts < close_pts` (so sánh có dấu);
+  ngược lại `ConfigService` log `[DB][WARN]`.
+- `min_profit_to_close > 0` sẽ chặn phần lớn close bằng gap âm cho tới khi
+  `age >= max_life_time_by_second` — phải chỉnh hai cột này cùng nhau.
+- `limit_max_gap` tác động **ngược nhau** tuỳ dấu của `close_pts`:
+  - **`close_pts > 0`** — cần `gap` đi xa (`<= -close_pts`) nên nếu `limit_max_gap < close_pts` thì
+    hai điều kiện loại trừ nhau → **cấu hình chết, không bao giờ trigger**. Đo được:
+    `(+12, +8)` với `limit_max_gap = 5` cho **0 trigger / 20 000 tick**. Đây là bẫy **có sẵn từ
+    trước**, không phải do ngưỡng âm sinh ra.
+  - **`close_pts < 0`** — vùng thoả (`gap <= +|close_pts|`) luôn giao với `|gap| <= limit_max_gap`
+    nên **không bao giờ chết**, chỉ bị thu hẹp. `limit_max_gap` ở đây là một **van giảm tần suất**
+    khá hữu dụng: `(-12, -8)` cho `3 184 / 1 192 / 501 / 110` trigger / 20 000 tick ứng với
+    `limit_max_gap = 0 / 5 / 3 / 1`.
+
+Theo mô phỏng 20 000 tick, chuyển cặp Close sang `(-12, -8)` làm tần suất Close tăng khoảng
+**15 lần** so với `(+12, +8)`. Nên đổi từng cặp một và theo dõi log trước khi áp production.
 
 **SOS close path (theo từng slot):** SOS bật khi một trong hai điều kiện đúng: khoảng cách tuyệt đối giữa giá hiện tại và giá mở chân A `>= sos_trigger_a_open_distance_pts` (Buy dùng Bid A, Sell dùng Ask A; `0` là tắt), hoặc tuổi lệnh `>= sos_trigger_after_seconds` (`0` là tắt). Khoảng cách chân A được xét cả khi giá chạy thuận và chạy ngược chiều; nếu khoảng cách quay xuống dưới ngưỡng trước khi đủ thời gian thì slot trở lại Normal. Khi điều kiện thời gian đã đạt thì SOS tiếp tục bật. SOS Close chạy **chu kỳ số lượng riêng theo `signal_cycle_size`** (state tách hoàn toàn khỏi Normal Close và TP), không dùng `close_hold_confirm_ms` cũng không dùng `close_max_times_tick`. Kiểm tra theo chiều hồi vào trong: mọi mẫu `GapSell` phải `<= +abs(sos_close_confirm_gap_pts)` và mẫu cuối `<= +abs(sos_close_gap_pts)` để phát `CloseByGapSell`; mọi mẫu `GapBuy` phải `>= -abs(sos_close_confirm_gap_pts)` và mẫu cuối `>= -abs(sos_close_gap_pts)` để phát `CloseByGapBuy`. Mẫu không đạt ngưỡng confirm sẽ reset chu kỳ (mẫu đó bị loại) và mẫu hợp lệ tiếp theo mở chu kỳ mới; snapshot trùng không tăng count. Đủ `signal_cycle_size` mẫu mà mẫu cuối không đạt `sos_close_gap_pts` thì chu kỳ kết thúc không trigger, mẫu tiếp theo mở chu kỳ mới. Đổi `signal_cycle_size` sẽ reset chu kỳ. Nếu một trong hai ngưỡng Gap SOS bằng `0`, hệ thống fail-safe về bộ Gap thường. Mỗi lần đổi Normal ↔ SOS chỉ reset window Gap của slot, không reset TP window; log chỉ ghi lúc chuyển trạng thái để tránh spam. Trước khi dispatch, Gap được kiểm tra lại bằng đúng mode của signal và phải không vượt `limit_max_gap`. Trong global startup/recovery cooldown, close thường và mọi Open vẫn bị chặn; riêng slot đang thỏa SOS tại cùng snapshot được tiếp tục đánh giá và chỉ bypass global cooldown khi có close signal hợp lệ. Holding, post-open, Min Profit, transition gate và các close guard khác vẫn áp dụng. SOS Close được ghi nhận như Auto Close mới tại dispatch, sinh lại random same-action và post-close theo DB; vì vậy hành động tiếp theo phải chờ theo ma trận #9–#16.
 
@@ -261,7 +307,9 @@ Files:
 Điểm chính:
 
 - Config được load/save theo `machine host name` (đã normalize lowercase).
-- Nhiều trường số được normalize an toàn (`Abs`, `Max(0)`, fallback point = 1).
+- Nhiều trường số được normalize an toàn (`Abs`, `Max(0)`, fallback point = 1). **Ngoại lệ:**
+  `open_pts`, `confirm_gap_pts`, `close_pts`, `close_confirm_gap_pts`, `sos_close_gap_pts`,
+  `sos_close_confirm_gap_pts` giữ nguyên dấu — đừng thêm lại `Abs` cho 6 cột này.
 - `platform_a/platform_b` normalize về `mt4` hoặc `mt5` (default `mt5`).
 
 DB fields liên quan đến guard/limit (mỗi đầu post-close `<= 0` fallback `300s`;
@@ -269,6 +317,8 @@ những limit còn lại dùng `0` để disable):
 
 | DB column | C# property | Kiểu | Ý nghĩa |
 |---|---|---|---|
+| `confirm_gap_pts` / `open_pts` | `CurrentConfirmGapPts` / `CurrentOpenPts` | `int` | Ngưỡng confirm và ngưỡng mẫu cuối của Open. **Giữ nguyên dấu, được phép âm** (âm = nới về phía trong như SOS). Xem §3.3 |
+| `close_confirm_gap_pts` / `close_pts` | `CurrentCloseConfirmGapPts` / `CurrentClosePts` | `int` | Ngưỡng confirm và ngưỡng mẫu cuối của Normal Close. **Giữ nguyên dấu, được phép âm**. Xem cuối §4 |
 | `max_gap` | `CurrentMaxGap` | `int` | Chặn open/close tại trigger nếu `|gap| > max_gap` (post-trigger guard) |
 | `limit_max_gap` | `CurrentLimitMaxGap` | `int` | Reset confirm window ngay nếu `|gap| > limit_max_gap` trong mỗi tick |
 | `limit_max_tp` | `CurrentLimitMaxTp` | `double` | Reset TP window ngay nếu `profit > limit_max_tp` trong mỗi tick |

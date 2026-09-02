@@ -344,11 +344,13 @@ public sealed record ConfigLoadResult(
             NormalizePlatform(platformA),
             NormalizePlatform(platformB),
             point > 0 ? point : 1,
-            Math.Abs(openPts),
-            Math.Abs(confirmGapPts),
+            // 4 ngưỡng gap thường giữ nguyên dấu như cặp SOS bên dưới: ÂM nghĩa là nới ngưỡng
+            // về phía trong. Đừng thêm lại Math.Abs ở đây hay ở engine/router.
+            openPts,
+            confirmGapPts,
             Math.Max(0, openPriceFreezeMs),
-            Math.Abs(closePts),
-            Math.Abs(closeConfirmGapPts),
+            closePts,
+            closeConfirmGapPts,
             Math.Abs(closeTpProfit),
             Math.Abs(closeConfirmTpProfit),
             Math.Abs(closeMaxTpProfit),

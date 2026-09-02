@@ -444,8 +444,9 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         if (_state.CountLiveAndPendingTotal() < _state.MaxTotalOpens)
         {
             var triggers = _openSignalEngine.ProcessSnapshot(snapshot, config);
-            foreach (var trigger in triggers)
+            for (var index = 0; index < triggers.Count; index++)
             {
+                var trigger = triggers[index];
                 if (!trigger.Triggered || trigger.Action != GapSignalAction.Open) continue;
 
                 // Rule A + C check (Phase 2 enable; Phase 0 cap=1 makes this trivial).
@@ -461,6 +462,12 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                         new PortfolioBlockedSignal(trigger, blockReason, null));
                     continue;
                 }
+
+                // CHỈ LOGGING: chỉ đúng một Open được trả về mỗi snapshot. Với ngưỡng Open ÂM,
+                // engine có thể phát cả OpenByGapBuy lẫn OpenByGapSell cùng tick (bất khả thi khi
+                // ngưỡng dương vì GapSell >= GapBuy). Ghi nhận trigger bị bỏ để không mất dấu vết;
+                // KHÔNG đổi hành vi chọn — trigger đầu tiên được phép vẫn thắng như trước.
+                RecordDroppedOpenTriggers(triggers, index, trigger, ref blockedSignals);
 
                 return new PortfolioSnapshotResult(
                     OpenTrigger: trigger,
@@ -1016,6 +1023,36 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         _lastOpenSkipSignature = signature;
         _lastOpenSkipLogAtUtc = effectiveNow;
         _logger?.Log($"[SLOT][SKIP] Open {side} blocked: {blockReason}");
+    }
+
+    /// <summary>
+    /// CHỈ LOGGING. Ghi nhận các Open trigger đứng sau <paramref name="selectedIndex"/> trong cùng
+    /// một snapshot — chúng bị bỏ vì mỗi snapshot chỉ trả về đúng một Open. Chỉ xảy ra khi ngưỡng
+    /// Open ÂM cho phép cả hai chiều cùng thoả (cần <c>2 * |confirm_gap_pts| >= spread</c>).
+    /// KHÔNG tham gia bất kỳ quyết định giao dịch nào.
+    /// </summary>
+    private void RecordDroppedOpenTriggers(
+        IReadOnlyList<GapSignalTriggerResult> triggers,
+        int selectedIndex,
+        GapSignalTriggerResult selected,
+        ref List<PortfolioBlockedSignal>? blockedSignals)
+    {
+        for (var i = selectedIndex + 1; i < triggers.Count; i++)
+        {
+            var dropped = triggers[i];
+            if (!dropped.Triggered || dropped.Action != GapSignalAction.Open) continue;
+
+            var reason =
+                $"DUAL_SIDE_TRIGGER_DROPPED (side={dropped.PrimarySide}, " +
+                $"trigger {selected.PrimarySide} cùng tick đã được chọn)";
+            (blockedSignals ??= new(1)).Add(new PortfolioBlockedSignal(dropped, reason, null));
+
+            // Không dùng LogOpenSkipThrottled: sự kiện này hiếm (chỉ khi hai chiều cùng trigger),
+            // throttle sẽ nuốt mất đúng thứ cần quan sát.
+            _logger?.Log(
+                $"[SLOT][SKIP] Open {dropped.PrimarySide} dropped: DUAL_SIDE_TRIGGER_DROPPED " +
+                $"(trigger {selected.PrimarySide} cùng tick đã được chọn)");
+        }
     }
 
     // ===== Rule checks (Phase 2) =====

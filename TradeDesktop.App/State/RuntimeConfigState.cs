@@ -307,11 +307,12 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
 
         CurrentMachineHostName = (machineHostName ?? string.Empty).Trim().ToLower();
         CurrentPoint = point > 0 ? point : 1;
-        CurrentOpenPts = Math.Abs(openPts);
-        CurrentConfirmGapPts = Math.Abs(confirmGapPts);
+        // 4 ngưỡng gap thường giữ nguyên dấu như cặp SOS: ÂM nghĩa là nới ngưỡng về phía trong.
+        CurrentOpenPts = openPts;
+        CurrentConfirmGapPts = confirmGapPts;
         CurrentOpenPriceFreezeMs = Math.Max(0, openPriceFreezeMs);
-        CurrentClosePts = Math.Abs(closePts);
-        CurrentCloseConfirmGapPts = Math.Abs(closeConfirmGapPts);
+        CurrentClosePts = closePts;
+        CurrentCloseConfirmGapPts = closeConfirmGapPts;
         CurrentCloseTpProfit = Math.Abs(closeTpProfit);
         CurrentCloseConfirmTpProfit = Math.Abs(closeConfirmTpProfit);
         CurrentCloseMaxTpProfit = Math.Abs(closeMaxTpProfit);

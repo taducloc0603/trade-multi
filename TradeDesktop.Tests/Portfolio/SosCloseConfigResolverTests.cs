@@ -99,4 +99,54 @@ public sealed class SosCloseConfigResolverTests
 
         Assert.Equal("LATEST_SOS_CLOSE_CONDITION_INVALID", error);
     }
+
+    // Ngưỡng Normal âm: threshold có dấu = max(confirm, close) = -8, nên nhánh GapSell
+    // chấp nhận gap <= +8 và nhánh GapBuy chấp nhận gap >= -8.
+    [Theory]
+    [InlineData(GapSignalTriggerType.CloseByGapSell, null, 8)]
+    [InlineData(GapSignalTriggerType.CloseByGapSell, null, 7)]
+    [InlineData(GapSignalTriggerType.CloseByGapBuy, -8, null)]
+    [InlineData(GapSignalTriggerType.CloseByGapBuy, -7, null)]
+    public void LatestGap_NegativeNormalThresholds_IsAllowed(
+        GapSignalTriggerType triggerType,
+        int? gapBuy,
+        int? gapSell)
+    {
+        var error = SosCloseConfigResolver.ValidateLatestGap(
+            triggerType, gapBuy, gapSell, confirmGapPts: -12, closeGapPts: -8, limitMaxGap: 30);
+
+        Assert.Null(error);
+    }
+
+    [Theory]
+    [InlineData(GapSignalTriggerType.CloseByGapSell, null, 9)]
+    [InlineData(GapSignalTriggerType.CloseByGapBuy, -9, null)]
+    public void LatestGap_NegativeNormalThresholds_BeforeTarget_IsRejected(
+        GapSignalTriggerType triggerType,
+        int? gapBuy,
+        int? gapSell)
+    {
+        var error = SosCloseConfigResolver.ValidateLatestGap(
+            triggerType, gapBuy, gapSell, confirmGapPts: -12, closeGapPts: -8, limitMaxGap: 30);
+
+        Assert.Equal("LATEST_CLOSE_CONDITION_INVALID", error);
+    }
+
+    [Theory]
+    [InlineData(GapSignalTriggerType.CloseByGapBuy, 100, null, null)]
+    [InlineData(GapSignalTriggerType.CloseByGapSell, null, -100, null)]
+    [InlineData(GapSignalTriggerType.CloseByGapBuy, 39, null, "LATEST_CLOSE_CONDITION_INVALID")]
+    [InlineData(GapSignalTriggerType.CloseByGapSell, null, -39, "LATEST_CLOSE_CONDITION_INVALID")]
+    public void LatestGap_PositiveThresholds_Unchanged(
+        GapSignalTriggerType triggerType,
+        int? gapBuy,
+        int? gapSell,
+        string? expected)
+    {
+        // max(30, 40) == max(|30|, |40|) nên hành vi của config dương không đổi.
+        var error = SosCloseConfigResolver.ValidateLatestGap(
+            triggerType, gapBuy, gapSell, confirmGapPts: 30, closeGapPts: 40, limitMaxGap: 0);
+
+        Assert.Equal(expected, error);
+    }
 }

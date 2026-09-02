@@ -417,9 +417,11 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             return oppositeGuard;
         }
 
-        var openThreshold = Math.Abs(_runtimeConfig.CurrentOpenPts);
-        var confirmThreshold = Math.Abs(_runtimeConfig.CurrentConfirmGapPts);
-        var threshold = Math.Max(openThreshold, confirmThreshold);
+        // Ngưỡng mang dấu, khớp với GapSignalConfirmationEngine: ngưỡng dương giữ nguyên hành vi cũ
+        // (max(a,b) == max(|a|,|b|) khi cả hai >= 0), ngưỡng âm nới về phía trong.
+        var threshold = Math.Max(
+            (long)_runtimeConfig.CurrentOpenPts,
+            (long)_runtimeConfig.CurrentConfirmGapPts);
         var conditionValid = signal.TriggerType switch
         {
             GapSignalTriggerType.OpenByGapBuy => metrics.GapBuy is { } gap && gap >= threshold,

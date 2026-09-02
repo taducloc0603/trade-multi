@@ -133,6 +133,24 @@ public sealed class GapCycleState
             return CompleteFixedCycleIfReady(config, GapCycleTransition.Started, fingerprint);
         }
 
+        // Stability đo trên |gap|, nên một Cycle trộn hai dấu (ví dụ -5, +5, -5) bị chấm là ổn định.
+        // Với ngưỡng dương, confirm gate đã ép cả Cycle về cùng dấu nên guard này không bao giờ chạm.
+        // Với ngưỡng âm thì Cycle được phép chứa hai dấu, nên phải chặn ở đây.
+        if (HasSignConflict(_fixedCycle.Values, gapValue))
+        {
+            var signCompleted = BuildFixedSnapshot();
+            StartFixedCycle(
+                timestampUtc,
+                gapValue,
+                fingerprint,
+                config,
+                "Gap sign flipped; started a new cycle.");
+            return new GapCycleUpdateResult(
+                GapCycleTransition.NewCycle,
+                BuildFixedSnapshot(),
+                signCompleted);
+        }
+
         var currentMetrics = GapStabilityCalculator.Calculate(_fixedCycle.Values, config);
         var delta = GapStabilityCalculator.CalculateDelta(gapValue, currentMetrics.Center);
         if (delta > currentMetrics.Tolerance)
@@ -225,6 +243,17 @@ public sealed class GapCycleState
             return new GapCycleUpdateResult(
                 GapCycleTransition.Started,
                 BuildSnapshot());
+        }
+
+        // Xem chú thích ở ProcessFixedSize: chặn Cycle trộn hai dấu vì Stability đo trên |gap|.
+        if (HasSignConflict(_gaps, gapValue))
+        {
+            var signCompleted = BuildSnapshot();
+            StartNewCycle(timestampUtc, gapValue, config, "Gap đổi dấu; bắt đầu Cycle mới.");
+            return new GapCycleUpdateResult(
+                GapCycleTransition.NewCycle,
+                BuildSnapshot(),
+                signCompleted);
         }
 
         var currentMetrics = GapStabilityCalculator.Calculate(_gaps, config);
@@ -493,4 +522,30 @@ public sealed class GapCycleState
     }
 
     private static long Magnitude(int gap) => Math.Abs((long)gap);
+
+    /// <summary>
+    /// Mẫu mới có ngược dấu với dấu đầu tiên khác 0 của Cycle hiện tại hay không.
+    /// Gap bằng 0 là trung tính, tương thích với cả hai chiều.
+    /// </summary>
+    private static bool HasSignConflict(IReadOnlyList<int> gaps, int newGap)
+    {
+        if (newGap == 0)
+        {
+            return false;
+        }
+
+        var newSign = Math.Sign(newGap);
+        for (var i = 0; i < gaps.Count; i++)
+        {
+            var sign = Math.Sign(gaps[i]);
+            if (sign == 0)
+            {
+                continue;
+            }
+
+            return sign != newSign;
+        }
+
+        return false;
+    }
 }

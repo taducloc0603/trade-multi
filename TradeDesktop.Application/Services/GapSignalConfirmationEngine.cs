@@ -55,8 +55,11 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
         GapSignalSnapshot snapshot,
         GapSignalConfirmationConfig config)
     {
-        var normalizedConfirm = Math.Abs(config.ConfirmGapPts);
-        var normalizedOpen = Math.Abs(config.OpenPts);
+        // Ngưỡng mang dấu. Nhánh GapBuy dùng "gap >= threshold", nhánh GapSell dùng
+        // "gap <= -threshold"; ngưỡng dương giữ nguyên hành vi cũ, ngưỡng âm nới về phía trong
+        // (cùng hướng với SOS Close). Đừng thêm lại Math.Abs ở đây.
+        var signedConfirm = config.ConfirmGapPts;
+        var signedOpen = config.OpenPts;
 
         if (config.OpenGapStability is not null)
         {
@@ -64,8 +67,8 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
                 snapshot,
                 config,
                 config.OpenGapStability,
-                normalizedConfirm,
-                normalizedOpen,
+                signedConfirm,
+                signedOpen,
                 normalizedHoldMs: 0);
         }
 
@@ -77,7 +80,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             snapshot.ExchangeABid, snapshot.ExchangeAAsk, snapshot.ExchangeBBid, snapshot.ExchangeBAsk,
             snapshot.GapBuy, snapshot.GapSell, snapshot.PointMultiplier, snapshot.GapBuy,
             snapshot.TimestampUtc, _buyState, Math.Max(0, config.HoldConfirmMs), config.OpenMaxTimesTick,
-            value => value >= normalizedConfirm, value => value >= normalizedOpen, config.LimitMaxGap);
+            value => value >= signedConfirm, value => value >= signedOpen, config.LimitMaxGap);
         if (buyResult is not null) results.Add(buyResult);
 
         var sellResult = ProcessSide(
@@ -85,7 +88,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             snapshot.ExchangeABid, snapshot.ExchangeAAsk, snapshot.ExchangeBBid, snapshot.ExchangeBAsk,
             snapshot.GapBuy, snapshot.GapSell, snapshot.PointMultiplier, snapshot.GapSell,
             snapshot.TimestampUtc, _sellState, Math.Max(0, config.HoldConfirmMs), config.OpenMaxTimesTick,
-            value => value <= -normalizedConfirm, value => value <= -normalizedOpen, config.LimitMaxGap);
+            value => value <= -signedConfirm, value => value <= -signedOpen, config.LimitMaxGap);
         if (sellResult is not null) results.Add(sellResult);
         return results;
     }
@@ -113,8 +116,8 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
         GapSignalSnapshot snapshot,
         GapSignalConfirmationConfig config,
         GapStabilityConfig stabilityConfig,
-        int normalizedConfirm,
-        int normalizedOpen,
+        int signedConfirm,
+        int signedOpen,
         int normalizedHoldMs)
     {
         var results = new List<GapSignalTriggerResult>(capacity: 2);
@@ -130,7 +133,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             hasRequiredData: snapshot.GapBuy.HasValue
                 && snapshot.ExchangeAAsk.HasValue
                 && snapshot.ExchangeBBid.HasValue,
-            confirmSatisfied: snapshot.GapBuy is int buyGap && buyGap >= normalizedConfirm,
+            confirmSatisfied: snapshot.GapBuy is int buyGap && buyGap >= signedConfirm,
             stabilityConfig,
             config.SignalCycleSize,
             CreateOpenFingerprint("BUY", snapshot, snapshot.GapBuy),
@@ -148,7 +151,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             buyUpdate.CurrentCycle,
             GapSignalTriggerType.OpenByGapBuy,
             GapSignalSide.Buy,
-            value => value >= normalizedOpen,
+            value => value >= signedOpen,
             _buyCycle,
             ref _buyObservation,
             _logger,
@@ -164,7 +167,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             hasRequiredData: snapshot.GapSell.HasValue
                 && snapshot.ExchangeABid.HasValue
                 && snapshot.ExchangeBAsk.HasValue,
-            confirmSatisfied: snapshot.GapSell is int sellGap && sellGap <= -normalizedConfirm,
+            confirmSatisfied: snapshot.GapSell is int sellGap && sellGap <= -signedConfirm,
             stabilityConfig,
             config.SignalCycleSize,
             CreateOpenFingerprint("SELL", snapshot, snapshot.GapSell),
@@ -182,7 +185,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             sellUpdate.CurrentCycle,
             GapSignalTriggerType.OpenByGapSell,
             GapSignalSide.Sell,
-            value => value <= -normalizedOpen,
+            value => value <= -signedOpen,
             _sellCycle,
             ref _sellObservation,
             _logger,

@@ -28,7 +28,9 @@ public static class SosCloseConfigResolver
         int closeGapPts,
         int limitMaxGap)
     {
-        var threshold = Math.Max(Math.Abs((long)confirmGapPts), Math.Abs((long)closeGapPts));
+        // Ngưỡng mang dấu, khớp với CloseSignalEngine: ngưỡng dương giữ nguyên hành vi cũ
+        // (max(a,b) == max(|a|,|b|) khi cả hai >= 0), ngưỡng âm nới về phía trong.
+        var threshold = Math.Max((long)confirmGapPts, (long)closeGapPts);
         int? currentGap = triggerType switch
         {
             GapSignalTriggerType.CloseByGapBuy => gapBuy,

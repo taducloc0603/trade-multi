@@ -320,6 +320,32 @@ TradeDesktop.Tests/            # xUnit tests
   đọc `select=*` nên DROP cột an toàn (`docs/DROP-DEPRECATED-SIGNAL-COLUMNS.sql`). KHÔNG nối lại.
 - `GapSignalConfirmationConfig` vẫn còn 4 field cùng tên nhưng mặc định `0` và không có nguồn nào
   đổ vào; chỉ phục vụ nhánh legacy `ProcessSide` / `ProcessLegacyGap` mà test gọi trực tiếp.
+- **4 cột ngưỡng gap thường giữ nguyên DẤU.** `open_pts`, `confirm_gap_pts`, `close_pts`,
+  `close_confirm_gap_pts` không còn bị `Math.Abs` ở bất kỳ tầng nào (`ConfigService`,
+  `RuntimeConfigState`, `GapSignalConfirmationEngine`, `CloseSignalEngine`,
+  `TradeExecutionRouter`, `SosCloseConfigResolver.ValidateLatestGap`) — ĐỪNG nối lại `Abs`.
+  Quy ước: nhánh GapBuy `gap >= threshold`, nhánh GapSell `gap <= -threshold`. Ngưỡng dương giữ
+  nguyên hành vi cũ; ngưỡng ÂM nới về phía trong đúng như SOS. Engine và router phải sửa cùng
+  nhịp — sửa engine mà quên router sẽ bị chặn sạch bằng `LATEST_*_CONDITION_INVALID`.
+- Ngưỡng Open âm cho phép `OpenByGapBuy` và `OpenByGapSell` **cùng trigger một tick** (~21.8 % số
+  tick theo mô phỏng; bất khả thi khi ngưỡng dương vì `GapSell >= GapBuy`). `PortfolioCoordinator`
+  chỉ trả về một `OpenTrigger` mỗi snapshot — đừng đổi vòng lặp đó thành gom nhiều trigger.
+- `GapStabilityCalculator` đo center/MAD/dispersion/drift trên `Math.Abs(gap)`, nên một cycle chứa
+  hai dấu (`-5, +5, -5`) bị chấm là "hoàn toàn ổn định". Guard cùng dấu trong
+  `GapCycleState.ProcessFixedSize`/`Process` là thứ chặn việc đó — **đừng gỡ**. Guard là no-op với
+  mọi config `>= 0` vì confirm gate dương đã ép cycle về một dấu.
+- **`ValidateLatestSosGap` lỏng hơn engine SOS — CỐ Ý giữ, không phải bug mới.** Validator này
+  (`SosCloseConfigResolver.cs:58-90`) chỉ xét `sos_close_gap_pts`, bỏ qua
+  `sos_close_confirm_gap_pts`; trong khi engine đòi mẫu cuối qua CẢ HAI. Khi
+  `|sos_confirm| < |sos_close|` router cho qua ở 1 330 tổ hợp mà engine sẽ chặn (đo trên
+  `|C|,|K| ∈ [1,20] × gap ∈ [-30,30]`). Khác biệt này có TRƯỚC khi 4 cột gap thường được cho phép
+  mang dấu. Muốn siết về `min(|confirm|, |close|)` thì phải đánh giá lại toàn bộ SOS dispatch trước
+  — nó sẽ chặn bớt SOS close đang qua được.
+- **Mỗi snapshot chỉ trả về đúng một `OpenTrigger`.** `PortfolioCoordinator.ProcessSnapshot` return
+  ở trigger đầu tiên được phép, mà engine tính nhánh Buy trước — nên khi ngưỡng Open âm làm cả hai
+  chiều cùng trigger thì Buy luôn thắng. Trigger bị bỏ được ghi vào `BlockedSignals` với reason
+  `DUAL_SIDE_TRIGGER_DROPPED` (chỉ logging, `RecordDroppedOpenTriggers`) — đừng biến nó thành đầu
+  vào quyết định, và đừng đổi vòng lặp thành gom nhiều trigger.
 - `open_price_freeze_ms` / `close_price_freeze_ms` là hai cột ĐỘC LẬP, mỗi cột chỉ dùng giá trị
   của chính nó. KHÔNG khôi phục fallback về hold-time. `0` = tắt, số âm normalize về `0`.
   Tham số guard tên là `priceFreezeMs` (`SignalEntryGuard.Check`), không phải `holdConfirmMs`.

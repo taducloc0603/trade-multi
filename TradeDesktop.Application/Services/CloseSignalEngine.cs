@@ -91,9 +91,17 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         TradingOpenMode openMode,
         double? slotProfit = null)
     {
-        var normalizedCloseConfirm = Math.Abs(config.CloseConfirmGapPts);
-        var normalizedClose = Math.Abs(config.ClosePts);
         var usesSos = config.CloseGapMode == CloseGapMode.Sos;
+
+        // Ngưỡng mang dấu. Nhánh GapBuy dùng "gap >= threshold", nhánh GapSell dùng
+        // "gap <= -threshold"; ngưỡng dương giữ nguyên hành vi cũ, ngưỡng âm nới về phía trong.
+        // SOS luôn quy về hướng hồi vào trong, tức tương đương ngưỡng âm -> hành vi SOS không đổi.
+        var signedCloseConfirm = usesSos
+            ? -Math.Abs(config.CloseConfirmGapPts)
+            : config.CloseConfirmGapPts;
+        var signedClose = usesSos
+            ? -Math.Abs(config.ClosePts)
+            : config.ClosePts;
 
         // Fixed-size is the only supported signal-confirmation mode. Hold/max-tick
         // columns remain mapped temporarily for DB compatibility but are ignored here.
@@ -103,16 +111,15 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
                 config,
                 config.CloseGapStability,
                 openMode,
-                normalizedCloseConfirm,
-                normalizedClose,
+                signedCloseConfirm,
+                signedClose,
                 usesSos)
             : ProcessLegacyGap(
                 snapshot,
                 config,
                 openMode,
-                normalizedCloseConfirm,
-                normalizedClose,
-                usesSos);
+                signedCloseConfirm,
+                signedClose);
 
         var tpResult = ProcessTp(snapshot, config, openMode, slotProfit);
 
@@ -127,12 +134,8 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         }
 
         var closesByGapSell = gapResult.TriggerType == GapSignalTriggerType.CloseByGapSell;
-        var effectiveConfirm = closesByGapSell
-            ? usesSos ? normalizedCloseConfirm : -normalizedCloseConfirm
-            : usesSos ? -normalizedCloseConfirm : normalizedCloseConfirm;
-        var effectiveClose = closesByGapSell
-            ? usesSos ? normalizedClose : -normalizedClose
-            : usesSos ? -normalizedClose : normalizedClose;
+        var effectiveConfirm = closesByGapSell ? -signedCloseConfirm : signedCloseConfirm;
+        var effectiveClose = closesByGapSell ? -signedClose : signedClose;
         return gapResult with
         {
             CloseGapMode = config.CloseGapMode,
@@ -186,8 +189,8 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         GapSignalConfirmationConfig config,
         GapStabilityConfig stabilityConfig,
         TradingOpenMode openMode,
-        int normalizedCloseConfirm,
-        int normalizedClose,
+        int signedCloseConfirm,
+        int signedClose,
         bool usesSos)
     {
         return openMode switch
@@ -202,13 +205,13 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
                     && snapshot.ExchangeABid.HasValue
                     && snapshot.ExchangeBAsk.HasValue,
                 confirmSatisfied: snapshot.GapSell is int sellGap
-                    && (usesSos ? sellGap <= normalizedCloseConfirm : sellGap <= -normalizedCloseConfirm),
-                closeSatisfied: value => usesSos ? value <= normalizedClose : value <= -normalizedClose,
+                    && sellGap <= -signedCloseConfirm,
+                closeSatisfied: value => value <= -signedClose,
                 GapSignalTriggerType.CloseByGapSell,
                 GapSignalSide.Buy,
                 usesSos,
-                effectiveConfirm: usesSos ? normalizedCloseConfirm : -normalizedCloseConfirm,
-                effectiveClose: usesSos ? normalizedClose : -normalizedClose),
+                effectiveConfirm: -signedCloseConfirm,
+                effectiveClose: -signedClose),
 
             TradingOpenMode.GapSell => ProcessStableCloseSide(
                 snapshot,
@@ -220,13 +223,13 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
                     && snapshot.ExchangeAAsk.HasValue
                     && snapshot.ExchangeBBid.HasValue,
                 confirmSatisfied: snapshot.GapBuy is int buyGap
-                    && (usesSos ? buyGap >= -normalizedCloseConfirm : buyGap >= normalizedCloseConfirm),
-                closeSatisfied: value => usesSos ? value >= -normalizedClose : value >= normalizedClose,
+                    && buyGap >= signedCloseConfirm,
+                closeSatisfied: value => value >= signedClose,
                 GapSignalTriggerType.CloseByGapBuy,
                 GapSignalSide.Sell,
                 usesSos,
-                effectiveConfirm: usesSos ? -normalizedCloseConfirm : normalizedCloseConfirm,
-                effectiveClose: usesSos ? -normalizedClose : normalizedClose),
+                effectiveConfirm: signedCloseConfirm,
+                effectiveClose: signedClose),
 
             _ => null
         };
@@ -383,9 +386,8 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         GapSignalSnapshot snapshot,
         GapSignalConfirmationConfig config,
         TradingOpenMode openMode,
-        int normalizedCloseConfirm,
-        int normalizedClose,
-        bool usesSos) =>
+        int signedCloseConfirm,
+        int signedClose) =>
         openMode switch
         {
             TradingOpenMode.GapBuy => GapSignalConfirmationEngine.ProcessSide(
@@ -393,16 +395,16 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
                 snapshot.ExchangeABid, snapshot.ExchangeAAsk, snapshot.ExchangeBBid, snapshot.ExchangeBAsk,
                 snapshot.GapBuy, snapshot.GapSell, snapshot.PointMultiplier, snapshot.GapSell,
                 snapshot.TimestampUtc, _buyState, Math.Max(0, config.CloseHoldConfirmMs), config.CloseMaxTimesTick,
-                value => usesSos ? value <= normalizedCloseConfirm : value <= -normalizedCloseConfirm,
-                value => usesSos ? value <= normalizedClose : value <= -normalizedClose,
+                value => value <= -signedCloseConfirm,
+                value => value <= -signedClose,
                 config.LimitMaxGap),
             TradingOpenMode.GapSell => GapSignalConfirmationEngine.ProcessSide(
                 GapSignalTriggerType.CloseByGapBuy, GapSignalSide.Sell, GapSignalAction.Close,
                 snapshot.ExchangeABid, snapshot.ExchangeAAsk, snapshot.ExchangeBBid, snapshot.ExchangeBAsk,
                 snapshot.GapBuy, snapshot.GapSell, snapshot.PointMultiplier, snapshot.GapBuy,
                 snapshot.TimestampUtc, _sellState, Math.Max(0, config.CloseHoldConfirmMs), config.CloseMaxTimesTick,
-                value => usesSos ? value >= -normalizedCloseConfirm : value >= normalizedCloseConfirm,
-                value => usesSos ? value >= -normalizedClose : value >= normalizedClose,
+                value => value >= signedCloseConfirm,
+                value => value >= signedClose,
                 config.LimitMaxGap),
             _ => null
         };
