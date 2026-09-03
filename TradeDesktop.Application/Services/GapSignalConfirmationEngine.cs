@@ -69,7 +69,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
                 config.OpenGapStability,
                 signedConfirm,
                 signedOpen,
-                normalizedHoldMs: 0);
+                normalizedHoldMs: Math.Max(0, config.HoldConfirmMs));
         }
 
         // Compatibility-only path for direct legacy callers. ConfigService rejects
@@ -127,7 +127,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             normalizedHoldMs);
         _lastDiagnosticPolicy = diagnosticPolicy;
 
-        var buyUpdate = _buyCycle.ProcessFixedSize(
+        var buyUpdate = _buyCycle.Process(
             snapshot.TimestampUtc,
             snapshot.GapBuy,
             hasRequiredData: snapshot.GapBuy.HasValue
@@ -135,8 +135,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
                 && snapshot.ExchangeBBid.HasValue,
             confirmSatisfied: snapshot.GapBuy is int buyGap && buyGap >= signedConfirm,
             stabilityConfig,
-            config.SignalCycleSize,
-            CreateOpenFingerprint("BUY", snapshot, snapshot.GapBuy),
+            normalizedHoldMs,
             config.LimitMaxGap);
         _buyObservation = SignalCycleObservation.ObserveGap(
             _buyObservation, buyUpdate, snapshot.GapBuy, snapshot.TimestampUtc);
@@ -144,10 +143,11 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             "BUY",
             buyUpdate,
             snapshot.GapBuy,
-            config.SignalCycleSize,
+            stabilityConfig.MinStableSamples,
             diagnosticPolicy);
         var buyResult = TryCreateStableOpenResult(
             snapshot,
+            config,
             buyUpdate.CurrentCycle,
             GapSignalTriggerType.OpenByGapBuy,
             GapSignalSide.Buy,
@@ -161,7 +161,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             results.Add(buyResult);
         }
 
-        var sellUpdate = _sellCycle.ProcessFixedSize(
+        var sellUpdate = _sellCycle.Process(
             snapshot.TimestampUtc,
             snapshot.GapSell,
             hasRequiredData: snapshot.GapSell.HasValue
@@ -169,8 +169,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
                 && snapshot.ExchangeBAsk.HasValue,
             confirmSatisfied: snapshot.GapSell is int sellGap && sellGap <= -signedConfirm,
             stabilityConfig,
-            config.SignalCycleSize,
-            CreateOpenFingerprint("SELL", snapshot, snapshot.GapSell),
+            normalizedHoldMs,
             config.LimitMaxGap);
         _sellObservation = SignalCycleObservation.ObserveGap(
             _sellObservation, sellUpdate, snapshot.GapSell, snapshot.TimestampUtc);
@@ -178,10 +177,11 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             "SELL",
             sellUpdate,
             snapshot.GapSell,
-            config.SignalCycleSize,
+            stabilityConfig.MinStableSamples,
             diagnosticPolicy);
         var sellResult = TryCreateStableOpenResult(
             snapshot,
+            config,
             sellUpdate.CurrentCycle,
             GapSignalTriggerType.OpenByGapSell,
             GapSignalSide.Sell,
@@ -200,6 +200,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
 
     private static GapSignalTriggerResult? TryCreateStableOpenResult(
         GapSignalSnapshot snapshot,
+        GapSignalConfirmationConfig config,
         GapCycleSnapshot cycle,
         GapSignalTriggerType triggerType,
         GapSignalSide side,
@@ -217,7 +218,15 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
         var lastGap = cycle.Gaps[^1];
         if (!isOpenSatisfied(lastGap))
         {
-            state.Reset("Fixed-size Open Cycle completed but final Gap did not reach open_pts.");
+            // Chế độ TIME: Cycle vẫn ổn định, chỉ là mẫu cuối chưa đạt open_pts.
+            // KHÔNG reset — Cycle tiếp tục thu mẫu cho tới khi Tolerance/Dispersion/Drift phá vỡ nó.
+            return null;
+        }
+
+        var normalizedMaxTimesTick = Math.Max(0, config.OpenMaxTimesTick);
+        if (normalizedMaxTimesTick > 0 && cycle.Gaps.Count > normalizedMaxTimesTick)
+        {
+            state.Reset("Open Cycle vượt open_max_times_tick.");
             return null;
         }
 
@@ -268,21 +277,6 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
         return result;
     }
 
-    private static string CreateOpenFingerprint(
-        string side,
-        GapSignalSnapshot snapshot,
-        int? primaryGap) =>
-        string.Join(
-            '|',
-            "OPEN",
-            side,
-            snapshot.TimestampUtc.Ticks,
-            primaryGap?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            snapshot.ExchangeABid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            snapshot.ExchangeAAsk?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            snapshot.ExchangeBBid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            snapshot.ExchangeBAsk?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null");
-
     private void LogOpenTransition(
         string side,
         GapCycleUpdateResult update,
@@ -310,9 +304,11 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             config.DiagnosticMaxGap,
             config.DiagnosticConfigId,
             config.DiagnosticSymbol,
-            ConfirmationMode: "FIXED_SIZE",
+            // Nhánh TIME: chu kỳ chốt theo hold-time + MinStableSamples.
+            // SignalCycleSize chỉ đi kèm log để đối chiếu với nhánh TICK.
+            ConfirmationMode: "TIME_AND_MIN_SAMPLES",
             SignalCycleSize: config.SignalCycleSize,
-            HoldConfirmIgnored: true);
+            HoldConfirmIgnored: false);
 
     internal static GapSignalTriggerResult? ProcessSide(
         GapSignalTriggerType triggerType,

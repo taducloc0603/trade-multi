@@ -30,7 +30,7 @@ public sealed class GapStableCloseIntegrationTests
         Assert.Equal(CloseGapMode.Normal, trigger.CloseGapMode);
         Assert.Equal(-50, trigger.EffectiveCloseConfirmGapPts);
         Assert.Equal(-100, trigger.EffectiveCloseGapPts);
-        Assert.Equal(0, trigger.EffectiveCloseHoldMs);
+        Assert.Equal(2000, trigger.EffectiveCloseHoldMs);
     }
 
     [Fact]
@@ -124,24 +124,38 @@ public sealed class GapStableCloseIntegrationTests
     }
 
     [Fact]
-    public void SosClose_UsesFixedSizeCycleAndIgnoresHoldTime()
+    public void SosClose_UsesHoldTimeAndMinStableSamples()
     {
+        // Nhánh TIME: SOS Close dùng CHUNG close_hold_confirm_ms với Normal Close.
         var engine = new CloseSignalEngine();
-        var strictStability = Stability with { MinStableSamples = 10 };
-        var config = Config(confirm: 5, close: 3, holdMs: 1000) with
+        var config = Config(confirm: 5, close: 3, holdMs: 2000) with
         {
-            CloseGapMode = CloseGapMode.Sos,
-            CloseGapStability = strictStability,
-            SignalCycleSize = 2
+            CloseGapMode = CloseGapMode.Sos
         };
 
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: 5));
-        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: 3);
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: 4));
+        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: 3);
 
         Assert.NotNull(trigger);
-        Assert.Equal(CloseGapMode.Sos, trigger.CloseGapMode);
+        Assert.Equal(CloseGapMode.Sos, trigger!.CloseGapMode);
         Assert.Equal(CloseSignalReason.Gap, trigger.CloseReason);
-        Assert.Equal([5, 3], trigger.SellGaps);
+        Assert.Equal([5, 4, 3], trigger.SellGaps);
+        Assert.Equal(2000, trigger.EffectiveCloseHoldMs);
+    }
+
+    [Fact]
+    public void SosClose_DoesNotTriggerBeforeHoldConfirm()
+    {
+        var engine = new CloseSignalEngine();
+        var config = Config(confirm: 5, close: 3, holdMs: 999_999) with
+        {
+            CloseGapMode = CloseGapMode.Sos
+        };
+
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: 5));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: 4));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: 3));
     }
 
     [Fact]
@@ -151,8 +165,7 @@ public sealed class GapStableCloseIntegrationTests
         var normal = Config(confirm: 50, close: 100, holdMs: 2000);
         var sos = Config(confirm: 5, close: 3, holdMs: 1000) with
         {
-            CloseGapMode = CloseGapMode.Sos,
-            SignalCycleSize = 2
+            CloseGapMode = CloseGapMode.Sos
         };
 
         Assert.Null(Process(engine, normal, TradingOpenMode.GapBuy, 0, gapSell: -100));
@@ -162,11 +175,12 @@ public sealed class GapStableCloseIntegrationTests
         engine.ResetGapState();
 
         Assert.Null(Process(engine, sos, TradingOpenMode.GapBuy, 2, gapSell: 3));
-        var trigger = Process(engine, sos, TradingOpenMode.GapBuy, 3, gapSell: 3);
+        Assert.Null(Process(engine, sos, TradingOpenMode.GapBuy, 3, gapSell: 3));
+        var trigger = Process(engine, sos, TradingOpenMode.GapBuy, 4, gapSell: 3);
 
         Assert.NotNull(trigger);
-        Assert.Equal(CloseGapMode.Sos, trigger.CloseGapMode);
-        Assert.Equal([3, 3], trigger.SellGaps);
+        Assert.Equal(CloseGapMode.Sos, trigger!.CloseGapMode);
+        Assert.Equal([3, 3, 3], trigger.SellGaps);
         Assert.DoesNotContain(-100, trigger.SellGaps);
         Assert.DoesNotContain(-110, trigger.SellGaps);
     }
@@ -266,11 +280,10 @@ public sealed class GapStableCloseIntegrationTests
     {
         var first = new CloseSignalEngine();
         var second = new CloseSignalEngine();
-        var config = Config(confirm: 50, close: 100, holdMs: 999_999) with
+        var config = Config(confirm: 50, close: 100, holdMs: 1000) with
         {
             CloseConfirmTpProfit = 5,
-            CloseTpProfit = 10,
-            SignalCycleSize = 2
+            CloseTpProfit = 10
         };
 
         Assert.Null(Process(first, config, TradingOpenMode.GapBuy, 0, slotProfit: 5));
@@ -285,15 +298,12 @@ public sealed class GapStableCloseIntegrationTests
     }
 
     [Fact]
-    public void FixedSizeTen_TriggersNormalCloseOnlyOnTenthGapAndIgnoresHoldTime()
+    public void HoldConfirmNotReached_DoesNotCloseEvenWithEnoughSamples()
     {
         var engine = new CloseSignalEngine();
-        var config = Config(confirm: 50, close: 100, holdMs: 999_999) with
-        {
-            SignalCycleSize = 10
-        };
+        var config = Config(confirm: 50, close: 100, holdMs: 999_999);
 
-        for (var index = 0; index < 9; index++)
+        for (var index = 0; index < 10; index++)
         {
             Assert.Null(Process(
                 engine,
@@ -302,35 +312,23 @@ public sealed class GapStableCloseIntegrationTests
                 index,
                 gapSell: -100 - index));
         }
-
-        var trigger = Process(
-            engine,
-            config,
-            TradingOpenMode.GapBuy,
-            9,
-            gapSell: -109);
-        Assert.NotNull(trigger);
-        Assert.Equal(10, trigger!.SellGaps.Count);
     }
 
     [Fact]
-    public void FixedSizeOne_CanCloseFromFirstQualifiedGap()
+    public void SignalCycleSize_DoesNotAffectTimeBasedCloseCycle()
     {
         var engine = new CloseSignalEngine();
-        var config = Config(confirm: 50, close: 100, holdMs: 999_999) with
+        var config = Config(confirm: 50, close: 100, holdMs: 2000) with
         {
-            SignalCycleSize = 1
+            SignalCycleSize = 10
         };
 
-        var trigger = Process(
-            engine,
-            config,
-            TradingOpenMode.GapBuy,
-            0,
-            gapSell: -120);
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: -100));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: -120));
+        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: -110);
 
         Assert.NotNull(trigger);
-        Assert.Equal([-120], trigger!.SellGaps);
+        Assert.Equal([-100, -120, -110], trigger!.SellGaps);
     }
 
     [Fact]
@@ -351,79 +349,41 @@ public sealed class GapStableCloseIntegrationTests
     }
 
     [Fact]
-    public void DuplicateSnapshot_DoesNotIncreaseNormalCloseCycleCount()
+    public void StabilityMinSamples_ControlsNormalCloseCycle()
     {
-        var engine = new CloseSignalEngine();
-        var config = Config(confirm: 50, close: 100, holdMs: 0);
-        var first = new GapSignalSnapshot(
-            Start,
-            ExchangeABid: 1.1000m,
-            ExchangeAAsk: 1.1001m,
-            ExchangeBBid: 1.1101m,
-            ExchangeBAsk: 1.1102m,
-            GapBuy: null,
-            GapSell: -100,
-            PointMultiplier: 100);
-
-        Assert.Null(engine.ProcessSnapshot(first, config, TradingOpenMode.GapBuy));
-        Assert.Null(engine.ProcessSnapshot(first, config, TradingOpenMode.GapBuy));
-        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: -110));
-        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: -120);
-
-        Assert.NotNull(trigger);
-        Assert.Equal([-100, -110, -120], trigger!.SellGaps);
-    }
-
-    [Fact]
-    public void StabilityMinSamples_DoesNotControlNormalCloseCycleSize()
-    {
+        // Nhánh TIME: MinStableSamples LÀ điều kiện số mẫu của Normal Close.
         var engine = new CloseSignalEngine();
         var config = Config(confirm: 50, close: 100, holdMs: 0) with
         {
-            SignalCycleSize = 3,
-            CloseGapStability = Stability with { MinStableSamples = 10 }
+            CloseGapStability = Stability with { MinStableSamples = 5 }
         };
 
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: -100));
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: -110));
-        Assert.NotNull(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: -120));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: -120));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 3, gapSell: -110));
+        Assert.NotNull(Process(engine, config, TradingOpenMode.GapBuy, 4, gapSell: -120));
     }
 
     [Fact]
-    public void CycleSizeChange_ResetsOnlyNormalCloseCycle()
+    public void FinalGapBelowCloseTarget_KeepsCollectingInsteadOfResetting()
     {
-        var engine = new CloseSignalEngine();
-        var sizeThree = Config(confirm: 50, close: 100, holdMs: 0);
-        var sizeTwo = sizeThree with { SignalCycleSize = 2 };
-
-        Assert.Null(Process(engine, sizeThree, TradingOpenMode.GapBuy, 0, gapSell: -100));
-        Assert.Null(Process(engine, sizeThree, TradingOpenMode.GapBuy, 1, gapSell: -110));
-        Assert.Null(Process(engine, sizeTwo, TradingOpenMode.GapBuy, 2, gapSell: -120));
-        var trigger = Process(engine, sizeTwo, TradingOpenMode.GapBuy, 3, gapSell: -130);
-
-        Assert.NotNull(trigger);
-        Assert.Equal([-120, -130], trigger!.SellGaps);
-    }
-
-    [Fact]
-    public void FinalGapBelowCloseTarget_StartsFreshCycleWithoutSignal()
-    {
+        // Cycle ổn định nhưng mẫu cuối chưa đạt close_pts thì KHÔNG reset;
+        // mẫu kế tiếp vẫn nhập vào cùng Cycle và có thể trigger ngay.
         var engine = new CloseSignalEngine();
         var config = Config(confirm: 50, close: 100, holdMs: 0);
 
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: -60));
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: -70));
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: -80));
-        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 3, gapSell: -100));
-        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 4, gapSell: -110));
-        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 5, gapSell: -120);
+        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 3, gapSell: -100);
 
         Assert.NotNull(trigger);
-        Assert.Equal([-100, -110, -120], trigger!.SellGaps);
+        Assert.Equal([-60, -70, -80, -100], trigger!.SellGaps);
     }
 
     [Fact]
-    public void CloseMaxTimesTick_IsIgnoredByFixedSizeNormalCloseCycle()
+    public void CloseMaxTimesTick_BlocksNormalCloseCycleLongerThanLimit()
     {
         var engine = new CloseSignalEngine();
         var config = Config(
@@ -434,41 +394,39 @@ public sealed class GapStableCloseIntegrationTests
 
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: -100));
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: -110));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: -120));
+    }
+
+    [Fact]
+    public void CloseMaxTimesTickZero_DoesNotLimitNormalCloseCycle()
+    {
+        var engine = new CloseSignalEngine();
+        var config = Config(
+            confirm: 50,
+            close: 100,
+            holdMs: 2000,
+            closeMaxTimesTick: 0);
+
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: -100));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: -110));
         Assert.NotNull(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: -120));
     }
 
-    // ---- SOS Close: chu kỳ số lượng riêng (signal_cycle_size), không dùng hold/max-tick ----
+    // ---- SOS Close: state riêng, nhưng dùng CHUNG close_hold_confirm_ms và close_max_times_tick ----
 
     [Fact]
-    public void SosFixedSizeTen_TriggersOnlyOnTenthGap()
+    public void SosHoldConfirmNotReached_NeverTriggers()
     {
         var engine = new CloseSignalEngine();
         var config = SosConfig(confirm: 5, close: 3, cycleSize: 10, holdMs: 999_999);
 
         for (var index = 0; index < 9; index++)
         {
-            // Mọi mẫu đều đạt sos_close_confirm_gap_pts (<= 5) nhưng chưa đủ số lượng.
+            // Mọi mẫu đều đạt sos_close_confirm_gap_pts (<= 5) nhưng chưa đủ hold-time.
             Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, index, gapSell: 5));
         }
 
-        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 9, gapSell: 3);
-
-        Assert.NotNull(trigger);
-        Assert.Equal(CloseGapMode.Sos, trigger!.CloseGapMode);
-        Assert.Equal(10, trigger.SellGaps.Count);
-    }
-
-    [Fact]
-    public void SosFixedSizeOne_TriggersFromFirstQualifiedGap()
-    {
-        var engine = new CloseSignalEngine();
-        var config = SosConfig(confirm: 5, close: 3, cycleSize: 1, holdMs: 999_999);
-
-        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: 3);
-
-        Assert.NotNull(trigger);
-        Assert.Equal(CloseGapMode.Sos, trigger!.CloseGapMode);
-        Assert.Equal([3], trigger.SellGaps);
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 9, gapSell: 3));
     }
 
     [Fact]
@@ -490,89 +448,46 @@ public sealed class GapStableCloseIntegrationTests
     }
 
     [Fact]
-    public void SosFinalGapAboveCloseTarget_EndsCycleWithoutSignal()
+    public void SosFinalGapAboveCloseTarget_KeepsCollectingInsteadOfResetting()
     {
         var engine = new CloseSignalEngine();
         var config = SosConfig(confirm: 5, close: 3, cycleSize: 3, holdMs: 0);
 
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: 5));
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: 5));
-        // Đủ 3 mẫu nhưng gap cuối = 4 > sos_close_gap_pts=3 → kết thúc chu kỳ, không trigger.
+        // Đủ mẫu + đủ hold nhưng gap cuối = 4 > sos_close_gap_pts=3 → chưa trigger, KHÔNG reset.
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: 4));
 
-        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 3, gapSell: 5));
-        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 4, gapSell: 5));
-        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 5, gapSell: 3);
+        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 3, gapSell: 3);
 
         Assert.NotNull(trigger);
-        Assert.Equal([5, 5, 3], trigger!.SellGaps);
+        Assert.Equal([5, 5, 4, 3], trigger!.SellGaps);
     }
 
     [Fact]
-    public void SosDuplicateSnapshot_DoesNotIncreaseSosCycleCount()
+    public void CloseHoldConfirmMs_AppliesToSosCycle()
     {
+        // Nhánh TIME: SOS dùng chung close_hold_confirm_ms với Normal Close.
         var engine = new CloseSignalEngine();
-        var config = SosConfig(confirm: 5, close: 3, cycleSize: 3, holdMs: 0);
-        var first = new GapSignalSnapshot(
-            Start,
-            ExchangeABid: 1.1000m,
-            ExchangeAAsk: 1.1001m,
-            ExchangeBBid: 1.1101m,
-            ExchangeBAsk: 1.1102m,
-            GapBuy: null,
-            GapSell: 5,
-            PointMultiplier: 100);
-
-        Assert.Null(engine.ProcessSnapshot(first, config, TradingOpenMode.GapBuy));
-        Assert.Null(engine.ProcessSnapshot(first, config, TradingOpenMode.GapBuy));
-        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: 4));
-        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: 3);
-
-        Assert.NotNull(trigger);
-        Assert.Equal([5, 4, 3], trigger!.SellGaps);
-    }
-
-    [Fact]
-    public void SosCycleSizeChange_ResetsSosCycle()
-    {
-        var engine = new CloseSignalEngine();
-        var sizeThree = SosConfig(confirm: 5, close: 3, cycleSize: 3, holdMs: 0);
-        var sizeTwo = sizeThree with { SignalCycleSize = 2 };
-
-        Assert.Null(Process(engine, sizeThree, TradingOpenMode.GapBuy, 0, gapSell: 5));
-        Assert.Null(Process(engine, sizeThree, TradingOpenMode.GapBuy, 1, gapSell: 5));
-        Assert.Null(Process(engine, sizeTwo, TradingOpenMode.GapBuy, 2, gapSell: 5));
-        var trigger = Process(engine, sizeTwo, TradingOpenMode.GapBuy, 3, gapSell: 3);
-
-        Assert.NotNull(trigger);
-        Assert.Equal([5, 3], trigger!.SellGaps);
-    }
-
-    [Fact]
-    public void CloseHoldConfirmMs_IsIgnoredBySosCycle()
-    {
-        var engine = new CloseSignalEngine();
-        var noHold = SosConfig(confirm: 5, close: 3, cycleSize: 3, holdMs: 0);
         var hugeHold = SosConfig(confirm: 5, close: 3, cycleSize: 3, holdMs: 999_999);
+        var noHold = SosConfig(confirm: 5, close: 3, cycleSize: 3, holdMs: 0);
 
-        // Cùng chuỗi gap, mọi snapshot cách nhau 1s: hold-time khổng lồ không được đổi kết quả.
         Assert.Null(Process(engine, hugeHold, TradingOpenMode.GapBuy, 0, gapSell: 5));
         Assert.Null(Process(engine, hugeHold, TradingOpenMode.GapBuy, 1, gapSell: 4));
-        var withHold = Process(engine, hugeHold, TradingOpenMode.GapBuy, 2, gapSell: 3);
+        Assert.Null(Process(engine, hugeHold, TradingOpenMode.GapBuy, 2, gapSell: 3));
 
         var other = new CloseSignalEngine();
         Assert.Null(Process(other, noHold, TradingOpenMode.GapBuy, 0, gapSell: 5));
         Assert.Null(Process(other, noHold, TradingOpenMode.GapBuy, 1, gapSell: 4));
         var withoutHold = Process(other, noHold, TradingOpenMode.GapBuy, 2, gapSell: 3);
 
-        Assert.NotNull(withHold);
         Assert.NotNull(withoutHold);
-        Assert.Equal(withoutHold!.SellGaps, withHold!.SellGaps);
-        Assert.Equal(0, withHold.EffectiveCloseHoldMs);
+        Assert.Equal([5, 4, 3], withoutHold!.SellGaps);
+        Assert.Equal(0, withoutHold.EffectiveCloseHoldMs);
     }
 
     [Fact]
-    public void CloseMaxTimesTick_IsIgnoredByFixedSizeSosCycle()
+    public void CloseMaxTimesTick_BlocksSosCycleLongerThanLimit()
     {
         var engine = new CloseSignalEngine();
         var config = SosConfig(
@@ -584,7 +499,7 @@ public sealed class GapStableCloseIntegrationTests
 
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: 5));
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: 4));
-        Assert.NotNull(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: 3));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: 3));
     }
 
     [Fact]
@@ -592,11 +507,11 @@ public sealed class GapStableCloseIntegrationTests
     {
         var engine = new CloseSignalEngine();
         _ = new PositionSlot(11, "PAIR-11", engine);
-        var normal = Config(confirm: 50, close: 100, holdMs: 0) with
+        // holdMs > 0 để cả Normal Close lẫn TP còn đang thu mẫu tại thời điểm chụp status.
+        var normal = Config(confirm: 50, close: 100, holdMs: 5000) with
         {
             CloseConfirmTpProfit = 5,
-            CloseTpProfit = 500,
-            SignalCycleSize = 10
+            CloseTpProfit = 500
         };
 
         // Chạy Normal Close + TP để hai chu kỳ này có tiến độ.
@@ -630,7 +545,8 @@ public sealed class GapStableCloseIntegrationTests
         var normalClose = Assert.Single(statuses, s => s.Kind == SignalCycleKind.NormalCloseBuy);
 
         Assert.Equal(2, sosClose.CurrentCount);
-        Assert.Equal(10, sosClose.RequiredCount);
+        // Nhánh TIME: mẫu số là MinStableSamples, không phải signal_cycle_size.
+        Assert.Equal(Stability.MinStableSamples, sosClose.RequiredCount);
         Assert.Equal(0, normalClose.CurrentCount);
     }
 
@@ -639,11 +555,10 @@ public sealed class GapStableCloseIntegrationTests
     {
         var engine = new CloseSignalEngine();
         _ = new PositionSlot(7, "PAIR-7", engine);
-        var config = Config(confirm: 50, close: 100, holdMs: 0) with
+        var config = Config(confirm: 50, close: 100, holdMs: 5000) with
         {
             CloseConfirmTpProfit = 5,
-            CloseTpProfit = 50,
-            SignalCycleSize = 10
+            CloseTpProfit = 50
         };
 
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: -60, slotProfit: 5));
@@ -654,10 +569,11 @@ public sealed class GapStableCloseIntegrationTests
         var tp = Assert.Single(statuses, status => status.Kind == SignalCycleKind.Tp);
         Assert.Equal(7, close.SlotId);
         Assert.Equal(2, close.CurrentCount);
-        Assert.Equal(10, close.RequiredCount);
+        Assert.Equal(Stability.MinStableSamples, close.RequiredCount);
         Assert.Equal(-70d, close.LastValue);
         Assert.Equal(2, tp.CurrentCount);
-        Assert.Equal(10, tp.RequiredCount);
+        // TP chốt theo thời gian nên không có số mẫu đích.
+        Assert.Equal(0, tp.RequiredCount);
         Assert.Equal(6d, tp.LastValue);
     }
 
@@ -669,8 +585,7 @@ public sealed class GapStableCloseIntegrationTests
         var config = Config(confirm: 50, close: 100, holdMs: 0) with
         {
             CloseConfirmTpProfit = 5,
-            CloseTpProfit = 10,
-            SignalCycleSize = 1
+            CloseTpProfit = 10
         };
 
         var trigger = Process(

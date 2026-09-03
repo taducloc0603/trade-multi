@@ -78,7 +78,8 @@ public sealed class NegativeGapThresholdTests
 
         Assert.Null(Close(engine, config, TradingOpenMode.GapBuy, 0, gapSell: 12));
         Assert.Null(Close(engine, config, TradingOpenMode.GapBuy, 1, gapSell: 10));
-        // Đủ 3 mẫu nhưng gap cuối 9 > +8 -> kết thúc Cycle, không phát signal.
+        // Đủ mẫu + đủ hold nên Cycle đã Stable, nhưng gap cuối 9 > +8 -> không phát signal.
+        // Nhánh TIME KHÔNG reset ở đây: Cycle tiếp tục thu mẫu, mẫu sau vẫn có thể trigger.
         Assert.Null(Close(engine, config, TradingOpenMode.GapBuy, 2, gapSell: 9));
     }
 

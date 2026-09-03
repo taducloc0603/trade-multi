@@ -14,7 +14,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentPoint { get; private set; }
     public int CurrentOpenPts { get; private set; }
     public int CurrentConfirmGapPts { get; private set; }
-    // Price-freeze khi thực thi Open. 0 = tắt kiểm tra.
+    // Thời gian giữ tối thiểu của một Open Cycle. 0 = không yêu cầu thời gian.
+    public int CurrentHoldConfirmMs { get; private set; }
+    // Price-freeze khi thực thi Open. 0 = tắt kiểm tra. ĐỘC LẬP với hold-time.
     public int CurrentOpenPriceFreezeMs { get; private set; }
     public int CurrentClosePts { get; private set; }
     public int CurrentCloseConfirmGapPts { get; private set; }
@@ -26,7 +28,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentSosTriggerAfterSeconds { get; private set; }
     public int CurrentSosCloseConfirmGapPts { get; private set; }
     public int CurrentSosCloseGapPts { get; private set; }
-    // Price-freeze khi thực thi Close. 0 = tắt kiểm tra.
+    // Thời gian giữ tối thiểu của một Close Cycle (Normal Close, SOS Close và TP dùng chung).
+    public int CurrentCloseHoldConfirmMs { get; private set; }
+    // Price-freeze khi thực thi Close. 0 = tắt kiểm tra. ĐỘC LẬP với hold-time.
     public int CurrentClosePriceFreezeMs { get; private set; }
     public int CurrentStartTimeHold { get; private set; }
     public int CurrentEndTimeHold { get; private set; }
@@ -34,6 +38,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentMaxGap { get; private set; }
     public int CurrentLimitMaxGap { get; private set; }
     public int CurrentMaxSpread { get; private set; }
+    public int CurrentOpenMaxTimesTick { get; private set; }
+    public int CurrentCloseMaxTimesTick { get; private set; }
+    // Chỉ để ghi log đối chiếu với nhánh TICK; không tham gia quyết định signal.
     public int CurrentSignalCycleSize { get; private set; } = 10;
     public int CurrentOpenPendingTimeMs { get; private set; } = 1000;
     public int CurrentClosePendingTimeMs { get; private set; } = 1000;
@@ -95,11 +102,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public string TradeHwndB => CurrentTradeHwndB;
     public int OpenPts => CurrentOpenPts;
     public int ConfirmGapPts => CurrentConfirmGapPts;
+    public int HoldConfirmMs => CurrentHoldConfirmMs;
     public int OpenPriceFreezeMs => CurrentOpenPriceFreezeMs;
     public int ClosePts => CurrentClosePts;
     public int CloseConfirmGapPts => CurrentCloseConfirmGapPts;
     public double CloseTpProfit => CurrentCloseTpProfit;
     public double CloseConfirmTpProfit => CurrentCloseConfirmTpProfit;
+    public int CloseHoldConfirmMs => CurrentCloseHoldConfirmMs;
     public int ClosePriceFreezeMs => CurrentClosePriceFreezeMs;
     public int StartTimeHold => CurrentStartTimeHold;
     public int EndTimeHold => CurrentEndTimeHold;
@@ -108,6 +117,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int LimitMaxGap => CurrentLimitMaxGap;
     public double LimitMaxTp => CurrentLimitMaxTp;
     public int MaxSpread => CurrentMaxSpread;
+    public int OpenMaxTimesTick => CurrentOpenMaxTimesTick;
+    public int CloseMaxTimesTick => CurrentCloseMaxTimesTick;
     public int SignalCycleSize => CurrentSignalCycleSize;
     public int OpenPendingTimeMs => CurrentOpenPendingTimeMs;
     public int ClosePendingTimeMs => CurrentClosePendingTimeMs;
@@ -174,11 +185,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int point,
         int openPts,
         int confirmGapPts,
+        int holdConfirmMs,
         int openPriceFreezeMs,
         int closePts,
         int closeConfirmGapPts,
         double closeTpProfit,
         double closeConfirmTpProfit,
+        int closeHoldConfirmMs,
         int closePriceFreezeMs,
         int startTimeHold,
         int endTimeHold,
@@ -186,6 +199,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int maxGap = 0,
         int limitMaxGap = 0,
         int maxSpread = 0,
+        int openMaxTimesTick = 0,
+        int closeMaxTimesTick = 0,
         int openPendingTimeMs = -1,
         int closePendingTimeMs = -1,
         int delayOpenAMs = -1,
@@ -219,11 +234,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             point,
             openPts,
             confirmGapPts,
+            holdConfirmMs,
             openPriceFreezeMs,
             closePts,
             closeConfirmGapPts,
             closeTpProfit,
             closeConfirmTpProfit,
+            closeHoldConfirmMs,
             closePriceFreezeMs,
             startTimeHold,
             endTimeHold,
@@ -231,6 +248,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             maxGap,
             limitMaxGap,
             maxSpread,
+            openMaxTimesTick,
+            closeMaxTimesTick,
             openPendingTimeMs,
             closePendingTimeMs,
             delayOpenAMs,
@@ -265,11 +284,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int point,
         int openPts,
         int confirmGapPts,
+        int holdConfirmMs,
         int openPriceFreezeMs,
         int closePts,
         int closeConfirmGapPts,
         double closeTpProfit,
         double closeConfirmTpProfit,
+        int closeHoldConfirmMs,
         int closePriceFreezeMs,
         int startTimeHold,
         int endTimeHold,
@@ -277,6 +298,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int maxGap = 0,
         int limitMaxGap = 0,
         int maxSpread = 0,
+        int openMaxTimesTick = 0,
+        int closeMaxTimesTick = 0,
         int openPendingTimeMs = -1,
         int closePendingTimeMs = -1,
         int delayOpenAMs = -1,
@@ -310,6 +333,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         // 4 ngưỡng gap thường giữ nguyên dấu như cặp SOS: ÂM nghĩa là nới ngưỡng về phía trong.
         CurrentOpenPts = openPts;
         CurrentConfirmGapPts = confirmGapPts;
+        CurrentHoldConfirmMs = Math.Max(0, holdConfirmMs);
+        // Price-freeze là cột độc lập: KHÔNG fallback về hold-time.
         CurrentOpenPriceFreezeMs = Math.Max(0, openPriceFreezeMs);
         CurrentClosePts = closePts;
         CurrentCloseConfirmGapPts = closeConfirmGapPts;
@@ -321,6 +346,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentSosTriggerAfterSeconds = Math.Max(0, sosTriggerAfterSeconds);
         CurrentSosCloseConfirmGapPts = sosCloseConfirmGapPts;
         CurrentSosCloseGapPts = sosCloseGapPts;
+        CurrentCloseHoldConfirmMs = Math.Max(0, closeHoldConfirmMs);
+        // Price-freeze là cột độc lập: KHÔNG fallback về hold-time.
         CurrentClosePriceFreezeMs = Math.Max(0, closePriceFreezeMs);
         CurrentStartTimeHold = Math.Max(0, startTimeHold);
         CurrentEndTimeHold = Math.Max(0, endTimeHold);
@@ -328,6 +355,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentMaxGap = Math.Max(0, maxGap);
         CurrentLimitMaxGap = Math.Max(0, limitMaxGap);
         CurrentMaxSpread = Math.Max(0, maxSpread);
+        CurrentOpenMaxTimesTick = Math.Max(0, openMaxTimesTick);
+        CurrentCloseMaxTimesTick = Math.Max(0, closeMaxTimesTick);
         if (openPendingTimeMs >= 0)
         {
             CurrentOpenPendingTimeMs = Math.Max(0, openPendingTimeMs);
@@ -425,11 +454,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             point,
             CurrentOpenPts,
             CurrentConfirmGapPts,
+            CurrentHoldConfirmMs,
             CurrentOpenPriceFreezeMs,
             CurrentClosePts,
             CurrentCloseConfirmGapPts,
             CurrentCloseTpProfit,
             CurrentCloseConfirmTpProfit,
+            CurrentCloseHoldConfirmMs,
             CurrentClosePriceFreezeMs,
             CurrentStartTimeHold,
             CurrentEndTimeHold,
@@ -437,6 +468,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentMaxGap,
             CurrentLimitMaxGap,
             CurrentMaxSpread,
+            CurrentOpenMaxTimesTick,
+            CurrentCloseMaxTimesTick,
             CurrentOpenPendingTimeMs,
             CurrentClosePendingTimeMs,
             CurrentDelayOpenAMs,
@@ -462,11 +495,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentPoint,
             CurrentOpenPts,
             CurrentConfirmGapPts,
+            CurrentHoldConfirmMs,
             CurrentOpenPriceFreezeMs,
             CurrentClosePts,
             CurrentCloseConfirmGapPts,
             CurrentCloseTpProfit,
             CurrentCloseConfirmTpProfit,
+            CurrentCloseHoldConfirmMs,
             CurrentClosePriceFreezeMs,
             CurrentStartTimeHold,
             CurrentEndTimeHold,
@@ -474,6 +509,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentMaxGap,
             CurrentLimitMaxGap,
             CurrentMaxSpread,
+            CurrentOpenMaxTimesTick,
+            CurrentCloseMaxTimesTick,
             CurrentOpenPendingTimeMs,
             CurrentClosePendingTimeMs,
             CurrentDelayOpenAMs,

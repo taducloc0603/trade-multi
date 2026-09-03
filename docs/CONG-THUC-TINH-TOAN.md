@@ -6,13 +6,16 @@
 >
 > Quy ước chung trong app: **`Point` (point multiplier)** = `CurrentPoint > 0 ? CurrentPoint : 1`.
 
-> ⚠️ **Lưu ý về confirmation mode.** Các bảng mô tả hold-window ở mục 2 và 3 dưới đây
-> phản ánh nhánh **legacy compatibility** (`ProcessSide` / `ProcessLegacyGap`). Runtime hiện tại
-> luôn có stability policy nên **chỉ chạy FIXED_SIZE**: Open, Normal Close, SOS Close và TP đều
-> gom đủ `signal_cycle_size` mẫu rồi mới xét mẫu cuối. Bốn cột `open_hold_confirm_ms`,
-> `close_hold_confirm_ms`, `open_max_times_tick`, `close_max_times_tick` đã bị **gỡ khỏi
-> toàn bộ source** (config pipeline không còn đọc chúng); các knob cùng tên trong
-> `GapSignalConfirmationConfig` mặc định `0` và chỉ còn test set tay. Xem README §3, §4, §7.1.
+> ⚠️ **Lưu ý về confirmation mode (nhánh TIME).** Runtime của nhánh này chạy
+> `TIME_AND_MIN_SAMPLES`: Open, Normal Close, SOS Close đều phải đạt **cả**
+> `*_gap_min_stable_samples` mẫu **và** `*_hold_confirm_ms` thời gian rồi mới xét
+> Dispersion/Drift và mẫu cuối; TP chốt theo cửa sổ `close_hold_confirm_ms`.
+> Bốn cột `open_hold_confirm_ms`, `close_hold_confirm_ms`, `open_max_times_tick`,
+> `close_max_times_tick` **đang được đọc từ DB và tham gia quyết định signal**.
+> `signal_cycle_size` chỉ còn dùng để ghi log đối chiếu với nhánh TICK.
+> Các bảng hold-window ở mục 2 và 3 dưới đây mô tả nhánh legacy `ProcessSide` /
+> `ProcessLegacyGap`; công thức thời gian là tương đương, nhưng đường chạy production là
+> `GapCycleState.Process`. Xem README §3, §4, §7.1.
 >
 > Guard **PriceFreeze** (mục 4) dùng cửa sổ riêng: `open_price_freeze_ms` cho Open và
 > `close_price_freeze_ms` cho Close — độc lập với hold-time, `0` = tắt kiểm tra.

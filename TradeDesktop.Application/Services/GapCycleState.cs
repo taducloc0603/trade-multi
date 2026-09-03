@@ -64,11 +64,14 @@ public sealed class GapCycleState
     private GapStabilityCalculator.Metrics? _metrics;
     private GapCycleStatus _status = GapCycleStatus.Empty;
     private string _reason = "Chưa có Cycle.";
+    private int _lastMinStableSamples;
 
     public GapCycleSnapshot Current => _fixedCycle is null
         ? BuildSnapshot()
         : BuildFixedSnapshot();
-    public int FixedRequiredSize => _fixedCycle?.RequiredSize ?? 0;
+    // Số mẫu "đích" của chu kỳ hiện tại, dùng cho panel Signal Cycle.
+    // Nhánh TIME không có kích thước cố định nên báo MinStableSamples của lần Process gần nhất.
+    public int FixedRequiredSize => _fixedCycle?.RequiredSize ?? _lastMinStableSamples;
 
     public GapCycleUpdateResult ProcessFixedSize(
         DateTime timestampUtc,
@@ -199,6 +202,8 @@ public sealed class GapCycleState
                 nameof(holdConfirmMs),
                 "Hold Confirm phải >= 0.");
         }
+
+        _lastMinStableSamples = config.MinStableSamples;
 
         if (!hasRequiredData || !gap.HasValue)
         {

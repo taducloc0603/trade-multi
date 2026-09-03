@@ -22,13 +22,13 @@ public sealed class ConfigQuotaMappingTests
             point: 100,
             openPts: 1,
             confirmGapPts: 0,
-            openPriceFreezeMs: 2000,
+            holdConfirmMs: 0, openPriceFreezeMs: 2000,
             closePts: 1,
             closeConfirmGapPts: 0,
             closeTpProfit: 1,
             closeConfirmTpProfit: 0,
             closeMaxTpProfit: 35,
-            closePriceFreezeMs: 2000,
+            closeHoldConfirmMs: 0, closePriceFreezeMs: 2000,
             startTimeHold: 5,
             endTimeHold: 15,
             configId: "id",
@@ -88,13 +88,13 @@ public sealed class ConfigQuotaMappingTests
             point: 100,
             openPts: 1,
             confirmGapPts: 0,
-            openPriceFreezeMs: 2000,
+            holdConfirmMs: 0, openPriceFreezeMs: 2000,
             closePts: 1,
             closeConfirmGapPts: 0,
             closeTpProfit: 1,
             closeConfirmTpProfit: 0,
             closeMaxTpProfit: 35,
-            closePriceFreezeMs: 2000,
+            closeHoldConfirmMs: 0, closePriceFreezeMs: 2000,
             startTimeHold: 5,
             endTimeHold: 15,
             configId: "id",
@@ -113,10 +113,10 @@ public sealed class ConfigQuotaMappingTests
         var result = ConfigLoadResult.Success(
             machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
             platformA: "mt5", platformB: "mt5", point: 100, openPts: 1,
-            confirmGapPts: 0, openPriceFreezeMs: 2000,
+            confirmGapPts: 0, holdConfirmMs: 0, openPriceFreezeMs: 2000,
             closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
             closeConfirmTpProfit: 0, closeMaxTpProfit: 35,
-            closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
+            closeHoldConfirmMs: 0, closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
             configId: "id", sansJson: "{}",
             rdStartPostOpenLockSeconds: 30,
             rdEndPostOpenLockSeconds: 45);
@@ -131,10 +131,10 @@ public sealed class ConfigQuotaMappingTests
         var result = ConfigLoadResult.Success(
             machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
             platformA: "mt5", platformB: "mt5", point: 100, openPts: 1,
-            confirmGapPts: 0, openPriceFreezeMs: 2000,
+            confirmGapPts: 0, holdConfirmMs: 0, openPriceFreezeMs: 2000,
             closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
             closeConfirmTpProfit: 0, closeMaxTpProfit: 35,
-            closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
+            closeHoldConfirmMs: 0, closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
             configId: "id", sansJson: "{}", oppositeOpenMinDistancePts: 25);
 
         Assert.Equal(25, result.OppositeOpenMinDistancePts);
@@ -146,10 +146,10 @@ public sealed class ConfigQuotaMappingTests
         var result = ConfigLoadResult.Success(
             machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
             platformA: "mt5", platformB: "mt5", point: 100, openPts: 1,
-            confirmGapPts: 0, openPriceFreezeMs: 2000,
+            confirmGapPts: 0, holdConfirmMs: 0, openPriceFreezeMs: 2000,
             closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
             closeConfirmTpProfit: 0, closeMaxTpProfit: 35,
-            closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
+            closeHoldConfirmMs: 0, closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
             configId: "id", sansJson: "{}",
             rdStartSameActionLockSeconds: 6,
             rdEndSameActionLockSeconds: 12);
@@ -166,10 +166,10 @@ public sealed class ConfigQuotaMappingTests
         var result = ConfigLoadResult.Success(
             machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
             platformA: "mt5", platformB: "mt5", point: 100, openPts: 1,
-            confirmGapPts: 0, openPriceFreezeMs: 2000,
+            confirmGapPts: 0, holdConfirmMs: 0, openPriceFreezeMs: 2000,
             closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
             closeConfirmTpProfit: 0, closeMaxTpProfit: 35,
-            closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
+            closeHoldConfirmMs: 0, closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
             configId: "id", sansJson: "{}", minProfitToClose: configured);
 
         Assert.Equal(expected, result.MinProfitToClose);

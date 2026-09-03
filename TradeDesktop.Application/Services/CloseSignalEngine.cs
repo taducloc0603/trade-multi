@@ -15,7 +15,8 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
     private readonly GapCycleState _closeByGapBuyCycle = new();
     private readonly GapCycleState _sosCloseByGapSellCycle = new();
     private readonly GapCycleState _sosCloseByGapBuyCycle = new();
-    private FixedSizeSignalCycle<double>? _tpCycle;
+    // Nhánh TIME: TP chốt theo cửa sổ close_hold_confirm_ms, không theo số mẫu cố định.
+    private readonly TpWindowState _tpState = new();
     private SignalCycleEventSnapshot _closeBuyObservation = new();
     private SignalCycleEventSnapshot _closeSellObservation = new();
     private SignalCycleEventSnapshot _sosCloseBuyObservation = new();
@@ -67,17 +68,18 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             observation.DisplayAtUtc);
     }
 
+    // Nhánh TIME: TP không có số mẫu đích nên RequiredCount = 0; tiến độ nằm ở LastReason.
     private SignalCycleStatus CreateTpCycleStatus() => new(
         SignalCycleKind.Tp,
         "TP",
         _slotId,
-        _tpCycle?.CycleId ?? string.Empty,
-        _tpCycle?.Count ?? 0,
-        _tpCycle?.RequiredSize ?? 0,
-        (_tpCycle?.Status ?? FixedSizeCycleStatus.Empty).ToString(),
-        _tpCycle is { Values.Count: > 0 } ? _tpCycle.Values[^1] : null,
-        _tpCycle?.LastResetReason ?? string.Empty,
-        _tpCycle?.LastUpdatedAtUtc,
+        _tpState.CycleId,
+        (int)Math.Min(int.MaxValue, _tpState.TickCount),
+        0,
+        _tpState.Status,
+        _tpState.LastProfit,
+        _tpState.LastReason,
+        _tpState.LastTickUtc,
         _tpObservation.DisplayEventName,
         _tpObservation.DisplayCycleId,
         _tpObservation.DisplayCount,
@@ -103,8 +105,8 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             ? -Math.Abs(config.ClosePts)
             : config.ClosePts;
 
-        // Fixed-size is the only supported signal-confirmation mode. Hold/max-tick
-        // columns remain mapped temporarily for DB compatibility but are ignored here.
+        // Nhánh TIME: Normal Close, SOS Close và TP đều chốt chu kỳ theo close_hold_confirm_ms
+        // cộng MinStableSamples của Gap Stability.
         var gapResult = config.CloseGapStability is not null
             ? ProcessStableGap(
                 snapshot,
@@ -141,7 +143,7 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             CloseGapMode = config.CloseGapMode,
             EffectiveCloseConfirmGapPts = effectiveConfirm,
             EffectiveCloseGapPts = effectiveClose,
-            EffectiveCloseHoldMs = 0
+            EffectiveCloseHoldMs = Math.Max(0, config.CloseHoldConfirmMs)
         };
     }
 
@@ -250,26 +252,28 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         int effectiveConfirm,
         int effectiveClose)
     {
+        var normalizedHoldMs = Math.Max(0, config.CloseHoldConfirmMs);
         var diagnosticPolicy = new GapCycleDiagnostics.PolicyContext(
             stabilityConfig,
-            0,
+            normalizedHoldMs,
             config.LimitMaxGap,
             config.DiagnosticMaxGap,
             config.DiagnosticConfigId,
             config.DiagnosticSymbol,
-            ConfirmationMode: "FIXED_SIZE",
+            // Nhánh TIME: chu kỳ chốt theo hold-time + MinStableSamples.
+            // SignalCycleSize chỉ đi kèm log để đối chiếu với nhánh TICK.
+            ConfirmationMode: "TIME_AND_MIN_SAMPLES",
             SignalCycleSize: config.SignalCycleSize,
-            HoldConfirmIgnored: true);
+            HoldConfirmIgnored: false);
         _lastDiagnosticPolicy = diagnosticPolicy;
         var sideName = positionSide == GapSignalSide.Buy ? "BUY" : "SELL";
-        var update = state.ProcessFixedSize(
+        var update = state.Process(
             snapshot.TimestampUtc,
             primaryGap,
             hasRequiredData,
             confirmSatisfied,
             stabilityConfig,
-            config.SignalCycleSize,
-            CreateNormalCloseFingerprint(sideName, snapshot, primaryGap),
+            normalizedHoldMs,
             config.LimitMaxGap);
         if (usesSos && positionSide == GapSignalSide.Buy)
         {
@@ -295,7 +299,7 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             sideName,
             update,
             primaryGap,
-            config.SignalCycleSize,
+            stabilityConfig.MinStableSamples,
             diagnosticPolicy,
             action: usesSos ? "SOS_CLOSE" : "CLOSE");
         var cycle = update.CurrentCycle;
@@ -307,9 +311,17 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         var lastGap = cycle.Gaps[^1];
         if (!closeSatisfied(lastGap))
         {
+            // Chế độ TIME: Cycle vẫn ổn định, chỉ là mẫu cuối chưa đạt ngưỡng close.
+            // KHÔNG reset — Cycle tiếp tục thu mẫu cho tới khi Tolerance/Dispersion/Drift phá vỡ nó.
+            return null;
+        }
+
+        var normalizedMaxTimesTick = Math.Max(0, config.CloseMaxTimesTick);
+        if (normalizedMaxTimesTick > 0 && cycle.Gaps.Count > normalizedMaxTimesTick)
+        {
             state.Reset(usesSos
-                ? "Fixed-size SOS Close Cycle completed but final Gap did not reach sos_close_gap_pts."
-                : "Fixed-size Normal Close Cycle completed but final Gap did not reach close_pts.");
+                ? "SOS Close Cycle vượt close_max_times_tick."
+                : "Normal Close Cycle vượt close_max_times_tick.");
             return null;
         }
 
@@ -337,7 +349,7 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             CloseGapMode: usesSos ? CloseGapMode.Sos : CloseGapMode.Normal,
             EffectiveCloseConfirmGapPts: effectiveConfirm,
             EffectiveCloseGapPts: effectiveClose,
-            EffectiveCloseHoldMs: 0,
+            EffectiveCloseHoldMs: normalizedHoldMs,
             DiagnosticCycleId: cycle.CycleId,
             DiagnosticSignalId: diagnosticSignalId);
 
@@ -409,23 +421,6 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             _ => null
         };
 
-    private string CreateNormalCloseFingerprint(
-        string side,
-        GapSignalSnapshot snapshot,
-        int? primaryGap) =>
-        string.Join(
-            '|',
-            "CLOSE",
-            "FIXED",
-            _slotId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-",
-            side,
-            snapshot.TimestampUtc.Ticks,
-            primaryGap?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            snapshot.ExchangeABid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            snapshot.ExchangeAAsk?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            snapshot.ExchangeBBid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            snapshot.ExchangeBAsk?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null");
-
     private void LogCloseTransition(
         string side,
         GapCycleUpdateResult update,
@@ -449,7 +444,7 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         TradingOpenMode openMode,
         double? slotProfit)
     {
-        EnsureTpCycleSize(config.SignalCycleSize, snapshot.TimestampUtc);
+        var normalizedHoldMs = Math.Max(0, config.CloseHoldConfirmMs);
 
         if (openMode == TradingOpenMode.None || !slotProfit.HasValue)
         {
@@ -483,55 +478,65 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             return null;
         }
 
-        var update = _tpCycle!.Add(
-            currentProfit,
-            snapshot.TimestampUtc,
-            CreateTpFingerprint(snapshot, currentProfit));
-        if (update.DuplicateIgnored)
+        // Timestamp lùi -> coi như cửa sổ cũ không còn tin cậy, mở lại từ mẫu này.
+        if (_tpState.LastTickUtc.HasValue && snapshot.TimestampUtc < _tpState.LastTickUtc.Value)
+        {
+            ObserveTpReset("TIMESTAMP_REGRESSION", currentProfit, snapshot.TimestampUtc);
+            LogTpCycle("RESET", currentProfit, "TIMESTAMP_REGRESSION");
+            ResetTpCycle("TIMESTAMP_REGRESSION", log: false);
+            return null;
+        }
+
+        var isNewWindow = !_tpState.WindowStartUtc.HasValue;
+        if (isNewWindow)
+        {
+            _tpState.StartWindow(snapshot.TimestampUtc);
+        }
+
+        _tpState.Add(currentProfit, snapshot.TimestampUtc, MaxTpDiagnosticSamples);
+
+        var elapsedMs = (snapshot.TimestampUtc - _tpState.WindowStartUtc!.Value).TotalMilliseconds;
+        _tpState.LastReason =
+            $"Hold Confirm: {elapsedMs:0.####}/{normalizedHoldMs} ms.";
+
+        if (isNewWindow)
+        {
+            _tpObservation = SignalCycleObservation.Record(
+                _tpObservation,
+                "Started", _tpState.CycleId, (int)_tpState.TickCount, currentProfit,
+                "CYCLE_STARTED", snapshot.TimestampUtc);
+            LogTpCycle("STARTED", currentProfit, "COLLECTING", holdProgressMs: elapsedMs, holdTargetMs: normalizedHoldMs);
+        }
+        else if (elapsedMs < normalizedHoldMs)
+        {
+            _tpObservation = SignalCycleObservation.Record(
+                _tpObservation,
+                "Progress", _tpState.CycleId, (int)_tpState.TickCount, currentProfit,
+                _tpState.LastReason, snapshot.TimestampUtc);
+            LogTpCycle("PROGRESS", currentProfit, "COLLECTING", holdProgressMs: elapsedMs, holdTargetMs: normalizedHoldMs);
+        }
+
+        if (elapsedMs < normalizedHoldMs)
         {
             return null;
         }
 
-        if (update.Reason == "TIMESTAMP_REGRESSION")
+        if (_tpState.TickCount == 0)
         {
-            _tpObservation = SignalCycleObservation.Record(
-                _tpObservation,
-                "Reset", update.CycleId, update.Count, currentProfit, update.Reason, snapshot.TimestampUtc);
-            LogTpCycle("RESET", update, currentProfit, "TIMESTAMP_REGRESSION");
-            return null;
-        }
-
-        if (update.Reason == "CYCLE_STARTED")
-        {
-            _tpObservation = SignalCycleObservation.Record(
-                _tpObservation,
-                "Started", update.CycleId, update.Count, currentProfit, update.Reason, snapshot.TimestampUtc);
-            LogTpCycle("STARTED", update, currentProfit, "COLLECTING");
-        }
-        else if (!_tpCycle.IsComplete)
-        {
-            _tpObservation = SignalCycleObservation.Record(
-                _tpObservation,
-                "Progress", update.CycleId, update.Count, currentProfit, update.Reason, snapshot.TimestampUtc);
-            LogTpCycle("PROGRESS", update, currentProfit, "COLLECTING");
-        }
-
-        if (!_tpCycle.IsComplete)
-        {
+            ResetTpCycle("NO_SAMPLES");
             return null;
         }
 
         var lastProfit = currentProfit;
-        var cycleId = _tpCycle.CycleId ?? string.Empty;
-        var diagnosticProfits = _tpCycle.Values
-            .Skip(Math.Max(0, _tpCycle.Values.Count - MaxTpDiagnosticSamples))
-            .ToArray();
+        var cycleId = _tpState.CycleId;
+        var diagnosticProfits = _tpState.DiagnosticProfits.ToArray();
         _tpObservation = SignalCycleObservation.Record(
             _tpObservation,
-            "Completed", cycleId, update.Count, lastProfit, update.Reason, snapshot.TimestampUtc);
+            "Completed", cycleId, (int)_tpState.TickCount, lastProfit,
+            _tpState.LastReason, snapshot.TimestampUtc);
         if (lastProfit < targetProfit)
         {
-            LogTpCycle("COMPLETED", update, lastProfit, "TARGET_NOT_REACHED");
+            LogTpCycle("COMPLETED", lastProfit, "TARGET_NOT_REACHED", holdProgressMs: elapsedMs, holdTargetMs: normalizedHoldMs);
             ResetTpCycle("TARGET_NOT_REACHED", log: false);
             return null;
         }
@@ -539,8 +544,16 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         var maxTpProfit = Math.Abs(config.CloseMaxTpProfit);
         if (maxTpProfit > 0d && lastProfit > maxTpProfit)
         {
-            LogTpCycle("COMPLETED", update, lastProfit, "CLOSE_MAX_TP_EXCEEDED");
-            ResetTpCycle("CLOSE_MAX_TP_EXCEEDED", log: false);
+            // Bản TIME cũ: chỉ bỏ qua tick này, KHÔNG reset cửa sổ.
+            LogTpCycle("COMPLETED", lastProfit, "CLOSE_MAX_TP_EXCEEDED", holdProgressMs: elapsedMs, holdTargetMs: normalizedHoldMs);
+            return null;
+        }
+
+        var normalizedMaxTimesTick = Math.Max(0, config.CloseMaxTimesTick);
+        if (normalizedMaxTimesTick > 0 && _tpState.TickCount > normalizedMaxTimesTick)
+        {
+            LogTpCycle("COMPLETED", lastProfit, "CLOSE_MAX_TIMES_TICK_EXCEEDED", holdProgressMs: elapsedMs, holdTargetMs: normalizedHoldMs);
+            ResetTpCycle("CLOSE_MAX_TIMES_TICK_EXCEEDED", log: false);
             return null;
         }
 
@@ -574,44 +587,18 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             DiagnosticCycleId: cycleId,
             DiagnosticSignalId: diagnosticSignalId);
 
-        LogTpCycle("COMPLETED", update, lastProfit, "TARGET_REACHED", diagnosticSignalId);
-        LogTpCycle("TRIGGERED", update, lastProfit, "TRIGGERED", diagnosticSignalId);
+        LogTpCycle("COMPLETED", lastProfit, "TARGET_REACHED", diagnosticSignalId, elapsedMs, normalizedHoldMs);
+        LogTpCycle("TRIGGERED", lastProfit, "TRIGGERED", diagnosticSignalId, elapsedMs, normalizedHoldMs);
         _tpObservation = SignalCycleObservation.Record(
             _tpObservation,
-            "Triggered", cycleId, update.Count, lastProfit, "TP target reached.", snapshot.TimestampUtc);
+            "Triggered", cycleId, (int)_tpState.TickCount, lastProfit, "TP target reached.", snapshot.TimestampUtc);
         ResetTpCycle("TP_TRIGGERED", log: false);
         return result;
     }
 
-    private void EnsureTpCycleSize(int requiredSize, DateTime timestampUtc)
-    {
-        if (_tpCycle is null)
-        {
-            _tpCycle = new FixedSizeSignalCycle<double>(requiredSize);
-            return;
-        }
-
-        if (_tpCycle.RequiredSize != requiredSize)
-        {
-            var previousCount = _tpCycle.Count;
-            var oldSize = _tpCycle.RequiredSize;
-            var previousCycleId = _tpCycle.CycleId ?? string.Empty;
-            _tpCycle.Resize(requiredSize);
-            if (previousCount > 0)
-            {
-                _tpObservation = SignalCycleObservation.Record(
-                    _tpObservation,
-                    "Reset", previousCycleId, previousCount, null, "CYCLE_SIZE_CHANGED", timestampUtc);
-                _logger?.Log(
-                    $"[TP_CYCLE][RESET] slot_id={_slotId?.ToString() ?? "-"} " +
-                    $"count={previousCount}/{oldSize} reason=CYCLE_SIZE_CHANGED new_size={requiredSize}");
-            }
-        }
-    }
-
     private void ObserveTpReset(string reason, double? currentValue, DateTime timestampUtc)
     {
-        if (_tpCycle is not { Count: > 0 })
+        if (_tpState.TickCount == 0)
         {
             return;
         }
@@ -619,8 +606,8 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         _tpObservation = SignalCycleObservation.Record(
             _tpObservation,
             "Reset",
-            _tpCycle.CycleId ?? string.Empty,
-            _tpCycle.Count,
+            _tpState.CycleId,
+            (int)Math.Min(int.MaxValue, _tpState.TickCount),
             currentValue,
             reason,
             timestampUtc);
@@ -628,42 +615,24 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
 
     private void ResetTpCycle(string reason, bool log = true)
     {
-        if (_tpCycle is null)
-        {
-            return;
-        }
-
-        var count = _tpCycle.Count;
-        var required = _tpCycle.RequiredSize;
+        var count = _tpState.TickCount;
         if (log && count > 0)
         {
             _logger?.Log(
                 $"[TP_CYCLE][RESET] slot_id={_slotId?.ToString() ?? "-"} " +
-                $"count={count}/{required} reason={reason}");
+                $"count={count} reason={reason}");
         }
 
-        _tpCycle.Reset(reason);
+        _tpState.Reset(reason);
     }
-
-    private string CreateTpFingerprint(GapSignalSnapshot snapshot, double profit) =>
-        string.Join(
-            '|',
-            "CLOSE",
-            "TP",
-            _slotId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-",
-            snapshot.TimestampUtc.Ticks,
-            profit.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
-            snapshot.ExchangeABid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            snapshot.ExchangeAAsk?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            snapshot.ExchangeBBid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            snapshot.ExchangeBAsk?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null");
 
     private void LogTpCycle(
         string eventName,
-        FixedSizeCycleUpdate update,
         double profit,
         string result,
-        string signalId = "")
+        string signalId = "",
+        double holdProgressMs = 0d,
+        int holdTargetMs = 0)
     {
         if (_logger is null)
         {
@@ -671,19 +640,72 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         }
 
         var line =
-            $"[TP_CYCLE][{eventName}] cycle_id={update.CycleId} " +
+            $"[TP_CYCLE][{eventName}] cycle_id={_tpState.CycleId} " +
             $"signal_id={(string.IsNullOrWhiteSpace(signalId) ? "-" : signalId)} " +
-            $"slot_id={_slotId?.ToString() ?? "-"} count={update.Count}/{update.RequiredSize} " +
+            $"slot_id={_slotId?.ToString() ?? "-"} count={_tpState.TickCount} " +
+            $"hold={holdProgressMs:0.####}/{holdTargetMs}ms " +
             $"profit={profit.ToString("R", System.Globalization.CultureInfo.InvariantCulture)} " +
-            $"confirmation_mode=FIXED_SIZE result={result}";
+            $"confirmation_mode=TIME_AND_MIN_SAMPLES result={result}";
 
-        // PROGRESS lặp mỗi tick cho mỗi slot -> chỉ ghi file, không đẩy lên realtime UI.
-        if (eventName == "PROGRESS")
+        // PROGRESS, và COMPLETED không đạt đích, đều lặp lại MỖI TICK cho MỖI slot khi cửa sổ
+        // đã đủ hold nhưng profit chưa tới ngưỡng -> chỉ ghi file, không đẩy lên realtime UI.
+        // TARGET_REACHED / TRIGGERED tần suất thấp nên vẫn giữ realtime.
+        if (eventName == "PROGRESS"
+            || result is "TARGET_NOT_REACHED" or "CLOSE_MAX_TP_EXCEEDED" or "CLOSE_MAX_TIMES_TICK_EXCEEDED")
         {
             _logger.LogVerbose(line);
             return;
         }
 
         _logger.Log(line);
+    }
+
+    // Cửa sổ TP theo thời gian: mở tại mẫu profit hợp lệ đầu tiên, đóng khi đủ
+    // close_hold_confirm_ms. Không có số mẫu đích.
+    private sealed class TpWindowState
+    {
+        public DateTime? WindowStartUtc { get; private set; }
+        public DateTime? LastTickUtc { get; private set; }
+        public long TickCount { get; private set; }
+        public string CycleId { get; private set; } = string.Empty;
+        public string Status { get; private set; } = "Empty";
+        public double? LastProfit { get; private set; }
+        public string LastReason { get; set; } = string.Empty;
+        public Queue<double> DiagnosticProfits { get; } = [];
+
+        public void StartWindow(DateTime timestampUtc)
+        {
+            WindowStartUtc = timestampUtc;
+            CycleId = Guid.NewGuid().ToString("N");
+            TickCount = 0;
+            DiagnosticProfits.Clear();
+            Status = "Collecting";
+        }
+
+        public void Add(double profit, DateTime timestampUtc, int maxDiagnosticSamples)
+        {
+            TickCount++;
+            LastTickUtc = timestampUtc;
+            LastProfit = profit;
+            Status = "Collecting";
+            if (DiagnosticProfits.Count >= maxDiagnosticSamples)
+            {
+                DiagnosticProfits.Dequeue();
+            }
+
+            DiagnosticProfits.Enqueue(profit);
+        }
+
+        public void Reset(string reason)
+        {
+            WindowStartUtc = null;
+            LastTickUtc = null;
+            TickCount = 0;
+            CycleId = string.Empty;
+            LastProfit = null;
+            LastReason = reason;
+            Status = "Empty";
+            DiagnosticProfits.Clear();
+        }
     }
 }

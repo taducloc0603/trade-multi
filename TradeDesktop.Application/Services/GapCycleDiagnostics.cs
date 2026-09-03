@@ -11,6 +11,9 @@ public static class GapCycleDiagnostics
     private const bool EnableGapStabilityDiagnostics = true;
     private const double MinimumResetDurationToLogMs = 250d;
     private const int MaxLoggedGaps = 256;
+
+    // Bước cảnh báo Cycle dài. Xem WarnIfCycleGrowingLong.
+    private const int LongCycleWarnStep = 500;
     private static readonly TimeSpan SummaryInterval = TimeSpan.FromSeconds(60);
     private static readonly object SummarySync = new();
     private static readonly Dictionary<string, SummaryBucket> Summaries = new(StringComparer.Ordinal);
@@ -64,9 +67,10 @@ public static class GapCycleDiagnostics
         int minimumSamplesToLog = 3,
         PolicyContext? policy = null)
     {
-        if (policy is { ConfirmationMode: "FIXED_SIZE" } fixedPolicy)
+        // Log vòng đời cycle chạy ở CẢ HAI mode để hai nhánh TIME/TICK so sánh được với nhau.
+        if (policy is not null)
         {
-            LogFixedSizeTransition(logger, action, side, slotId, update, newGap, fixedPolicy);
+            LogCycleLifecycleTransition(logger, action, side, slotId, update, newGap, policy);
         }
 
         if (!EnableGapStabilityDiagnostics
@@ -195,14 +199,14 @@ public static class GapCycleDiagnostics
             return;
         }
 
-        if (policy is { ConfirmationMode: "FIXED_SIZE" } fixedPolicy)
+        if (policy is not null)
         {
             var cycleName = action == "CLOSE" ? "NORMAL_CLOSE" : action;
             logger.Log(
                 $"[{cycleName}_CYCLE][TRIGGERED] cycle_id={Text(cycle.CycleId)} " +
                 $"signal_id={Text(signalId)} action={action} side={side} slot_id={Value(slotId)} " +
-                $"count={cycle.SampleCount}/{Value(fixedPolicy.SignalCycleSize)} gap={newGap} " +
-                $"confirmation_mode=FIXED_SIZE reason=\"{Escape(reason)}\"");
+                $"{FormatCycleProgress(cycle, policy)} gap={newGap} " +
+                $"confirmation_mode={policy.ConfirmationMode} reason=\"{Escape(reason)}\"");
         }
 
         var delta = cycle.Center.HasValue
@@ -223,7 +227,51 @@ public static class GapCycleDiagnostics
             nextStatus: cycle.Status));
     }
 
-    private static void LogFixedSizeTransition(
+    // FIXED_SIZE đo tiến độ theo số mẫu; TIME_AND_MIN_SAMPLES đo theo cả số mẫu tối thiểu
+    // lẫn thời gian giữ, nên cần thêm trường hold=.
+    private static string FormatCycleProgress(GapCycleSnapshot cycle, PolicyContext policy) =>
+        policy.ConfirmationMode == "FIXED_SIZE"
+            ? $"count={cycle.SampleCount}/{Value(policy.SignalCycleSize)}"
+            : $"count={cycle.SampleCount}/{Value(policy.Stability.MinStableSamples)} " +
+              $"hold={cycle.DurationMs:0.####}/{policy.HoldConfirmMs}ms";
+
+    /// <summary>
+    /// Một Cycle đã Stable nhưng mẫu cuối không đạt ngưỡng thì KHÔNG bị reset (đúng logic gốc của
+    /// nhánh TIME), và guard <c>*_max_times_tick</c> nằm sau gate ngưỡng nên cũng không chặn được.
+    /// Cycle vì vậy có thể phình dài, mà mỗi tick <c>GapStabilityCalculator.Calculate</c> phải sort
+    /// lại toàn bộ danh sách — chi phí nhân theo số slot, trên UI thread.
+    ///
+    /// Đây thuần là cảnh báo quan sát: KHÔNG cắt Cycle, KHÔNG đổi quyết định signal.
+    /// Chỉ ghi khi SampleCount chạm đúng bội số của <see cref="LongCycleWarnStep"/> nên tối đa
+    /// một dòng mỗi <see cref="LongCycleWarnStep"/> tick của mỗi Cycle — không cần giữ state.
+    /// </summary>
+    private static void WarnIfCycleGrowingLong(
+        ISlotLogger? logger,
+        string cycleName,
+        string action,
+        string side,
+        int? slotId,
+        GapCycleSnapshot cycle,
+        PolicyContext policy)
+    {
+        if (logger is null
+            || cycle.SampleCount < LongCycleWarnStep
+            || cycle.SampleCount % LongCycleWarnStep != 0)
+        {
+            return;
+        }
+
+        logger.Log(
+            $"[GAP_STABILITY][WARN] long_cycle cycle_id={Text(cycle.CycleId)} " +
+            $"action={action} side={side} slot_id={Value(slotId)} " +
+            $"cycle_name={cycleName} sample_count={cycle.SampleCount} " +
+            $"duration_ms={cycle.DurationMs:0.####} status={cycle.Status} " +
+            $"confirmation_mode={policy.ConfirmationMode} " +
+            "hint=\"Cycle on dinh nhung mau cuoi chua dat nguong nen khong reset. " +
+            "Kiem tra open_pts/close_pts co qua xa vung gap thuc te, hoac dat *_max_times_tick.\"");
+    }
+
+    private static void LogCycleLifecycleTransition(
         ISlotLogger? logger,
         string action,
         string side,
@@ -265,11 +313,12 @@ public static class GapCycleDiagnostics
         }
 
         var cycleName = action == "CLOSE" ? "NORMAL_CLOSE" : action;
+        WarnIfCycleGrowingLong(logger, cycleName, action, side, slotId, cycle, policy);
         var line =
             $"[{cycleName}_CYCLE][{eventName}] cycle_id={Text(cycle.CycleId)} signal_id=- " +
             $"action={action} side={side} slot_id={Value(slotId)} " +
-            $"count={cycle.SampleCount}/{policy.SignalCycleSize} gap={Value(newGap)} " +
-            $"confirmation_mode=FIXED_SIZE reason=\"{Escape(cycle.Reason)}\"";
+            $"{FormatCycleProgress(cycle, policy)} gap={Value(newGap)} " +
+            $"confirmation_mode={policy.ConfirmationMode} reason=\"{Escape(cycle.Reason)}\"";
 
         // PROGRESS lặp lại mỗi tick cho MỖI cycle của MỖI slot -> chỉ ghi file, không
         // đẩy lên đường realtime UI. STARTED/RESET/COMPLETED là sự kiện chuyển trạng thái,

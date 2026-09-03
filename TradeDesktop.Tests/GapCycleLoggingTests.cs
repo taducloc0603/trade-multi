@@ -14,7 +14,7 @@ public sealed class GapCycleLoggingTests
         new(10, 0.50, 4.0, 3, 0.45, 0.60);
 
     [Fact]
-    public void Open_LogsFixedSizeStartProgressCompletionAndTrigger()
+    public void Open_LogsCycleStartProgressCompletionAndTrigger()
     {
         var logger = new CaptureLogger();
         var engine = new GapSignalConfirmationEngine(logger);
@@ -67,9 +67,9 @@ public sealed class GapCycleLoggingTests
         Assert.Contains("max_dispersion=0.45", stable);
         Assert.Contains("max_drift=0.6", stable);
         Assert.Contains("hold_confirm_ms=2000", stable);
-        Assert.Contains("confirmation_mode=FIXED_SIZE", stable);
+        Assert.Contains("confirmation_mode=TIME_AND_MIN_SAMPLES", stable);
         Assert.Contains("signal_cycle_size=3", stable);
-        Assert.Contains("hold_confirm_ignored=true", stable);
+        Assert.Contains("hold_confirm_ignored=false", stable);
         Assert.Contains("limit_max_gap=0", stable);
         Assert.Contains("max_gap=700", stable);
         Assert.Contains("reason=\"", stable);
@@ -184,8 +184,10 @@ public sealed class GapCycleLoggingTests
     }
 
     [Fact]
-    public void Open_DuplicateSnapshot_DoesNotLogOrIncreaseProgress()
+    public void Open_RepeatedSnapshot_CountsEverySampleInTimeMode()
     {
+        // Nhánh TIME không có khử trùng lặp theo fingerprint: mọi snapshot hợp lệ đều
+        // là một mẫu của Cycle. Chu kỳ chỉ chốt khi đủ CẢ MinStableSamples lẫn hold-time.
         var logger = new CaptureLogger();
         var engine = new GapSignalConfirmationEngine(logger);
         var config = OpenConfig();
@@ -201,13 +203,17 @@ public sealed class GapCycleLoggingTests
         Assert.Single(logger.Messages.Where(message =>
             message.Contains("[OPEN_CYCLE][PROGRESS]", StringComparison.Ordinal)
             && message.Contains("count=2/3", StringComparison.Ordinal)));
+        // Mẫu thứ 3 tới ở t=1s, chưa đủ hold 2000ms -> vẫn là PROGRESS.
+        Assert.Single(logger.Messages.Where(message =>
+            message.Contains("[OPEN_CYCLE][PROGRESS]", StringComparison.Ordinal)
+            && message.Contains("count=3/3", StringComparison.Ordinal)));
         Assert.Single(logger.Messages.Where(message =>
             message.Contains("[OPEN_CYCLE][COMPLETED]", StringComparison.Ordinal)
-            && message.Contains("count=3/3", StringComparison.Ordinal)));
+            && message.Contains("count=4/3", StringComparison.Ordinal)));
     }
 
     [Fact]
-    public void Tp_LogsFixedSizeCycleStartAndCompletion()
+    public void Tp_LogsTimeBasedCycleStartAndCompletion()
     {
         var logger = new CaptureLogger();
         var engine = new CloseSignalEngine(logger);
@@ -215,8 +221,7 @@ public sealed class GapCycleLoggingTests
         var config = CloseConfig() with
         {
             CloseConfirmTpProfit = 5,
-            CloseTpProfit = 10,
-            SignalCycleSize = 3
+            CloseTpProfit = 10
         };
 
         Assert.Null(engine.ProcessSnapshot(Snapshot(0), config, TradingOpenMode.GapBuy, 5));
@@ -227,16 +232,18 @@ public sealed class GapCycleLoggingTests
         Assert.Contains(logger.Messages, message =>
             message.Contains("[TP_CYCLE][STARTED]", StringComparison.Ordinal)
             && message.Contains("slot_id=7", StringComparison.Ordinal)
-            && message.Contains("count=1/3", StringComparison.Ordinal));
+            && message.Contains("count=1", StringComparison.Ordinal)
+            && message.Contains("hold=0/2000ms", StringComparison.Ordinal));
         Assert.Contains(logger.Messages, message =>
             message.Contains("[TP_CYCLE][COMPLETED]", StringComparison.Ordinal)
             && message.Contains("slot_id=7", StringComparison.Ordinal)
-            && message.Contains("count=3/3", StringComparison.Ordinal)
-            && message.Contains("confirmation_mode=FIXED_SIZE", StringComparison.Ordinal)
+            && message.Contains("count=3", StringComparison.Ordinal)
+            && message.Contains("hold=2000/2000ms", StringComparison.Ordinal)
+            && message.Contains("confirmation_mode=TIME_AND_MIN_SAMPLES", StringComparison.Ordinal)
             && message.Contains("result=TARGET_REACHED", StringComparison.Ordinal));
         Assert.Contains(logger.Messages, message =>
             message.Contains("[TP_CYCLE][PROGRESS]", StringComparison.Ordinal)
-            && message.Contains("count=2/3", StringComparison.Ordinal));
+            && message.Contains("count=2", StringComparison.Ordinal));
         Assert.Contains(logger.Messages, message =>
             message.Contains("[TP_CYCLE][TRIGGERED]", StringComparison.Ordinal)
             && message.Contains("result=TRIGGERED", StringComparison.Ordinal));

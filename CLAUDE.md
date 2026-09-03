@@ -310,16 +310,30 @@ TradeDesktop.Tests/            # xUnit tests
   (lời lúc tín hiệu hoá lỗ lúc khớp). `RefreshTradeRowsFromSnapshot` vẫn gọi `UpdateProfit` (dư
   thừa, vô hại) — đừng coi nó là nguồn profit cho logic.
 
-### Signal cycle & price-freeze (đừng dùng lại 4 cột cũ)
-- Confirmation mode duy nhất là FIXED_SIZE theo `signal_cycle_size`, dùng cho **Open, Normal Close,
-  SOS Close và TP**. Mỗi loại giữ cycle/state RIÊNG (`_closeByGap*Cycle` vs `_sosCloseByGap*Cycle`
-  vs `_tpCycle`) — đừng gộp, chuyển Normal ↔ SOS sẽ lẫn dữ liệu.
+### Signal cycle & price-freeze (NHÁNH TIME)
+- **Nhánh này chạy confirmation mode `TIME_AND_MIN_SAMPLES`**, không phải FIXED_SIZE. Một Cycle chỉ
+  được công nhận Stable khi đạt **CẢ HAI**: `>= MinStableSamples` mẫu **VÀ** `>= *_hold_confirm_ms`
+  thời gian; sau đó vẫn phải qua Dispersion/Drift. Đường code là `GapCycleState.Process`.
+  `ProcessFixedSize` / `FixedSizeSignalCycle` còn trong source nhưng KHÔNG có caller production.
+- Áp dụng cho **Open, Normal Close, SOS Close và TP**. Mỗi loại giữ cycle/state RIÊNG
+  (`_closeByGap*Cycle` vs `_sosCloseByGap*Cycle` vs `_tpState`) — đừng gộp, chuyển Normal ↔ SOS sẽ
+  lẫn dữ liệu. Normal Close, SOS Close và TP dùng CHUNG `close_hold_confirm_ms`.
+- **Khác biệt then chốt so với FIXED_SIZE:** khi Cycle đã Stable nhưng mẫu cuối chưa đạt
+  `open_pts` / `close_pts`, engine trả `null` mà **KHÔNG reset** — Cycle tiếp tục thu mẫu và có thể
+  trigger ở mẫu kế tiếp. Đừng thêm `state.Reset(...)` ở nhánh đó.
+- Chế độ TIME **không có khử trùng lặp theo fingerprint**: mỗi snapshot hợp lệ là một mẫu.
 - `open_hold_confirm_ms`, `close_hold_confirm_ms`, `open_max_times_tick`, `close_max_times_tick`
-  đã bị **gỡ hoàn toàn khỏi source**: không còn trong `ConfigRow` (Supabase DTO), `ConfigRecord`,
-  `ConfigLoadResult`, `RuntimeConfigState`, `IRuntimeConfigProvider` hay log `[DB]`. Repository
-  đọc `select=*` nên DROP cột an toàn (`docs/DROP-DEPRECATED-SIGNAL-COLUMNS.sql`). KHÔNG nối lại.
-- `GapSignalConfirmationConfig` vẫn còn 4 field cùng tên nhưng mặc định `0` và không có nguồn nào
-  đổ vào; chỉ phục vụ nhánh legacy `ProcessSide` / `ProcessLegacyGap` mà test gọi trực tiếp.
+  đã được **nối lại đầy đủ** vào `ConfigRow` → `ConfigRecord` → `ConfigLoadResult` →
+  `RuntimeConfigState` → `GapSignalConfirmationConfig` và log `[DB]`.
+  **KHÔNG chạy `docs/DROP-DEPRECATED-SIGNAL-COLUMNS.sql` trên nhánh này.**
+- `signal_cycle_size` vẫn được load, validate (`>= 1`) và ghi kèm log/`-signal-outcome.log` để đối
+  chiếu với nhánh TICK, nhưng **không tham gia quyết định signal**. Đừng nối nó lại vào engine.
+- `*_max_times_tick > 0` chặn Cycle dài quá giới hạn: kiểm tra SAU khi Cycle đã Stable và mẫu cuối
+  đã đạt ngưỡng, vượt thì `state.Reset(...)`. `0` = tắt.
+- Price-freeze **vẫn hoàn toàn độc lập với hold-time**: `open_price_freeze_ms` /
+  `close_price_freeze_ms` chỉ dùng giá trị của chính nó, `0` = tắt. Fallback cũ
+  (`price_freeze <- hold_confirm`) đã bị bỏ và KHÔNG được khôi phục — `PriceFreezeConfigMappingTests`
+  khoá điều này.
 - **4 cột ngưỡng gap thường giữ nguyên DẤU.** `open_pts`, `confirm_gap_pts`, `close_pts`,
   `close_confirm_gap_pts` không còn bị `Math.Abs` ở bất kỳ tầng nào (`ConfigService`,
   `RuntimeConfigState`, `GapSignalConfirmationEngine`, `CloseSignalEngine`,
@@ -352,6 +366,14 @@ TradeDesktop.Tests/            # xUnit tests
 - Log vòng đời: `[OPEN_CYCLE]` / `[NORMAL_CLOSE_CYCLE]` / `[SOS_CLOSE_CYCLE]` / `[TP_CYCLE]` với
   event `STARTED|PROGRESS|RESET|COMPLETED|TRIGGERED`. Tên nhóm sinh từ `action` trong
   `GapCycleDiagnostics` — đổi chuỗi action sẽ đổi tên log, cẩn thận khi refactor.
+  Nhóm log này chạy ở CẢ hai mode (`GapCycleDiagnostics.LogCycleLifecycleTransition`) để hai nhánh
+  TIME/TICK so sánh được. Ở mode TIME dòng log mang thêm `hold={durationMs}/{holdConfirmMs}ms` và
+  mẫu số của `count=` là `MinStableSamples`. **Khoá đối chiếu giữa hai nhánh là
+  `confirmation_mode=`** (`TIME_AND_MIN_SAMPLES` vs `FIXED_SIZE`), có trong `[*_CYCLE]`,
+  `[GAP_STABILITY]` và `-signal-outcome.log`.
+- `[*_CYCLE][PROGRESS]` và `[TP_CYCLE][COMPLETED]` với `result=TARGET_NOT_REACHED` /
+  `CLOSE_MAX_TP_EXCEEDED` / `CLOSE_MAX_TIMES_TICK_EXCEEDED` lặp MỖI TICK cho MỖI slot →
+  bắt buộc đi qua `LogVerbose`, không dùng `Log`.
 
 ### Cooldown
 - Auto action thường dùng transition matrix, không dùng global post-action cooldown. Same-action và

@@ -38,7 +38,11 @@ public sealed record SignalOutcomeSignal(
     int ClosePts,
     int LimitMaxGap,
     int MaxGap,
-    int SignalCycleSize);
+    int SignalCycleSize,
+    // Nhánh TIME: hai giá trị quyết định chu kỳ. SignalCycleSize ở trên chỉ để đối chiếu
+    // với log của nhánh TICK.
+    int HoldConfirmMs = 0,
+    int CloseHoldConfirmMs = 0);
 
 /// <summary>
 /// Ghi lại gap tại thời điểm signal kèm dãy gap của N tick kế tiếp, phục vụ đánh giá
@@ -542,6 +546,9 @@ public sealed class SignalGapOutcomeTracker
           .Append(" limit_max_gap=").Append(Value(s.LimitMaxGap))
           .Append(" max_gap=").Append(Value(s.MaxGap))
           .Append(" signal_cycle_size=").Append(Value(s.SignalCycleSize))
+          .Append(" open_hold_confirm_ms=").Append(Value(s.HoldConfirmMs))
+          .Append(" close_hold_confirm_ms=").Append(Value(s.CloseHoldConfirmMs))
+          .Append(" confirmation_mode=TIME_AND_MIN_SAMPLES")
           .Append(" a_bid=").Append(Price(s.ABid))
           .Append(" a_ask=").Append(Price(s.AAsk))
           .Append(" b_bid=").Append(Price(s.BBid))

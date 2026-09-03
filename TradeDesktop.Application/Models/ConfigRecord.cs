@@ -1,9 +1,10 @@
 namespace TradeDesktop.Application.Models;
 
-// Open / Normal Close / SOS Close / TP đều chạy chu kỳ số lượng theo SignalCycleSize.
+// Nhánh TIME: Open / Normal Close / SOS Close / TP đều chạy chu kỳ theo thời gian giữ
+// (HoldConfirmMs / CloseHoldConfirmMs) cộng MinStableSamples của Gap Stability.
+// SignalCycleSize vẫn được load và ghi log để đối chiếu với nhánh TICK, nhưng KHÔNG
+// tham gia quyết định signal trên nhánh này.
 // Price-freeze dùng riêng OpenPriceFreezeMs / ClosePriceFreezeMs, KHÔNG fallback về hold-time.
-// Bốn cột cũ open_hold_confirm_ms / close_hold_confirm_ms / open_max_times_tick /
-// close_max_times_tick đã được gỡ khỏi toàn bộ source; có thể DROP an toàn trên DB.
 public sealed record ConfigRecord(
     string Id,
     string SansJson,
@@ -13,6 +14,8 @@ public sealed record ConfigRecord(
     int Point,
     int OpenPts,
     int ConfirmGapPts,
+    // Thời gian giữ tối thiểu của một Open Cycle. 0 = không yêu cầu thời gian.
+    int HoldConfirmMs,
     // Price-freeze khi thực thi Open. 0 = tắt kiểm tra.
     int OpenPriceFreezeMs,
     int ClosePts,
@@ -25,6 +28,8 @@ public sealed record ConfigRecord(
     int SosTriggerAfterSeconds,
     int SosCloseConfirmGapPts,
     int SosCloseGapPts,
+    // Thời gian giữ tối thiểu của một Close Cycle (dùng chung cho Normal Close, SOS Close và TP).
+    int CloseHoldConfirmMs,
     // Price-freeze khi thực thi Close. 0 = tắt kiểm tra.
     int ClosePriceFreezeMs,
     int StartTimeHold,
@@ -33,6 +38,8 @@ public sealed record ConfigRecord(
     int MaxGap,
     int LimitMaxGap,
     int MaxSpread,
+    int OpenMaxTimesTick,
+    int CloseMaxTimesTick,
     int OpenPendingTimeMs,
     int ClosePendingTimeMs,
     int DelayOpenAMs,

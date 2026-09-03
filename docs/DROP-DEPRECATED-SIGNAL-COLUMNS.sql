@@ -1,14 +1,24 @@
+-- ############################################################################
+-- ##  KHÔNG CHẠY SCRIPT NÀY TRÊN NHÁNH TIME.                                ##
+-- ##                                                                        ##
+-- ##  Nhánh này đã NỐI LẠI 4 cột open_hold_confirm_ms / close_hold_confirm_ms ##
+-- ##  / open_max_times_tick / close_max_times_tick vào config pipeline và    ##
+-- ##  dùng chúng làm điều kiện quyết định signal (confirmation mode          ##
+-- ##  TIME_AND_MIN_SAMPLES). DROP 4 cột sẽ làm mọi hold-time đọc về 0 và     ##
+-- ##  chu kỳ chốt ngay khi đủ MinStableSamples.                              ##
+-- ##                                                                        ##
+-- ##  Contract hiện hành được khoá bởi                                       ##
+-- ##  PriceFreezeConfigMappingTests.ConfigLoadResult_ExposesHoldAndTickColumns##
+-- ##                                                                        ##
+-- ##  Script giữ lại để dùng cho nhánh TICK (FIXED_SIZE theo                 ##
+-- ##  signal_cycle_size), nơi 4 cột thực sự không còn được đọc.              ##
+-- ############################################################################
+--
 -- Gỡ 4 cột signal cũ khỏi public.configs.
 --
 -- Điều kiện tiên quyết: source code KHÔNG còn tham chiếu 4 cột này.
--- Đã hoàn tất — repository Supabase đọc bằng `select=*` và không map 4 cột này nữa,
--- ConfigRecord / ConfigLoadResult / RuntimeConfigState / IRuntimeConfigProvider đều đã bỏ chúng.
--- Test `PriceFreezeConfigMappingTests.ConfigLoadResult_NoLongerExposesDeprecatedHoldOrTickColumns`
--- khoá lại contract này.
---
--- Confirmation mode duy nhất còn lại là FIXED_SIZE theo signal_cycle_size,
--- dùng chung cho Open / Normal Close / SOS Close / TP.
--- Price-freeze dùng riêng open_price_freeze_ms và close_price_freeze_ms.
+-- Price-freeze dùng riêng open_price_freeze_ms và close_price_freeze_ms
+-- (đúng ở cả hai nhánh — không bao giờ fallback về hold-time).
 
 begin;
 

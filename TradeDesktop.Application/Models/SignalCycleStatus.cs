@@ -30,7 +30,11 @@ public sealed record SignalCycleStatus(
     string LastEventReason = "",
     DateTime? LastEventAtUtc = null)
 {
-    public string ProgressText => $"{CurrentCount}/{RequiredCount}";
+    // RequiredCount = 0 nghĩa là chu kỳ không có số mẫu đích (TP chốt theo thời gian);
+    // khi đó chỉ hiển thị số mẫu đã thu, tiến độ thời gian nằm ở LastReason.
+    public string ProgressText => RequiredCount > 0
+        ? $"{CurrentCount}/{RequiredCount}"
+        : CurrentCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
     public string ShortCycleId => CycleId.Length <= 8 ? CycleId : CycleId[..8];
     public string UpdatedTimeText => UpdatedAtUtc?.ToLocalTime().ToString("HH:mm:ss") ?? "-";
     public string ValueText => LastValue?.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture) ?? "-";

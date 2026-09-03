@@ -48,6 +48,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             Point: row.Point > 0 ? row.Point : 1,
             OpenPts: row.OpenPts,
             ConfirmGapPts: row.ConfirmGapPts,
+            HoldConfirmMs: row.HoldConfirmMs,
+            // Price-freeze là cột độc lập: KHÔNG fallback về hold-time.
             OpenPriceFreezeMs: Math.Max(0, row.OpenPriceFreezeMs),
             ClosePts: row.ClosePts,
             CloseConfirmGapPts: row.CloseConfirmGapPts,
@@ -59,6 +61,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             SosTriggerAfterSeconds: row.SosTriggerAfterSeconds,
             SosCloseConfirmGapPts: row.SosCloseConfirmGapPts,
             SosCloseGapPts: row.SosCloseGapPts,
+            CloseHoldConfirmMs: row.CloseHoldConfirmMs,
+            // Price-freeze là cột độc lập: KHÔNG fallback về hold-time.
             ClosePriceFreezeMs: Math.Max(0, row.ClosePriceFreezeMs),
             StartTimeHold: row.StartTimeHold,
             EndTimeHold: row.EndTimeHold,
@@ -66,6 +70,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxGap: row.MaxGap,
             LimitMaxGap: row.LimitMaxGap,
             MaxSpread: row.MaxSpread,
+            OpenMaxTimesTick: row.OpenMaxTimesTick,
+            CloseMaxTimesTick: row.CloseMaxTimesTick,
             OpenPendingTimeMs: row.OpenPendingTimeMs,
             ClosePendingTimeMs: row.ClosePendingTimeMs,
             DelayOpenAMs: row.DelayOpenAMs,
@@ -294,6 +300,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("point", out var pointElement);
         first.TryGetProperty("open_pts", out var openPtsElement);
         first.TryGetProperty("open_confirm_gap_pts", out var confirmGapPtsElement);
+        first.TryGetProperty("open_hold_confirm_ms", out var holdConfirmMsElement);
         first.TryGetProperty("open_price_freeze_ms", out var openPriceFreezeMsElement);
         first.TryGetProperty("close_pts", out var closePtsElement);
         first.TryGetProperty("close_confirm_gap_pts", out var closeConfirmGapPtsElement);
@@ -305,6 +312,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("sos_trigger_after_seconds", out var sosTriggerAfterSecondsElement);
         first.TryGetProperty("sos_close_confirm_gap_pts", out var sosCloseConfirmGapPtsElement);
         first.TryGetProperty("sos_close_gap_pts", out var sosCloseGapPtsElement);
+        first.TryGetProperty("close_hold_confirm_ms", out var closeHoldConfirmMsElement);
         first.TryGetProperty("close_price_freeze_ms", out var closePriceFreezeMsElement);
         first.TryGetProperty("start_time_hold", out var startTimeHoldElement);
         first.TryGetProperty("end_time_hold", out var endTimeHoldElement);
@@ -312,6 +320,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_gap", out var maxGapElement);
         first.TryGetProperty("limit_max_gap", out var limitMaxGapElement);
         first.TryGetProperty("max_spread", out var maxSpreadElement);
+        first.TryGetProperty("open_max_times_tick", out var openMaxTimesTickElement);
+        first.TryGetProperty("close_max_times_tick", out var closeMaxTimesTickElement);
         first.TryGetProperty("signal_cycle_size", out var signalCycleSizeElement);
         first.TryGetProperty("open_pending_time_ms", out var openPendingTimeMsElement);
         first.TryGetProperty("close_pending_time_ms", out var closePendingTimeMsElement);
@@ -363,6 +373,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             Point = pointElement.ValueKind == JsonValueKind.Number && pointElement.TryGetInt32(out var p) ? p : 1,
             OpenPts = openPtsElement.ValueKind == JsonValueKind.Number && openPtsElement.TryGetInt32(out var openPts) ? openPts : 0,
             ConfirmGapPts = confirmGapPtsElement.ValueKind == JsonValueKind.Number && confirmGapPtsElement.TryGetInt32(out var confirmGapPts) ? confirmGapPts : 0,
+            HoldConfirmMs = holdConfirmMsElement.ValueKind == JsonValueKind.Number && holdConfirmMsElement.TryGetInt32(out var holdConfirmMs) ? holdConfirmMs : 0,
             OpenPriceFreezeMs = openPriceFreezeMsElement.ValueKind == JsonValueKind.Number && openPriceFreezeMsElement.TryGetInt32(out var openPriceFreezeMs) ? openPriceFreezeMs : 0,
             ClosePts = closePtsElement.ValueKind == JsonValueKind.Number && closePtsElement.TryGetInt32(out var closePts) ? closePts : 0,
             CloseConfirmGapPts = closeConfirmGapPtsElement.ValueKind == JsonValueKind.Number && closeConfirmGapPtsElement.TryGetInt32(out var closeConfirmGapPts) ? closeConfirmGapPts : 0,
@@ -374,6 +385,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             SosTriggerAfterSeconds = sosTriggerAfterSecondsElement.ValueKind == JsonValueKind.Number && sosTriggerAfterSecondsElement.TryGetInt32(out var sosTriggerAfterSeconds) ? sosTriggerAfterSeconds : 0,
             SosCloseConfirmGapPts = sosCloseConfirmGapPtsElement.ValueKind == JsonValueKind.Number && sosCloseConfirmGapPtsElement.TryGetInt32(out var sosCloseConfirmGapPts) ? sosCloseConfirmGapPts : 0,
             SosCloseGapPts = sosCloseGapPtsElement.ValueKind == JsonValueKind.Number && sosCloseGapPtsElement.TryGetInt32(out var sosCloseGapPts) ? sosCloseGapPts : 0,
+            CloseHoldConfirmMs = closeHoldConfirmMsElement.ValueKind == JsonValueKind.Number && closeHoldConfirmMsElement.TryGetInt32(out var closeHoldConfirmMs) ? closeHoldConfirmMs : 0,
             ClosePriceFreezeMs = closePriceFreezeMsElement.ValueKind == JsonValueKind.Number && closePriceFreezeMsElement.TryGetInt32(out var closePriceFreezeMs) ? closePriceFreezeMs : 0,
             StartTimeHold = startTimeHoldElement.ValueKind == JsonValueKind.Number && startTimeHoldElement.TryGetInt32(out var startTimeHold) ? startTimeHold : 0,
             EndTimeHold = endTimeHoldElement.ValueKind == JsonValueKind.Number && endTimeHoldElement.TryGetInt32(out var endTimeHold) ? endTimeHold : 0,
@@ -381,6 +393,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxGap = maxGapElement.ValueKind == JsonValueKind.Number && maxGapElement.TryGetInt32(out var maxGap) ? maxGap : 0,
             LimitMaxGap = limitMaxGapElement.ValueKind == JsonValueKind.Number && limitMaxGapElement.TryGetInt32(out var limitMaxGap) ? limitMaxGap : 0,
             MaxSpread = maxSpreadElement.ValueKind == JsonValueKind.Number && maxSpreadElement.TryGetInt32(out var maxSpread) ? maxSpread : 0,
+            OpenMaxTimesTick = openMaxTimesTickElement.ValueKind == JsonValueKind.Number && openMaxTimesTickElement.TryGetInt32(out var openMaxTimesTick) ? openMaxTimesTick : 0,
+            CloseMaxTimesTick = closeMaxTimesTickElement.ValueKind == JsonValueKind.Number && closeMaxTimesTickElement.TryGetInt32(out var closeMaxTimesTick) ? closeMaxTimesTick : 0,
             SignalCycleSize = signalCycleSizeElement.ValueKind == JsonValueKind.Number && signalCycleSizeElement.TryGetInt32(out var signalCycleSize) ? signalCycleSize : 10,
             OpenPendingTimeMs = openPendingTimeMsElement.ValueKind == JsonValueKind.Number && openPendingTimeMsElement.TryGetInt32(out var openPendingTimeMs) ? openPendingTimeMs : 0,
             ClosePendingTimeMs = closePendingTimeMsElement.ValueKind == JsonValueKind.Number && closePendingTimeMsElement.TryGetInt32(out var closePendingTimeMs) ? closePendingTimeMs : 0,
@@ -465,6 +479,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("point", out var pointElement);
         first.TryGetProperty("open_pts", out var openPtsElement);
         first.TryGetProperty("open_confirm_gap_pts", out var confirmGapPtsElement);
+        first.TryGetProperty("open_hold_confirm_ms", out var holdConfirmMsElement);
         first.TryGetProperty("open_price_freeze_ms", out var openPriceFreezeMsElement);
         first.TryGetProperty("close_pts", out var closePtsElement);
         first.TryGetProperty("close_confirm_gap_pts", out var closeConfirmGapPtsElement);
@@ -476,6 +491,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("sos_trigger_after_seconds", out var sosTriggerAfterSecondsElement);
         first.TryGetProperty("sos_close_confirm_gap_pts", out var sosCloseConfirmGapPtsElement);
         first.TryGetProperty("sos_close_gap_pts", out var sosCloseGapPtsElement);
+        first.TryGetProperty("close_hold_confirm_ms", out var closeHoldConfirmMsElement);
         first.TryGetProperty("close_price_freeze_ms", out var closePriceFreezeMsElement);
         first.TryGetProperty("start_time_hold", out var startTimeHoldElement);
         first.TryGetProperty("end_time_hold", out var endTimeHoldElement);
@@ -483,6 +499,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("max_gap", out var maxGapElement);
         first.TryGetProperty("limit_max_gap", out var limitMaxGapElement);
         first.TryGetProperty("max_spread", out var maxSpreadElement);
+        first.TryGetProperty("open_max_times_tick", out var openMaxTimesTickElement);
+        first.TryGetProperty("close_max_times_tick", out var closeMaxTimesTickElement);
         first.TryGetProperty("signal_cycle_size", out var signalCycleSizeElement);
         first.TryGetProperty("open_pending_time_ms", out var openPendingTimeMsElement);
         first.TryGetProperty("close_pending_time_ms", out var closePendingTimeMsElement);
@@ -532,6 +550,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             Point = pointElement.ValueKind == JsonValueKind.Number && pointElement.TryGetInt32(out var p) ? p : 1,
             OpenPts = openPtsElement.ValueKind == JsonValueKind.Number && openPtsElement.TryGetInt32(out var openPts) ? openPts : 0,
             ConfirmGapPts = confirmGapPtsElement.ValueKind == JsonValueKind.Number && confirmGapPtsElement.TryGetInt32(out var confirmGapPts) ? confirmGapPts : 0,
+            HoldConfirmMs = holdConfirmMsElement.ValueKind == JsonValueKind.Number && holdConfirmMsElement.TryGetInt32(out var holdConfirmMs) ? holdConfirmMs : 0,
             OpenPriceFreezeMs = openPriceFreezeMsElement.ValueKind == JsonValueKind.Number && openPriceFreezeMsElement.TryGetInt32(out var openPriceFreezeMs) ? openPriceFreezeMs : 0,
             ClosePts = closePtsElement.ValueKind == JsonValueKind.Number && closePtsElement.TryGetInt32(out var closePts) ? closePts : 0,
             CloseConfirmGapPts = closeConfirmGapPtsElement.ValueKind == JsonValueKind.Number && closeConfirmGapPtsElement.TryGetInt32(out var closeConfirmGapPts) ? closeConfirmGapPts : 0,
@@ -543,6 +562,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             SosTriggerAfterSeconds = sosTriggerAfterSecondsElement.ValueKind == JsonValueKind.Number && sosTriggerAfterSecondsElement.TryGetInt32(out var sosTriggerAfterSeconds) ? sosTriggerAfterSeconds : 0,
             SosCloseConfirmGapPts = sosCloseConfirmGapPtsElement.ValueKind == JsonValueKind.Number && sosCloseConfirmGapPtsElement.TryGetInt32(out var sosCloseConfirmGapPts) ? sosCloseConfirmGapPts : 0,
             SosCloseGapPts = sosCloseGapPtsElement.ValueKind == JsonValueKind.Number && sosCloseGapPtsElement.TryGetInt32(out var sosCloseGapPts) ? sosCloseGapPts : 0,
+            CloseHoldConfirmMs = closeHoldConfirmMsElement.ValueKind == JsonValueKind.Number && closeHoldConfirmMsElement.TryGetInt32(out var closeHoldConfirmMs) ? closeHoldConfirmMs : 0,
             ClosePriceFreezeMs = closePriceFreezeMsElement.ValueKind == JsonValueKind.Number && closePriceFreezeMsElement.TryGetInt32(out var closePriceFreezeMs) ? closePriceFreezeMs : 0,
             StartTimeHold = startTimeHoldElement.ValueKind == JsonValueKind.Number && startTimeHoldElement.TryGetInt32(out var startTimeHold) ? startTimeHold : 0,
             EndTimeHold = endTimeHoldElement.ValueKind == JsonValueKind.Number && endTimeHoldElement.TryGetInt32(out var endTimeHold) ? endTimeHold : 0,
@@ -550,6 +570,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             MaxGap = maxGapElement.ValueKind == JsonValueKind.Number && maxGapElement.TryGetInt32(out var maxGap) ? maxGap : 0,
             LimitMaxGap = limitMaxGapElement.ValueKind == JsonValueKind.Number && limitMaxGapElement.TryGetInt32(out var limitMaxGap) ? limitMaxGap : 0,
             MaxSpread = maxSpreadElement.ValueKind == JsonValueKind.Number && maxSpreadElement.TryGetInt32(out var maxSpread) ? maxSpread : 0,
+            OpenMaxTimesTick = openMaxTimesTickElement.ValueKind == JsonValueKind.Number && openMaxTimesTickElement.TryGetInt32(out var openMaxTimesTick) ? openMaxTimesTick : 0,
+            CloseMaxTimesTick = closeMaxTimesTickElement.ValueKind == JsonValueKind.Number && closeMaxTimesTickElement.TryGetInt32(out var closeMaxTimesTick) ? closeMaxTimesTick : 0,
             SignalCycleSize = signalCycleSizeElement.ValueKind == JsonValueKind.Number && signalCycleSizeElement.TryGetInt32(out var signalCycleSize) ? signalCycleSize : 10,
             OpenPendingTimeMs = openPendingTimeMsElement.ValueKind == JsonValueKind.Number && openPendingTimeMsElement.TryGetInt32(out var openPendingTimeMs) ? openPendingTimeMs : 0,
             ClosePendingTimeMs = closePendingTimeMsElement.ValueKind == JsonValueKind.Number && closePendingTimeMsElement.TryGetInt32(out var closePendingTimeMs) ? closePendingTimeMs : 0,
@@ -719,6 +741,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         [JsonPropertyName("open_confirm_gap_pts")]
         public int ConfirmGapPts { get; set; }
 
+        [JsonPropertyName("open_hold_confirm_ms")]
+        public int HoldConfirmMs { get; set; }
+
         [JsonPropertyName("open_price_freeze_ms")]
         public int OpenPriceFreezeMs { get; set; }
 
@@ -751,6 +776,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("sos_close_gap_pts")]
         public int SosCloseGapPts { get; set; }
+
+        [JsonPropertyName("close_hold_confirm_ms")]
+        public int CloseHoldConfirmMs { get; set; }
 
         [JsonPropertyName("open_gap_absolute_floor")]
         public int OpenGapAbsoluteFloor { get; set; } = -1;
@@ -809,6 +837,13 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         [JsonPropertyName("max_spread")]
         public int MaxSpread { get; set; }
 
+        [JsonPropertyName("open_max_times_tick")]
+        public int OpenMaxTimesTick { get; set; }
+
+        [JsonPropertyName("close_max_times_tick")]
+        public int CloseMaxTimesTick { get; set; }
+
+        // Chỉ dùng để ghi log đối chiếu với nhánh TICK; không tham gia quyết định signal.
         [JsonPropertyName("signal_cycle_size")]
         public int SignalCycleSize { get; set; } = 10;
 

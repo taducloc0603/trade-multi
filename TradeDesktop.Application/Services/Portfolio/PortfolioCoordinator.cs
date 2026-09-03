@@ -1006,7 +1006,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             $"[SLOT][TP_CHECK] slot={slot.SlotId} band={band} profit={profitText} " +
             $"confirm={Math.Abs(config.CloseConfirmTpProfit).ToString("0.00", CultureInfo.InvariantCulture)} " +
             $"tp={Math.Abs(config.CloseTpProfit).ToString("0.00", CultureInfo.InvariantCulture)} " +
-            $"cycleSize={Math.Max(1, config.SignalCycleSize)} confirmationMode=FIXED_SIZE");
+            $"holdMs={Math.Max(0, config.CloseHoldConfirmMs)} confirmationMode=TIME_AND_MIN_SAMPLES");
     }
 
     // Throttle [SLOT][SKIP] Open blocked: log khi (side|reason) đổi HOẶC quá interval — tránh spam mỗi tick khi quota full / opposite-lock.
