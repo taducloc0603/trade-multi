@@ -39,6 +39,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentLimitMaxGap { get; private set; }
     public int CurrentMaxSpread { get; private set; }
     public int CurrentOpenMaxTimesTick { get; private set; }
+    // Trần cho GAP CUỐI của Open Cycle (signed, đối xứng). null = tắt gate.
+    // KHÔNG clamp về >= 0: 0 và số âm là giá trị hợp lệ.
+    public int? CurrentOpenMaxLastGapPts { get; private set; }
     public int CurrentCloseMaxTimesTick { get; private set; }
     // Chỉ để ghi log đối chiếu với nhánh TICK; không tham gia quyết định signal.
     public int CurrentSignalCycleSize { get; private set; } = 10;
@@ -118,6 +121,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public double LimitMaxTp => CurrentLimitMaxTp;
     public int MaxSpread => CurrentMaxSpread;
     public int OpenMaxTimesTick => CurrentOpenMaxTimesTick;
+    public int? OpenMaxLastGapPts => CurrentOpenMaxLastGapPts;
     public int CloseMaxTimesTick => CurrentCloseMaxTimesTick;
     public int SignalCycleSize => CurrentSignalCycleSize;
     public int OpenPendingTimeMs => CurrentOpenPendingTimeMs;
@@ -224,7 +228,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int rdEndPostCloseLockSeconds = -1,
         int rdStartPostOpenLockSeconds = -1,
         int rdEndPostOpenLockSeconds = -1,
-        double minProfitToClose = 0)
+        double minProfitToClose = 0,
+        int? openMaxLastGapPts = null)
         => Update(
             machineHostName,
             mapName1,
@@ -273,7 +278,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             rdEndPostCloseLockSeconds,
             rdStartPostOpenLockSeconds,
             rdEndPostOpenLockSeconds,
-            minProfitToClose);
+            minProfitToClose,
+            openMaxLastGapPts);
 
     public void Update(
         string machineHostName,
@@ -323,7 +329,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int rdEndPostCloseLockSeconds = -1,
         int rdStartPostOpenLockSeconds = -1,
         int rdEndPostOpenLockSeconds = -1,
-        double minProfitToClose = 0)
+        double minProfitToClose = 0,
+        int? openMaxLastGapPts = null)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
         var oldCloseN = CurrentCloseNumberOfQualifyingTimes;
@@ -356,6 +363,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         CurrentLimitMaxGap = Math.Max(0, limitMaxGap);
         CurrentMaxSpread = Math.Max(0, maxSpread);
         CurrentOpenMaxTimesTick = Math.Max(0, openMaxTimesTick);
+        // Signed, KHÔNG clamp: null = tắt gate, 0 và số âm vẫn hiệu lực.
+        CurrentOpenMaxLastGapPts = openMaxLastGapPts;
         CurrentCloseMaxTimesTick = Math.Max(0, closeMaxTimesTick);
         if (openPendingTimeMs >= 0)
         {
@@ -483,7 +492,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             sosTriggerAOpenDistancePts: CurrentSosTriggerAOpenDistancePts,
             sosTriggerAfterSeconds: CurrentSosTriggerAfterSeconds,
             sosCloseConfirmGapPts: CurrentSosCloseConfirmGapPts,
-            sosCloseGapPts: CurrentSosCloseGapPts);
+            sosCloseGapPts: CurrentSosCloseGapPts,
+            // Giữ nguyên giá trị hiện tại; overload này không nhận config mới cho gate.
+            openMaxLastGapPts: CurrentOpenMaxLastGapPts);
 
     public void Update(string machineHostName, string mapName1, string mapName2)
         => Update(
@@ -524,7 +535,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             sosTriggerAOpenDistancePts: CurrentSosTriggerAOpenDistancePts,
             sosTriggerAfterSeconds: CurrentSosTriggerAfterSeconds,
             sosCloseConfirmGapPts: CurrentSosCloseConfirmGapPts,
-            sosCloseGapPts: CurrentSosCloseGapPts);
+            sosCloseGapPts: CurrentSosCloseGapPts,
+            // Giữ nguyên giá trị hiện tại; overload này không nhận config mới cho gate.
+            openMaxLastGapPts: CurrentOpenMaxLastGapPts);
 
     // Quota từ DB (max_total_opens / max_buy_opens / max_sell_opens). Floor về 1 để không
     // bao giờ khoá toàn bộ open. Raise StateChanged để ApplyRuntimeConfig → SyncPortfolioCoordinatorConfig

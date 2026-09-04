@@ -223,6 +223,20 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             return null;
         }
 
+        // Trần cho GAP CUỐI của Cycle (signed, đối xứng). null = tắt gate; 0 và số âm vẫn hiệu lực.
+        // Vi phạm => reset Cycle ngay để mở Cycle mới, KHÁC với gate open_pts ở trên (chỉ chờ tiếp).
+        if (config.OpenMaxLastGapPts is { } maxLastGap)
+        {
+            var withinCeiling = side == GapSignalSide.Buy
+                ? lastGap < maxLastGap
+                : lastGap > -maxLastGap;
+            if (!withinCeiling)
+            {
+                state.Reset("Gap cuối vượt open_max_last_gap_pts; mở Cycle mới.");
+                return null;
+            }
+        }
+
         var normalizedMaxTimesTick = Math.Max(0, config.OpenMaxTimesTick);
         if (normalizedMaxTimesTick > 0 && cycle.Gaps.Count > normalizedMaxTimesTick)
         {

@@ -330,6 +330,17 @@ TradeDesktop.Tests/            # xUnit tests
   chiếu với nhánh TICK, nhưng **không tham gia quyết định signal**. Đừng nối nó lại vào engine.
 - `*_max_times_tick > 0` chặn Cycle dài quá giới hạn: kiểm tra SAU khi Cycle đã Stable và mẫu cuối
   đã đạt ngưỡng, vượt thì `state.Reset(...)`. `0` = tắt.
+- `open_max_last_gap_pts` (`int?`, cột DB nullable) là **trần cho GAP CUỐI** của Open Cycle, kiểm
+  tra ngay SAU gate `open_pts` và TRƯỚC `open_max_times_tick` trong `TryCreateStableOpenResult`.
+  So sánh **giữ nguyên dấu, đối xứng, strict**: Buy `lastGap < C`, Sell `lastGap > -C`. Vi phạm thì
+  `state.Reset(...)` ngay — **KHÁC** gate `open_pts` ở ngay trên (gate đó chỉ chờ tiếp, không reset).
+  `null` = tắt; `0` và số âm **vẫn hiệu lực** và KHÔNG bị clamp ở bất kỳ tầng nào
+  (`SupabaseConfigRepository` → `ConfigRecord` → `ConfigService` → `RuntimeConfigState` →
+  `GapSignalConfirmationConfig`) — đừng thêm `Math.Max(0, ...)`. Router re-check cùng trần tại
+  `TradeExecutionRouter` với reason RIÊNG `LATEST_OPEN_MAX_LAST_GAP_EXCEEDED`; engine và router phải
+  sửa cùng nhịp. Migration: `docs/OPEN-MAX-LAST-GAP-MIGRATION.sql`. Test khoá:
+  `GapStableOpenIntegrationTests.OpenMaxLastGap_*` và `Config/OpenMaxLastGapConfigMappingTests`.
+  Lưu ý cấu hình: đặt `C <= max(open_pts, confirm_gap_pts)` sẽ chặn sạch mọi Open trigger.
 - Price-freeze **vẫn hoàn toàn độc lập với hold-time**: `open_price_freeze_ms` /
   `close_price_freeze_ms` chỉ dùng giá trị của chính nó, `0` = tắt. Fallback cũ
   (`price_freeze <- hold_confirm`) đã bị bỏ và KHÔNG được khôi phục — `PriceFreezeConfigMappingTests`

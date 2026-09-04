@@ -431,7 +431,8 @@ public sealed class ConfigViewModel : ObservableObject
                 rdStartPostCloseLockSeconds: loadResult.RdStartPostCloseLockSeconds,
                 rdEndPostCloseLockSeconds: loadResult.RdEndPostCloseLockSeconds,
                 rdStartPostOpenLockSeconds: loadResult.RdStartPostOpenLockSeconds,
-                rdEndPostOpenLockSeconds: loadResult.RdEndPostOpenLockSeconds);
+                rdEndPostOpenLockSeconds: loadResult.RdEndPostOpenLockSeconds,
+                openMaxLastGapPts: loadResult.OpenMaxLastGapPts);
             _runtimeConfigState.UpdateSignalCycleSize(loadResult.SignalCycleSize);
             _runtimeConfigState.UpdateGapStability(
                 loadResult.OpenGapStability!,

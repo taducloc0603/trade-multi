@@ -71,6 +71,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             LimitMaxGap: row.LimitMaxGap,
             MaxSpread: row.MaxSpread,
             OpenMaxTimesTick: row.OpenMaxTimesTick,
+            // Signed, không clamp: NULL = tắt gate, 0 và số âm vẫn hiệu lực.
+            OpenMaxLastGapPts: row.OpenMaxLastGapPts,
             CloseMaxTimesTick: row.CloseMaxTimesTick,
             OpenPendingTimeMs: row.OpenPendingTimeMs,
             ClosePendingTimeMs: row.ClosePendingTimeMs,
@@ -321,6 +323,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("limit_max_gap", out var limitMaxGapElement);
         first.TryGetProperty("max_spread", out var maxSpreadElement);
         first.TryGetProperty("open_max_times_tick", out var openMaxTimesTickElement);
+        first.TryGetProperty("open_max_last_gap_pts", out var openMaxLastGapPtsElement);
         first.TryGetProperty("close_max_times_tick", out var closeMaxTimesTickElement);
         first.TryGetProperty("signal_cycle_size", out var signalCycleSizeElement);
         first.TryGetProperty("open_pending_time_ms", out var openPendingTimeMsElement);
@@ -394,6 +397,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             LimitMaxGap = limitMaxGapElement.ValueKind == JsonValueKind.Number && limitMaxGapElement.TryGetInt32(out var limitMaxGap) ? limitMaxGap : 0,
             MaxSpread = maxSpreadElement.ValueKind == JsonValueKind.Number && maxSpreadElement.TryGetInt32(out var maxSpread) ? maxSpread : 0,
             OpenMaxTimesTick = openMaxTimesTickElement.ValueKind == JsonValueKind.Number && openMaxTimesTickElement.TryGetInt32(out var openMaxTimesTick) ? openMaxTimesTick : 0,
+            // NULL / thiếu cột => null (tắt gate). Giá trị 0 và số âm vẫn được giữ nguyên.
+            OpenMaxLastGapPts = openMaxLastGapPtsElement.ValueKind == JsonValueKind.Number && openMaxLastGapPtsElement.TryGetInt32(out var openMaxLastGapPts) ? openMaxLastGapPts : (int?)null,
             CloseMaxTimesTick = closeMaxTimesTickElement.ValueKind == JsonValueKind.Number && closeMaxTimesTickElement.TryGetInt32(out var closeMaxTimesTick) ? closeMaxTimesTick : 0,
             SignalCycleSize = signalCycleSizeElement.ValueKind == JsonValueKind.Number && signalCycleSizeElement.TryGetInt32(out var signalCycleSize) ? signalCycleSize : 10,
             OpenPendingTimeMs = openPendingTimeMsElement.ValueKind == JsonValueKind.Number && openPendingTimeMsElement.TryGetInt32(out var openPendingTimeMs) ? openPendingTimeMs : 0,
@@ -500,6 +505,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("limit_max_gap", out var limitMaxGapElement);
         first.TryGetProperty("max_spread", out var maxSpreadElement);
         first.TryGetProperty("open_max_times_tick", out var openMaxTimesTickElement);
+        first.TryGetProperty("open_max_last_gap_pts", out var openMaxLastGapPtsElement);
         first.TryGetProperty("close_max_times_tick", out var closeMaxTimesTickElement);
         first.TryGetProperty("signal_cycle_size", out var signalCycleSizeElement);
         first.TryGetProperty("open_pending_time_ms", out var openPendingTimeMsElement);
@@ -571,6 +577,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             LimitMaxGap = limitMaxGapElement.ValueKind == JsonValueKind.Number && limitMaxGapElement.TryGetInt32(out var limitMaxGap) ? limitMaxGap : 0,
             MaxSpread = maxSpreadElement.ValueKind == JsonValueKind.Number && maxSpreadElement.TryGetInt32(out var maxSpread) ? maxSpread : 0,
             OpenMaxTimesTick = openMaxTimesTickElement.ValueKind == JsonValueKind.Number && openMaxTimesTickElement.TryGetInt32(out var openMaxTimesTick) ? openMaxTimesTick : 0,
+            // NULL / thiếu cột => null (tắt gate). Giá trị 0 và số âm vẫn được giữ nguyên.
+            OpenMaxLastGapPts = openMaxLastGapPtsElement.ValueKind == JsonValueKind.Number && openMaxLastGapPtsElement.TryGetInt32(out var openMaxLastGapPts) ? openMaxLastGapPts : (int?)null,
             CloseMaxTimesTick = closeMaxTimesTickElement.ValueKind == JsonValueKind.Number && closeMaxTimesTickElement.TryGetInt32(out var closeMaxTimesTick) ? closeMaxTimesTick : 0,
             SignalCycleSize = signalCycleSizeElement.ValueKind == JsonValueKind.Number && signalCycleSizeElement.TryGetInt32(out var signalCycleSize) ? signalCycleSize : 10,
             OpenPendingTimeMs = openPendingTimeMsElement.ValueKind == JsonValueKind.Number && openPendingTimeMsElement.TryGetInt32(out var openPendingTimeMs) ? openPendingTimeMs : 0,
@@ -839,6 +847,10 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("open_max_times_tick")]
         public int OpenMaxTimesTick { get; set; }
+
+        // Trần cho GAP CUỐI của Open Cycle. NULL = tắt gate; 0 và số âm vẫn hiệu lực.
+        [JsonPropertyName("open_max_last_gap_pts")]
+        public int? OpenMaxLastGapPts { get; set; }
 
         [JsonPropertyName("close_max_times_tick")]
         public int CloseMaxTimesTick { get; set; }

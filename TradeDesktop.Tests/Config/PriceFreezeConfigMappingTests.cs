@@ -107,6 +107,7 @@ public sealed class PriceFreezeConfigMappingTests
         Assert.Contains("CloseHoldConfirmMs", properties);
         Assert.Contains("OpenMaxTimesTick", properties);
         Assert.Contains("CloseMaxTimesTick", properties);
+        Assert.Contains("OpenMaxLastGapPts", properties);
     }
 
     [Theory]

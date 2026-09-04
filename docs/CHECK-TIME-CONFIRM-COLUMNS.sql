@@ -105,3 +105,35 @@ comment on column public.configs.close_max_times_tick is
 
 comment on column public.configs.signal_cycle_size is
 'KHONG tham gia quyet dinh signal tren nhanh TIME. Van duoc load, validate (>= 1) va ghi kem log de doi chieu voi nhanh TICK (FIXED_SIZE).';
+
+
+-- ----------------------------------------------------------------------------
+-- 6) open_max_last_gap_pts — tran cho GAP CUOI cua Open Cycle.
+--    Cot NULLABLE va KHONG co default: NULL = tat gate.
+--    Neu chua ton tai, chay docs/OPEN-MAX-LAST-GAP-MIGRATION.sql.
+-- ----------------------------------------------------------------------------
+
+select column_name, data_type, column_default, is_nullable
+from information_schema.columns
+where table_schema = 'public'
+  and table_name = 'configs'
+  and column_name = 'open_max_last_gap_pts';
+
+-- Gia tri theo host + canh bao cau hinh vo hieu (tran <= nguong open -> chan sach moi trigger).
+select
+    machine_host_name,
+    open_pts,
+    open_confirm_gap_pts,
+    open_max_last_gap_pts,
+    case
+        when open_max_last_gap_pts is null
+            then 'TAT: gate khong ap dung'
+        when open_max_last_gap_pts <= greatest(open_pts, open_confirm_gap_pts)
+            then 'NGUY HIEM: tran <= nguong open -> moi Open trigger deu bi reset'
+        else 'OK'
+    end as open_max_last_gap_status
+from public.configs
+order by machine_host_name;
+
+comment on column public.configs.open_max_last_gap_pts is
+'[NHANH TIME] Tran cho GAP CUOI cua Open Cycle (signed, doi xung, strict). Buy: lastGap < C. Sell: lastGap > -C. Kiem tra SAU khi Cycle da Stable va mau cuoi da dat open_pts; vi pham thi reset Cycle. NULL = tat gate; 0 va so am van hieu luc.';

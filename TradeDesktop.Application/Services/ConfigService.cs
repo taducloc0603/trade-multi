@@ -142,7 +142,8 @@ public sealed class ConfigService(
             rdEndPostOpenLockSeconds: record.RdEndPostOpenLockSeconds,
             scheduleSleepingJson: record.ScheduleSleepingJson,
             openGapStability: record.OpenGapStability,
-            closeGapStability: record.CloseGapStability);
+            closeGapStability: record.CloseGapStability,
+            openMaxLastGapPts: record.OpenMaxLastGapPts);
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -281,7 +282,10 @@ public sealed record ConfigLoadResult(
     double MinProfitToClose = 0,
     GapStabilityConfig? OpenGapStability = null,
     GapStabilityConfig? CloseGapStability = null,
-    int SignalCycleSize = 10)
+    int SignalCycleSize = 10,
+    // Trần cho GAP CUỐI của Open Cycle (signed, đối xứng). null = tắt gate.
+    // KHÔNG clamp về >= 0: 0 và số âm là giá trị hợp lệ, giống 4 cột ngưỡng gap thường.
+    int? OpenMaxLastGapPts = null)
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -347,7 +351,8 @@ public sealed record ConfigLoadResult(
         double minProfitToClose = 0,
         GapStabilityConfig? openGapStability = null,
         GapStabilityConfig? closeGapStability = null,
-        int signalCycleSize = 10) =>
+        int signalCycleSize = 10,
+        int? openMaxLastGapPts = null) =>
         new(
             true,
             true,
@@ -417,7 +422,9 @@ public sealed record ConfigLoadResult(
             Math.Max(0d, minProfitToClose),
             openGapStability,
             closeGapStability,
-            signalCycleSize);
+            signalCycleSize,
+            // Signed, không clamp: null = tắt gate, 0 và số âm vẫn hiệu lực.
+            openMaxLastGapPts);
 
     public static ConfigLoadResult NotFound(string machineHostName) =>
         new(

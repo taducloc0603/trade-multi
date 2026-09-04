@@ -147,7 +147,10 @@ public sealed record GapSignalConfirmationConfig(
     string DiagnosticConfigId = "",
     string DiagnosticSymbol = "",
     int DiagnosticMaxGap = 0,
-    int SignalCycleSize = 10);
+    int SignalCycleSize = 10,
+    // Trần cho GAP CUỐI của Open Cycle (signed, đối xứng): Buy cần lastGap < C, Sell cần
+    // lastGap > -C. null = tắt gate; 0 và số âm vẫn hiệu lực. Vi phạm => reset Cycle.
+    int? OpenMaxLastGapPts = null);
 
 public sealed record GapSignalTriggerResult(
     bool Triggered,

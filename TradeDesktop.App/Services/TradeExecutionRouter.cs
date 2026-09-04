@@ -433,6 +433,22 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             return (false, "LATEST_OPEN_CONDITION_INVALID");
         }
 
+        // Trần cho gap cuối (open_max_last_gap_pts), giữ lockstep với GapSignalConfirmationEngine.
+        // null = tắt gate; 0 và số âm vẫn hiệu lực. Reason riêng để phân biệt với ngưỡng cũ.
+        if (_runtimeConfig.CurrentOpenMaxLastGapPts is { } maxLastGap)
+        {
+            var withinCeiling = signal.TriggerType switch
+            {
+                GapSignalTriggerType.OpenByGapBuy => metrics.GapBuy is { } gap && gap < maxLastGap,
+                GapSignalTriggerType.OpenByGapSell => metrics.GapSell is { } gap && gap > -maxLastGap,
+                _ => false
+            };
+            if (!withinCeiling)
+            {
+                return (false, "LATEST_OPEN_MAX_LAST_GAP_EXCEEDED");
+            }
+        }
+
         var limitMaxGap = Math.Abs(_runtimeConfig.CurrentLimitMaxGap);
         var currentGap = signal.TriggerType == GapSignalTriggerType.OpenByGapBuy
             ? metrics.GapBuy

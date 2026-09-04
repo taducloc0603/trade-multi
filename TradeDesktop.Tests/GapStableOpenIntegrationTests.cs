@@ -269,6 +269,91 @@ public sealed class GapStableOpenIntegrationTests
     }
 
     [Fact]
+    public void OpenMaxLastGap_ResetsCycle_WhenLastGapReachesCeiling()
+    {
+        // Cycle ổn định, mẫu cuối đạt open_pts nhưng chạm trần (120 >= 115) -> reset, không trigger.
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(
+            confirm: 50,
+            open: 100,
+            holdMs: 2000,
+            openMaxLastGapPts: 115);
+
+        Assert.Empty(Process(engine, config, 0, gapBuy: 100));
+        Assert.Empty(Process(engine, config, 1, gapBuy: 110));
+        Assert.Empty(Process(engine, config, 2, gapBuy: 120));
+
+        var afterReset = Assert.Single(engine.GetCycleStatuses(), status =>
+            status.Kind == SignalCycleKind.OpenBuy);
+        Assert.Equal(0, afterReset.CurrentCount);
+        Assert.Contains("open_max_last_gap_pts", afterReset.LastReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void OpenMaxLastGap_AllowsTrigger_WhenLastGapBelowCeiling()
+    {
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(
+            confirm: 50,
+            open: 100,
+            holdMs: 2000,
+            openMaxLastGapPts: 130);
+
+        Assert.Empty(Process(engine, config, 0, gapBuy: 100));
+        Assert.Empty(Process(engine, config, 1, gapBuy: 110));
+        var trigger = Assert.Single(Process(engine, config, 2, gapBuy: 120));
+
+        Assert.Equal(120, trigger.LastBuyGap);
+    }
+
+    [Fact]
+    public void OpenMaxLastGapNull_DoesNotLimitCycle()
+    {
+        // NULL trong DB (hoặc DB chưa có cột) => gate tắt, hành vi y hệt trước.
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(
+            confirm: 50,
+            open: 100,
+            holdMs: 2000,
+            openMaxLastGapPts: null);
+
+        Assert.Empty(Process(engine, config, 0, gapBuy: 100));
+        Assert.Empty(Process(engine, config, 1, gapBuy: 110));
+        Assert.Single(Process(engine, config, 2, gapBuy: 120));
+    }
+
+    [Fact]
+    public void OpenMaxLastGap_IsSymmetricForSell()
+    {
+        // Sell dùng -C: -120 <= -115 -> vi phạm, reset.
+        var engine = new GapSignalConfirmationEngine();
+        var blocking = Config(
+            confirm: 50,
+            open: 100,
+            holdMs: 2000,
+            openMaxLastGapPts: 115);
+
+        var blockedEngine = new GapSignalConfirmationEngine();
+        Assert.Empty(Process(blockedEngine, blocking, 0, gapSell: -100));
+        Assert.Empty(Process(blockedEngine, blocking, 1, gapSell: -110));
+        Assert.Empty(Process(blockedEngine, blocking, 2, gapSell: -120));
+        var afterReset = Assert.Single(blockedEngine.GetCycleStatuses(), status =>
+            status.Kind == SignalCycleKind.OpenSell);
+        Assert.Equal(0, afterReset.CurrentCount);
+
+        // Nới trần thì cùng chuỗi mẫu đó trigger bình thường.
+        var allowing = Config(
+            confirm: 50,
+            open: 100,
+            holdMs: 2000,
+            openMaxLastGapPts: 130);
+        Assert.Empty(Process(engine, allowing, 0, gapSell: -100));
+        Assert.Empty(Process(engine, allowing, 1, gapSell: -110));
+        var trigger = Assert.Single(Process(engine, allowing, 2, gapSell: -120));
+        Assert.Equal(-120, trigger.LastSellGap);
+    }
+
+    [Fact]
     public void CycleStatusSnapshot_IsReadOnlyAndReflectsProgressAndReset()
     {
         var engine = new GapSignalConfirmationEngine();
@@ -321,7 +406,8 @@ public sealed class GapStableOpenIntegrationTests
         int open,
         int holdMs,
         int limitMaxGap = 0,
-        int openMaxTimesTick = 0) =>
+        int openMaxTimesTick = 0,
+        int? openMaxLastGapPts = null) =>
         new(
             ConfirmGapPts: confirm,
             OpenPts: open,
@@ -329,7 +415,8 @@ public sealed class GapStableOpenIntegrationTests
             LimitMaxGap: limitMaxGap,
             OpenMaxTimesTick: openMaxTimesTick,
             OpenGapStability: Stability,
-            SignalCycleSize: 3);
+            SignalCycleSize: 3,
+            OpenMaxLastGapPts: openMaxLastGapPts);
 
     private static IReadOnlyList<GapSignalTriggerResult> Process(
         GapSignalConfirmationEngine engine,

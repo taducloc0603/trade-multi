@@ -29,6 +29,8 @@ public interface IRuntimeConfigProvider
     int CurrentSosCloseGapPts { get; }
     int CurrentMaxSpread { get; }
     int CurrentOpenMaxTimesTick => 0;
+    // Trần cho GAP CUỐI của Open Cycle. null = tắt gate.
+    int? CurrentOpenMaxLastGapPts => null;
     int CurrentCloseMaxTimesTick => 0;
     int CurrentSignalCycleSize => 10;
     int CurrentOpenPendingTimeMs { get; }

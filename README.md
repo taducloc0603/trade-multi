@@ -71,9 +71,14 @@ Config trước khi áp rule được chuẩn hóa:
 - `HoldConfirmMs = Max(0, config.HoldConfirmMs)` — `0` = không yêu cầu thời gian
 - `OpenMaxTimesTick = Max(0, config.OpenMaxTimesTick)` — `0` = không giới hạn độ dài chu kỳ
 - `LimitMaxGap = Max(0, config.LimitMaxGap)` — `0` = disabled
+- `OpenMaxLastGapPts = config.OpenMaxLastGapPts` — **giữ nguyên dấu, KHÔNG clamp về `>= 0`**;
+  `null` = tắt gate, `0` và số âm vẫn hiệu lực
 
 Khi chu kỳ đã Stable nhưng mẫu cuối chưa đạt `open_pts`, engine **không reset** — chu kỳ tiếp tục
 thu mẫu và có thể trigger ở mẫu kế tiếp. Chế độ TIME cũng **không khử trùng lặp snapshot**.
+
+Ngược lại, khi mẫu cuối đã đạt `open_pts` nhưng **chạm trần `open_max_last_gap_pts`**, engine
+**reset chu kỳ ngay** (mở chu kỳ mới) và không phát trigger — xem mục 7.1.
 
 `signal_cycle_size` vẫn được load, validate và ghi log để đối chiếu, nhưng **không tham gia
 quyết định signal** trên nhánh này.
@@ -357,6 +362,7 @@ những limit còn lại dùng `0` để disable):
 | `close_hold_confirm_ms` | `CurrentCloseHoldConfirmMs` | `int` | Thời gian giữ tối thiểu của **Normal Close, SOS Close và TP** (dùng chung). TP chốt **chỉ** theo cột này. `0` = không yêu cầu; âm normalize về `0` |
 | `open_max_times_tick` | `CurrentOpenMaxTimesTick` | `int` | Chặn Open Cycle dài quá N mẫu: kiểm tra sau khi Cycle đã Stable và mẫu cuối đã đạt `open_pts`, vượt thì reset Cycle. `0` = tắt |
 | `close_max_times_tick` | `CurrentCloseMaxTimesTick` | `int` | Như trên cho Normal Close, SOS Close và TP. `0` = tắt |
+| `open_max_last_gap_pts` | `CurrentOpenMaxLastGapPts` | `int?` | **Trần cho GAP CUỐI** của Open Cycle. So sánh **giữ nguyên dấu, đối xứng** và **strict**: Buy cần `lastGap < C`, Sell cần `lastGap > -C`. Kiểm tra sau khi Cycle đã Stable và mẫu cuối đã đạt `open_pts`; vi phạm thì **reset Cycle** (mở chu kỳ mới), không phát trigger. `NULL` (hoặc DB chưa có cột) = tắt gate; `0` và số âm **vẫn hiệu lực**, không bị clamp. Router re-check cùng trần lúc dispatch với reason `LATEST_OPEN_MAX_LAST_GAP_EXCEEDED`. Migration: `docs/OPEN-MAX-LAST-GAP-MIGRATION.sql` |
 | `signal_cycle_size` | `CurrentSignalCycleSize` | `int` | **Không tham gia quyết định signal trên nhánh TIME.** Vẫn được load, validate (`>= 1`, nhỏ hơn thì ConfigService từ chối load) và ghi kèm log để đối chiếu với nhánh TICK |
 | `open_price_freeze_ms` | `CurrentOpenPriceFreezeMs` | `int` | Bảo vệ độ mới của giá khi thực thi **Open**: chặn nếu giá không đổi suốt cửa sổ này. `0` = tắt kiểm tra; giá trị âm normalize về `0` |
 | `close_price_freeze_ms` | `CurrentClosePriceFreezeMs` | `int` | Bảo vệ độ mới của giá khi thực thi **Close**: chặn nếu giá không đổi suốt cửa sổ này. `0` = tắt kiểm tra; giá trị âm normalize về `0` |

@@ -70,4 +70,6 @@ public sealed record ConfigRecord(
     string ScheduleSleepingJson = "",
     GapStabilityConfig? OpenGapStability = null,
     GapStabilityConfig? CloseGapStability = null,
-    int SignalCycleSize = 10);
+    int SignalCycleSize = 10,
+    // Trần cho GAP CUỐI của Open Cycle. null = tắt gate; 0 và số âm vẫn hiệu lực.
+    int? OpenMaxLastGapPts = null);
