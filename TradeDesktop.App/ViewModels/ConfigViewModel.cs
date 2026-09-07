@@ -432,6 +432,14 @@ public sealed class ConfigViewModel : ObservableObject
                 rdEndPostCloseLockSeconds: loadResult.RdEndPostCloseLockSeconds,
                 rdStartPostOpenLockSeconds: loadResult.RdStartPostOpenLockSeconds,
                 rdEndPostOpenLockSeconds: loadResult.RdEndPostOpenLockSeconds,
+                // Hai tham so nay TUNG BI BO SOT o day. Vi ctor cua ConfigViewModel tu goi
+                // LoadByMachineHostNameAsync, chi can MO cua so Config la Update chay ma khong mang
+                // theo min_profit_to_close -> gate min_profit bi tat am tham, khong dau vet log,
+                // va ton tai den khi bam Reconnect hoac khoi dong lai app.
+                // Day la duong NAP CONFIG nen phai truyen gia tri DB tuong minh, khong duoc dua vao
+                // sentinel (sentinel chi giu gia tri cu, tuc se bo qua gia tri moi tu DB).
+                minProfitToClose: loadResult.MinProfitToClose,
+                maxLifeTimeBySecond: loadResult.MaxLifeTimeBySecond,
                 openMaxLastGapPts: loadResult.OpenMaxLastGapPts);
             _runtimeConfigState.UpdateSignalCycleSize(loadResult.SignalCycleSize);
             _runtimeConfigState.UpdateGapStability(

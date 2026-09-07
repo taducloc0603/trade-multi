@@ -50,7 +50,7 @@ public static class SignalLifecycleLogFormatter
             "TRADING_STOPPED" => $"Không thể {action} vì Trading Logic đang dừng",
             "SIDE_DISABLED" => "Không thể mở vì hướng tín hiệu đang bị tắt trên giao diện",
             "DUPLICATE_SIGNAL" => "Bỏ qua vì tín hiệu đã được xử lý trước đó",
-            "MIN_PROFIT_WAITING" => "Chưa thể đóng vì lợi nhuận chưa đạt mức tối thiểu",
+            "MIN_PROFIT_WAITING" => "Chưa thể đóng vì chân A chưa dịch chuyển đủ point từ giá mở",
             "ORIGINAL_POSITION_CLOSED" => "Hủy Hedge vì vị thế gốc đã đóng trước khi gửi lệnh",
             "ORIGINAL_SLOT_NOT_FOUND" => "Hủy Hedge vì không còn tìm thấy slot gốc",
             "ORIGINAL_SIDE_CHANGED" => "Hủy Hedge vì hướng của vị thế gốc đã thay đổi",

@@ -91,9 +91,19 @@ hiện tại là tổng `5`, cận trên Buy `3`, cận trên Sell `3`. `Portfol
   nếu không có overtime, chọn `LastProfitSnapshot` cao nhất.
 - Slot losers giữ nguyên close window — sẽ trigger lại tick sau nếu vẫn đủ điều kiện.
 - Implementation: `coordinator.ProcessSnapshot` close path: `OrderByDescending(LastProfitSnapshot ?? double.MinValue)`.
-- `min_profit_to_close > 0` lọc Auto Close trước khi vào `eligibleCloses`: khi
-  `age < max_life_time_by_second` cần tổng profit hai chân đạt ngưỡng; tại `age >=` thì bỏ qua gate.
-  Nếu max lifetime bằng `0`, gate không hết hạn. Manual/recovery không đi qua gate này.
+- `min_profit_to_close > 0` lọc Auto Close trước khi vào `eligibleCloses`. **So sánh TRỊ TUYỆT ĐỐI
+  DỊCH CHUYỂN CỦA CHÂN A tính bằng POINT**, không phải tiền và **không phải tổng hai chân**:
+  `Math.Abs(slot.LastProfitA) >= min_profit_to_close`, với `LastProfitA = (giá hiện tại − giá mở) ×
+  point` (Buy dùng Bid, Sell dùng Ask). `LastProfitSnapshot` (tổng A+B) chỉ được IN RA LOG, không
+  tham gia so sánh. Ngữ nghĩa này đổi ở commit `0cf4c87`; mô tả cũ "tổng profit hai chân" là SAI.
+- Gate **vô hướng**: chân A chạy −200pt (đang lỗ) qua gate y hệt +200pt.
+- Gate active khi `age < max_life_time_by_second`; tại `age >=` thì bỏ qua. Nếu
+  `max_life_time_by_second = 0` thì gate **không bao giờ hết hạn** — cặp cấu hình
+  `min_profit > 0` + `max_life_time = 0` có thể khiến slot không bao giờ tự đóng.
+- **Thiếu dữ liệu profit chân A ⇒ CHẶN** (fail-closed). Bid/Ask thiếu cũng cho `0` nên bị chặn.
+- **SOS vẫn bị gate đầy đủ** — chỉ *cooldown* của SOS được bypass, không phải min_profit.
+  Manual per-pair và recovery bỏ qua gate hoàn toàn (không đi qua vòng lặp auto-close).
+- Slot bị chặn chỉ `continue`; cửa sổ close engine KHÔNG bị reset nên tick sau thử lại.
 
 ### Rule E — Signal-only mandate (HIGHEST — đứng trên tất cả)
 - **Quy tắc cao nhất**: MỌI điều kiện OPEN/CLOSE một vị thế cân bằng PHẢI bắt nguồn từ signal engine.
@@ -459,6 +469,19 @@ TradeDesktop.Tests/            # xUnit tests
   post-close theo DB; SOS không được bypass cooldown transition vừa tạo bởi chính close trước đó.
 - Manual buttons legacy hidden (Phase 6 `IsManualTradeButtonsVisible=false`). Manual per-pair là path riêng,
   bypass auto cooldown nhưng bắt buộc qua non-auto barrier và physical close mutex.
+
+### Bẫy sentinel ở `RuntimeConfigState.Update` (đã gây tắt gate âm thầm)
+
+- `Update` có ~40 tham số optional. Tham số nào **gán vô điều kiện với mặc định `0`** sẽ bị mọi caller
+  bỏ qua tham số đó **âm thầm reset về 0**. Tham số nào dùng **sentinel `-1` + guard `>= 0`** thì bỏ
+  qua sẽ giữ nguyên giá trị.
+- `min_profit_to_close` từng thuộc nhóm đầu: `ConfigViewModel` ctor tự gọi `LoadByMachineHostNameAsync`
+  → `Update` thiếu tham số, nên **chỉ cần MỞ cửa sổ Config là gate min_profit tắt**, kéo dài tới khi
+  bấm Reconnect hoặc khởi động lại. Không có dấu vết log nào vì gate chỉ ghi log khi `> 0`.
+  `openMaxLastGapPts` từng dính đúng lớp lỗi này.
+- **Khi thêm tham số mới vào `Update`:** dùng sentinel nếu `0` là giá trị hợp lệ, forward tường minh
+  ở các overload ngắn, và thêm test giữ giá trị. Test chỉ gọi thẳng `coordinator.Update*Config(...)`
+  sẽ KHÔNG bắt được lớp lỗi này vì nó bỏ qua toàn bộ `RuntimeConfigState`.
 
 ### Config & recovery
 - Config load theo `MachineHostName` (lowercase, normalize).

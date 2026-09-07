@@ -228,7 +228,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int rdEndPostCloseLockSeconds = -1,
         int rdStartPostOpenLockSeconds = -1,
         int rdEndPostOpenLockSeconds = -1,
-        double minProfitToClose = 0,
+        double minProfitToClose = -1,
         int? openMaxLastGapPts = null)
         => Update(
             machineHostName,
@@ -329,7 +329,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int rdEndPostCloseLockSeconds = -1,
         int rdStartPostOpenLockSeconds = -1,
         int rdEndPostOpenLockSeconds = -1,
-        double minProfitToClose = 0,
+        double minProfitToClose = -1,
         int? openMaxLastGapPts = null)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
@@ -402,7 +402,17 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         {
             CurrentMaxLifeTimeBySecond = Math.Max(0, maxLifeTimeBySecond);
         }
-        CurrentMinProfitToClose = Math.Max(0d, minProfitToClose);
+        // Sentinel -1 = "caller khong truyen" -> GIU nguyen gia tri hien tai, giong
+        // maxLifeTimeBySecond ngay ben tren. Truoc day mac dinh la 0 va phep gan la VO DIEU KIEN,
+        // nen bat ky caller nao bo qua tham so cung am tham tat gate min_profit: chi can MO cua so
+        // Config (ConfigViewModel ctor tu goi LoadByMachineHostNameAsync -> Update thieu tham so
+        // nay) la gate tat, va khong de lai dau vet log nao.
+        // Gia tri 0 TUONG MINH van tat duoc gate vi 0 >= 0. So am truoc nay deu bi clamp ve 0 nen
+        // khong caller hop le nao dung, an toan de lam sentinel.
+        if (minProfitToClose >= 0)
+        {
+            CurrentMinProfitToClose = Math.Max(0d, minProfitToClose);
+        }
         if (oppositeSideLockSeconds >= 0)
         {
             // 0 = tắt lock nguy hiểm → giữ default 300 khi <= 0.
@@ -494,6 +504,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             sosCloseConfirmGapPts: CurrentSosCloseConfirmGapPts,
             sosCloseGapPts: CurrentSosCloseGapPts,
             // Giữ nguyên giá trị hiện tại; overload này không nhận config mới cho gate.
+            // minProfitToClose cũng phải forward tường minh: sentinel ở Update đã chặn việc bị
+            // zero hoá, nhưng nêu rõ ở đây cho thấy overload ngắn KHÔNG được phép làm mất gate.
+            minProfitToClose: CurrentMinProfitToClose,
             openMaxLastGapPts: CurrentOpenMaxLastGapPts);
 
     public void Update(string machineHostName, string mapName1, string mapName2)
@@ -537,6 +550,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             sosCloseConfirmGapPts: CurrentSosCloseConfirmGapPts,
             sosCloseGapPts: CurrentSosCloseGapPts,
             // Giữ nguyên giá trị hiện tại; overload này không nhận config mới cho gate.
+            // minProfitToClose cũng phải forward tường minh: sentinel ở Update đã chặn việc bị
+            // zero hoá, nhưng nêu rõ ở đây cho thấy overload ngắn KHÔNG được phép làm mất gate.
+            minProfitToClose: CurrentMinProfitToClose,
             openMaxLastGapPts: CurrentOpenMaxLastGapPts);
 
     // Quota từ DB (max_total_opens / max_buy_opens / max_sell_opens). Floor về 1 để không

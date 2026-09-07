@@ -7138,6 +7138,20 @@ public sealed class DashboardViewModel : ObservableObject
                     minProfitToClose: result.MinProfitToClose);
                 _runtimeConfigState.UpdateSignalCycleSize(result.SignalCycleSize);
                 SafeVmLog($"[CONFIG] signal_cycle_size={result.SignalCycleSize}");
+
+                // Hai gia tri nay truoc day KHONG duoc log o dau ca: dong [DB] inline khong chua
+                // chung va con bi gan cung theo host. Gate min_profit lai chi ghi log khi no > 0,
+                // nen mot cau hinh bi zero hoa se khong sinh bat ky dau vet nao. Log tai day de
+                // luon doi chieu duoc gia tri dang thuc su co hieu luc.
+                // Luu y don vi: min_profit_to_close tinh bang POINT dich chuyen cua chan A
+                // (abs(gia hien tai - gia mo) * point), KHONG phai tien va khong phai tong hai chan.
+                SafeVmLog(
+                    $"[CONFIG] min_profit_to_close={_runtimeConfigState.CurrentMinProfitToClose} (pts, |legA move|) " +
+                    $"max_life_time_by_second={_runtimeConfigState.CurrentMaxLifeTimeBySecond}" +
+                    (_runtimeConfigState.CurrentMinProfitToClose > 0d
+                        && _runtimeConfigState.CurrentMaxLifeTimeBySecond <= 0
+                            ? " [WARN] gate KHONG BAO GIO het han vi max_life_time_by_second=0"
+                            : string.Empty));
                 _runtimeConfigState.UpdateGapStability(
                     result.OpenGapStability!,
                     result.CloseGapStability!);
