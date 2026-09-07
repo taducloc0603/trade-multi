@@ -62,6 +62,11 @@ public sealed class GapCycleState
     private DateTime? _startedAtUtc;
     private DateTime? _lastTickUtc;
     private GapStabilityCalculator.Metrics? _metrics;
+    // _metrics duoc DUNG CHUNG boi hai engine: Process ghi tu _gaps, con ProcessFixedSize /
+    // StartFixedCycle / CompleteFixedCycleIfReady ghi tu _fixedCycle.Values va KHONG dung toi _gaps.
+    // Co nay danh dau _metrics hien dang thuoc chuoi nao, de nhanh cache trong Process khong bao gio
+    // tai su dung Metrics cua chuoi khac.
+    private bool _metricsFromGaps;
     private GapCycleStatus _status = GapCycleStatus.Empty;
     private string _reason = "Chưa có Cycle.";
     private int _lastMinStableSamples;
@@ -117,6 +122,7 @@ public sealed class GapCycleState
             var completed = _fixedCycle!.Count > 0 ? BuildFixedSnapshot() : null;
             _fixedCycle.Reset("LIMIT_MAX_GAP");
             _metrics = null;
+            _metricsFromGaps = false;
             _status = GapCycleStatus.Rejected;
             _reason = $"Gap {gapValue} exceeds limit_max_gap {limitMaxGap}.";
             return new GapCycleUpdateResult(GapCycleTransition.Rejected, BuildFixedSnapshot(), completed);
@@ -176,6 +182,7 @@ public sealed class GapCycleState
         }
 
         _metrics = GapStabilityCalculator.Calculate(_fixedCycle.Values, config);
+        _metricsFromGaps = false;
         _status = GapCycleStatus.Collecting;
         _reason = $"Collecting fixed-size cycle: {_fixedCycle.Count}/{_fixedCycle.RequiredSize}.";
         return CompleteFixedCycleIfReady(config, GapCycleTransition.Joined, fingerprint);
@@ -261,7 +268,20 @@ public sealed class GapCycleState
                 signCompleted);
         }
 
-        var currentMetrics = GapStabilityCalculator.Calculate(_gaps, config);
+        // Metrics cua _gaps hien tai da duoc tinh o cuoi tick truoc (hoac luc StartNewCycle) va
+        // _gaps KHONG doi ke tu do, nen tinh lai la thua: moi Calculate phai sort lai toan bo danh
+        // sach, chi phi nhan theo so slot va chay tren UI thread. Chi Tolerance phu thuoc config nen
+        // duoc tinh lai qua WithTolerance de van dung khi config duoc reload giua hai tick.
+        // Ket qua bit-identical voi Calculate(_gaps, config).
+        //
+        // _metricsFromGaps la BAT BUOC: _metrics dung chung voi nhanh ProcessFixedSize, ma nhanh do
+        // ghi Metrics cua _fixedCycle.Values MA KHONG dung toi _gaps. Neu mot instance chay
+        // Process -> ProcessFixedSize -> Process thi khong co co nay se lay Center/Tolerance cua
+        // CHUOI KHAC, lam doi quyet dinh NewCycle ngay ben duoi. Fallback sang Calculate luon dung,
+        // nen guard nay chi co the lam cham chu khong the lam sai.
+        var currentMetrics = _metricsFromGaps && _metrics is { } cachedMetrics
+            ? GapStabilityCalculator.WithTolerance(cachedMetrics, config)
+            : GapStabilityCalculator.Calculate(_gaps, config);
         var delta = GapStabilityCalculator.CalculateDelta(gapValue, currentMetrics.Center);
         if (delta > currentMetrics.Tolerance)
         {
@@ -283,6 +303,7 @@ public sealed class GapCycleState
 
         var metrics = GapStabilityCalculator.Calculate(_gaps, config);
         _metrics = metrics;
+        _metricsFromGaps = true;
         var durationMs = CalculateDurationMs();
         var enoughSamples = _gaps.Count >= config.MinStableSamples;
         var enoughDuration = durationMs >= holdConfirmMs;
@@ -343,6 +364,7 @@ public sealed class GapCycleState
 
         var metrics = GapStabilityCalculator.Calculate(_fixedCycle.Values, config);
         _metrics = metrics;
+        _metricsFromGaps = false;
         if (metrics.Dispersion > config.MaxDispersion || metrics.Drift > config.MaxDrift)
         {
             _status = GapCycleStatus.Unstable;
@@ -379,6 +401,7 @@ public sealed class GapCycleState
         {
             _fixedCycle.Resize(requiredSize);
             _metrics = null;
+            _metricsFromGaps = false;
             _status = GapCycleStatus.Empty;
             _reason = "Signal cycle size changed; reset fixed-size cycle.";
         }
@@ -401,6 +424,7 @@ public sealed class GapCycleState
         }
 
         _metrics = GapStabilityCalculator.Calculate(_fixedCycle.Values, config);
+        _metricsFromGaps = false;
         _status = GapCycleStatus.Collecting;
         _reason = reason;
     }
@@ -412,6 +436,7 @@ public sealed class GapCycleState
         var completed = _fixedCycle!.Count > 0 ? BuildFixedSnapshot() : null;
         _fixedCycle.Reset(reason);
         _metrics = null;
+        _metricsFromGaps = false;
         _status = GapCycleStatus.Empty;
         _reason = reason;
         return new GapCycleUpdateResult(transition, BuildFixedSnapshot(), completed);
@@ -466,6 +491,7 @@ public sealed class GapCycleState
         _cycleId = Guid.NewGuid().ToString("N");
         _gaps.Add(gap);
         _metrics = GapStabilityCalculator.Calculate(_gaps, config);
+        _metricsFromGaps = true;
         _status = GapCycleStatus.Collecting;
         _reason = reason;
     }
@@ -477,6 +503,7 @@ public sealed class GapCycleState
         _startedAtUtc = null;
         _lastTickUtc = null;
         _metrics = null;
+        _metricsFromGaps = false;
         _status = GapCycleStatus.Empty;
         _reason = "Chưa có Cycle.";
     }
