@@ -314,16 +314,30 @@ public static class GapCycleDiagnostics
 
         var cycleName = action == "CLOSE" ? "NORMAL_CLOSE" : action;
         WarnIfCycleGrowingLong(logger, cycleName, action, side, slotId, cycle, policy);
+
+        // PROGRESS lặp lại mỗi tick cho MỖI cycle của MỖI slot -> thoát TRƯỚC khi nội suy chuỗi
+        // khi kênh đang tắt, thay vì build đầy đủ rồi để tầng dưới lọc bỏ.
+        var isProgress = eventName == "PROGRESS";
+        if (isProgress && !logger.IsCycleProgressEnabled)
+        {
+            return;
+        }
+
         var line =
             $"[{cycleName}_CYCLE][{eventName}] cycle_id={Text(cycle.CycleId)} signal_id=- " +
             $"action={action} side={side} slot_id={Value(slotId)} " +
             $"{FormatCycleProgress(cycle, policy)} gap={Value(newGap)} " +
             $"confirmation_mode={policy.ConfirmationMode} reason=\"{Escape(cycle.Reason)}\"";
 
-        // PROGRESS lặp lại mỗi tick cho MỖI cycle của MỖI slot -> chỉ ghi file, không
-        // đẩy lên đường realtime UI. STARTED/RESET/COMPLETED là sự kiện chuyển trạng thái,
-        // tần suất thấp, vẫn giữ realtime để theo dõi trực tiếp.
-        if (eventName == "PROGRESS")
+        // RESET cũng có thể lặp MỖI TICK: GapCycleTransition.NewCycle (delta > tolerance) ánh xạ
+        // thành "RESET", và trong thị trường nhiễu điều kiện đó đúng liên tục -> ở 8 slot là 160
+        // dòng realtime/giây, mỗi dòng kéo UI thread qua SystemLogItem.Parse + ~15 phép Contains
+        // + Insert(0) trên collection cap 2000. Commit 066199c đã chuyển PROGRESS sang file-only
+        // nhưng bỏ sót đúng đường này. Cả hai chỉ ghi file.
+        //
+        // STARTED/COMPLETED chỉ xảy ra tại biên cycle thật (BecameStable chỉ phát khi chuyển từ
+        // non-Stable; sau đó là Joined -> PROGRESS) nên tần suất thấp, vẫn giữ realtime.
+        if (isProgress || eventName == "RESET")
         {
             logger.LogVerbose(line);
             return;

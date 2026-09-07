@@ -17,6 +17,13 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
     private readonly GapCycleState _sosCloseByGapBuyCycle = new();
     // Nhánh TIME: TP chốt theo cửa sổ close_hold_confirm_ms, không theo số mẫu cố định.
     private readonly TpWindowState _tpState = new();
+
+    // CLOSE_MAX_TP_EXCEEDED là nhánh DUY NHẤT trong ProcessTp không reset cửa sổ (cố ý), nên khi
+    // profit vượt trần nó lặp MỖI TICK. Nhưng nó cũng là dòng báo "một giới hạn cấu hình đang chặn
+    // lệnh đóng", mà panel Signal Cycle không hiển thị được. Vì vậy throttle thay vì tắt.
+    // Mỗi engine là một slot nên chỉ cần một field, không cần Dictionary theo slot.
+    private const int MaxTpExceededLogMinIntervalSeconds = 60;
+    private DateTime? _lastMaxTpExceededLogAtUtc;
     private SignalCycleEventSnapshot _closeBuyObservation = new();
     private SignalCycleEventSnapshot _closeSellObservation = new();
     private SignalCycleEventSnapshot _sosCloseBuyObservation = new();
@@ -529,7 +536,6 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
 
         var lastProfit = currentProfit;
         var cycleId = _tpState.CycleId;
-        var diagnosticProfits = _tpState.DiagnosticProfits.ToArray();
         _tpObservation = SignalCycleObservation.Record(
             _tpObservation,
             "Completed", cycleId, (int)_tpState.TickCount, lastProfit,
@@ -545,7 +551,15 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         if (maxTpProfit > 0d && lastProfit > maxTpProfit)
         {
             // Bản TIME cũ: chỉ bỏ qua tick này, KHÔNG reset cửa sổ.
-            LogTpCycle("COMPLETED", lastProfit, "CLOSE_MAX_TP_EXCEEDED", holdProgressMs: elapsedMs, holdTargetMs: normalizedHoldMs);
+            if (_lastMaxTpExceededLogAtUtc is not { } lastLoggedAt
+                || (snapshot.TimestampUtc - lastLoggedAt)
+                    >= TimeSpan.FromSeconds(MaxTpExceededLogMinIntervalSeconds)
+                || snapshot.TimestampUtc < lastLoggedAt)
+            {
+                _lastMaxTpExceededLogAtUtc = snapshot.TimestampUtc;
+                LogTpCycle("COMPLETED", lastProfit, "CLOSE_MAX_TP_EXCEEDED", holdProgressMs: elapsedMs, holdTargetMs: normalizedHoldMs);
+            }
+
             return null;
         }
 
@@ -558,6 +572,10 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         }
 
         var isClosingBuyPosition = openMode == TradingOpenMode.GapBuy;
+        // Chi cap phat khi that su tao result. Truoc day ToArray() nam ngay sau khi cua so du hold,
+        // tuc TRUOC ba lenh return som ben tren -> nhanh CLOSE_MAX_TP_EXCEEDED von co y KHONG reset
+        // cua so se cap phat toi 1024 double (~8 KB) MOI TICK MOI SLOT (~1,3 MB/s o 8 slot).
+        var diagnosticProfits = _tpState.DiagnosticProfits.ToArray();
         var diagnosticSignalId = Guid.NewGuid().ToString("N");
         var result = new GapSignalTriggerResult(
             Triggered: true,
@@ -639,6 +657,22 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             return;
         }
 
+        // Nhung ket qua nay lap lai MOI TICK cho MOI slot khi cua so da du hold nhung profit chua
+        // toi nguong -> thoat TRUOC khi noi suy chuoi neu kenh tien do dang tat, thay vi build day
+        // du roi de tang duoi loc bo. Giong het cach GapCycleDiagnostics gate dong PROGRESS.
+        // CHI gate nhung gi that su lap moi tick / moi cua so hold:
+        //  - PROGRESS: moi tick.
+        //  - TARGET_NOT_REACHED: mot lan moi close_hold_confirm_ms (co reset cua so).
+        // CLOSE_MAX_TIMES_TICK_EXCEEDED co reset nen chi 1 dong moi lan vi pham -> KHONG gate.
+        // CLOSE_MAX_TP_EXCEEDED da duoc throttle 60 giay ngay tai call site -> KHONG gate o day.
+        // Ca hai deu bao "gioi han cau hinh dang chan lenh dong", tin hieu quy hon nhieu so voi
+        // tien do thong thuong.
+        var isPerTickProgress = eventName == "PROGRESS" || result == "TARGET_NOT_REACHED";
+        if (isPerTickProgress && !_logger.IsCycleProgressEnabled)
+        {
+            return;
+        }
+
         var line =
             $"[TP_CYCLE][{eventName}] cycle_id={_tpState.CycleId} " +
             $"signal_id={(string.IsNullOrWhiteSpace(signalId) ? "-" : signalId)} " +
@@ -647,11 +681,11 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             $"profit={profit.ToString("R", System.Globalization.CultureInfo.InvariantCulture)} " +
             $"confirmation_mode=TIME_AND_MIN_SAMPLES result={result}";
 
-        // PROGRESS, và COMPLETED không đạt đích, đều lặp lại MỖI TICK cho MỖI slot khi cửa sổ
-        // đã đủ hold nhưng profit chưa tới ngưỡng -> chỉ ghi file, không đẩy lên realtime UI.
+        // Dinh tuyen file-only ap cho ca nhom lap lai lan hai dong gioi han: chung khong duoc
+        // day len realtime UI vi chi phi Parse + Insert(0) nhan theo so slot.
         // TARGET_REACHED / TRIGGERED tần suất thấp nên vẫn giữ realtime.
-        if (eventName == "PROGRESS"
-            || result is "TARGET_NOT_REACHED" or "CLOSE_MAX_TP_EXCEEDED" or "CLOSE_MAX_TIMES_TICK_EXCEEDED")
+        if (isPerTickProgress
+            || result is "CLOSE_MAX_TP_EXCEEDED" or "CLOSE_MAX_TIMES_TICK_EXCEEDED")
         {
             _logger.LogVerbose(line);
             return;
