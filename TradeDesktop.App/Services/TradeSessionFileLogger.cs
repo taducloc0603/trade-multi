@@ -20,10 +20,14 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         GapTick = 3
     }
 
-    private sealed record QueuedLog(string Line, LogChannel Channel);
+    private sealed record QueuedLog(
+        string Line,
+        LogChannel Channel,
+        TradeLogLevel Level = TradeLogLevel.Info);
 
     private static readonly TimeSpan DrainShutdownTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HealthLogInterval = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan FlushInterval = TimeSpan.FromMilliseconds(200);
     private const int DefaultQueueCapacity = 50_000;
 
     private readonly object _sync = new();
@@ -47,6 +51,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     private int _signalOutcomeRotationIndex;
     private int _gapTickRotationIndex;
     private TradeLogLevel _minLevel = TradeLogLevel.Info;
+    private bool _cycleProgressEnabled;
     private BlockingCollection<QueuedLog>? _writeQueue;
     private Task? _drainTask;
     private long _droppedLogCount;
@@ -57,6 +62,8 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
     private long _writtenSignalOutcomeLogCount;
     private long _writtenGapTickLogCount;
     private long _droppedGapTickLogCount;
+    private long _droppedImportantLogCount;
+    private long _nextFlushAtTicks;
     private long _queueHighWaterMark;
     private DateTimeOffset _nextHealthLogAt;
 
@@ -72,6 +79,14 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
             }
         }
     }
+
+    /// <summary>
+    /// Doc thuan field, KHONG lay lock(_sync): duoc goi tren duong chay moi tick moi slot.
+    /// Ket hop opt-in <c>LOG_CYCLE_PROGRESS</c> voi dung nhung dieu kien ma LogCore se dung de bo
+    /// dong: chua co queue, hoac level Info thap hon nguong dang cau hinh (vi du LOG_LEVEL=Warn).
+    /// </summary>
+    public bool IsCycleProgressEnabled
+        => _cycleProgressEnabled && _writeQueue is not null && TradeLogLevel.Info >= _minLevel;
 
     public string? CurrentLogFilePath { get; private set; }
 
@@ -102,6 +117,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 Directory.CreateDirectory(logDirectory);
 
                 _minLevel = ResolveMinLevelFromEnvironment();
+                _cycleProgressEnabled = ResolveCycleProgressFromEnvironment();
                 _maxFileSizeBytes = ResolveMaxFileSizeFromEnvironment();
                 _rotationIndex = 0;
                 _gapStabilityRawRotationIndex = 0;
@@ -119,6 +135,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 Interlocked.Exchange(ref _writtenSignalOutcomeLogCount, 0);
                 Interlocked.Exchange(ref _writtenGapTickLogCount, 0);
                 Interlocked.Exchange(ref _droppedGapTickLogCount, 0);
+                Interlocked.Exchange(ref _droppedImportantLogCount, 0);
                 Interlocked.Exchange(ref _queueHighWaterMark, 0);
                 _nextHealthLogAt = startedAtLocal.Add(HealthLogInterval);
                 _sessionHostName = hostName;
@@ -139,7 +156,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
                 _writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
                 {
-                    AutoFlush = true
+                    AutoFlush = false
                 };
 
                 var gapRawPath = $"{_gapStabilityRawFileBasePath}.log";
@@ -152,7 +169,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                     gapRawStream,
                     new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
                 {
-                    AutoFlush = true
+                    AutoFlush = false
                 };
 
                 var signalOutcomePath = $"{_signalOutcomeFileBasePath}.log";
@@ -165,7 +182,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                     signalOutcomeStream,
                     new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
                 {
-                    AutoFlush = true
+                    AutoFlush = false
                 };
 
                 // Kênh gap tick là diagnostics phụ. Mở file trong try/catch RIÊNG để một lỗi
@@ -184,7 +201,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                         gapTickStream,
                         new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
                     {
-                        AutoFlush = true
+                        AutoFlush = false
                     };
                 }
                 catch (Exception ex)
@@ -239,6 +256,10 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                         $"[{startedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] [LOGGER][WARN] " +
                         $"Gap tick file disabled for this session: {gapTickOpenError}");
                 }
+
+                // AutoFlush da tat: day header xuong dia ngay. Drain thread chi flush khi co dong
+                // di qua, nen neu khong lam o day thi header co the nam trong buffer vo thoi han.
+                FlushWriters();
 
                 _writeQueue = new BlockingCollection<QueuedLog>(ResolveQueueCapacityFromEnvironment());
                 queueToStart = _writeQueue;
@@ -347,7 +368,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         {
             var timestamp = DateTimeOffset.Now;
             var line = $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {message}";
-            if (TryEnqueue(queue, new QueuedLog(line, channel), level) && publishRealtime)
+            if (TryEnqueue(queue, new QueuedLog(line, channel, level), level) && publishRealtime)
             {
                 PublishRealtimeLog(timestamp.LocalDateTime, message, level);
             }
@@ -395,40 +416,61 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 {
                     lock (_sync)
                     {
-                        WriteDroppedLogSummaryIfNeeded();
-                        WriteLoggerHealthIfDue(queue);
-
-                        // Kênh gap tick chảy mỗi ~50ms. Ghi thẳng và KHÔNG chạm vào
-                        // pendingGapRaw: nếu nó flush bản ghi đang chờ thì cửa sổ gộp
-                        // gap-stability hiện có sẽ bị thu hẹp — đổi behavior sẵn có.
-                        if (queuedLog.Channel == LogChannel.GapTick)
+                        // finally chay ca khi than lock thoat bang continue, nen moi duong ghi
+                        // deu di qua diem flush. Flush phai nam TRONG _sync: StreamWriter khong
+                        // thread-safe va StopSession dispose writer duoi cung lock nay.
+                        try
                         {
-                            WriteGapTickLineCore(queuedLog.Line);
-                            continue;
-                        }
+                            WriteDroppedLogSummaryIfNeeded();
+                            WriteLoggerHealthIfDue(queue);
 
-                        if (pendingGapRaw is not null)
-                        {
-                            if (TryMergeCloseGapRaw(pendingGapRaw, queuedLog, out var merged))
+                            // Kênh gap tick chảy mỗi ~50ms. Ghi thẳng và KHÔNG chạm vào
+                            // pendingGapRaw: nếu nó flush bản ghi đang chờ thì cửa sổ gộp
+                            // gap-stability hiện có sẽ bị thu hẹp — đổi behavior sẵn có.
+                            if (queuedLog.Channel == LogChannel.GapTick)
                             {
-                                pendingGapRaw = merged;
+                                WriteGapTickLineCore(queuedLog.Line);
                                 continue;
                             }
 
-                            WriteGapStabilityRawLineCore(pendingGapRaw.Line);
-                            pendingGapRaw = null;
-                        }
+                            if (pendingGapRaw is not null)
+                            {
+                                if (TryMergeCloseGapRaw(pendingGapRaw, queuedLog, out var merged))
+                                {
+                                    pendingGapRaw = merged;
+                                    continue;
+                                }
 
-                        if (IsMergeableCloseGapRaw(queuedLog))
-                        {
-                            // Các Close engine theo slot thường phát cùng một diagnostics
-                            // liên tiếp trên một market snapshot. Giữ tối đa một record chờ
-                            // để gộp cycle_id/slot_ids trước khi ghi file.
-                            pendingGapRaw = queuedLog;
+                                WriteGapStabilityRawLineCore(pendingGapRaw.Line);
+                                pendingGapRaw = null;
+                            }
+
+                            if (IsMergeableCloseGapRaw(queuedLog))
+                            {
+                                // Các Close engine theo slot thường phát cùng một diagnostics
+                                // liên tiếp trên một market snapshot. Giữ tối đa một record chờ
+                                // để gộp cycle_id/slot_ids trước khi ghi file.
+                                pendingGapRaw = queuedLog;
+                            }
+                            else
+                            {
+                                WriteToChannel(queuedLog);
+                            }
                         }
-                        else
+                        finally
                         {
-                            WriteToChannel(queuedLog);
+                            // WARN/ERROR duoc flush NGAY, khong cho gop lo. AutoFlush=false tao mot
+                            // cua so toi 200ms ma neu process bi kill (unhandled exception, FailFast,
+                            // Task Manager, OOM) thi mat - dung khoang thoi gian quy nhat de dieu tra.
+                            // Nhom nay tan suat thap nen ep flush khong lam mat loi ich gop lo.
+                            if (queuedLog.Level >= TradeLogLevel.Warn)
+                            {
+                                FlushWriters();
+                            }
+                            else
+                            {
+                                FlushWritersIfDue(queue);
+                            }
                         }
                     }
                 }
@@ -444,13 +486,64 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         }
         finally
         {
-            if (pendingGapRaw is not null)
+            lock (_sync)
             {
-                lock (_sync)
+                if (pendingGapRaw is not null)
                 {
                     WriteGapStabilityRawLineCore(pendingGapRaw.Line);
                 }
+
+                // AutoFlush da tat, nen phai day not phan con lai truoc khi drain thread ket thuc.
+                FlushWriters();
             }
+        }
+    }
+
+    /// <summary>
+    /// Gom nhieu dong vao mot syscall flush thay vi AutoFlush ghi flush tung dong.
+    /// Truoc day moi dong log = mot flush, ma flush lai nam trong lock(_sync) - chinh lock ma
+    /// producer phai cho. O ~240 dong/giay khi nhieu slot mo, day la nguon tranh chap dang ke.
+    ///
+    /// Van flush NGAY khi hang doi da rong, nen luc he thong ranh log xuat hien trong file tuc thi;
+    /// chi khi log don dap moi thuc su gom lo. Phai duoc goi trong lock(_sync).
+    /// </summary>
+    private void FlushWritersIfDue(BlockingCollection<QueuedLog> queue)
+    {
+        var now = Environment.TickCount64;
+        if (queue.Count > 0 && now < _nextFlushAtTicks)
+        {
+            return;
+        }
+
+        _nextFlushAtTicks = now + (long)FlushInterval.TotalMilliseconds;
+        FlushWriters();
+    }
+
+    /// <summary>
+    /// Flush toan bo kenh. Loi cua mot kenh khong duoc lam hong kenh con lai. Goi trong lock(_sync).
+    /// </summary>
+    private void FlushWriters()
+    {
+        FlushWriter(_writer, nameof(_writer));
+        FlushWriter(_gapStabilityRawWriter, nameof(_gapStabilityRawWriter));
+        FlushWriter(_signalOutcomeWriter, nameof(_signalOutcomeWriter));
+        FlushWriter(_gapTickWriter, nameof(_gapTickWriter));
+    }
+
+    private void FlushWriter(StreamWriter? writer, string name)
+    {
+        if (writer is null)
+        {
+            return;
+        }
+
+        try
+        {
+            writer.Flush();
+        }
+        catch (Exception ex)
+        {
+            SafeDebug($"Flush {name} failed: {ex}");
         }
     }
 
@@ -582,15 +675,24 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
             return true;
         }
 
-        // Preserve operationally important records even during a log storm. This may
-        // briefly block only WARN/ERROR producers; INFO/DEBUG are dropped and summarized.
+        // KHONG ghi file dong bo tren thread goi nua. Truoc day WARN/ERROR khi queue day se lay
+        // lock(_sync) roi WriteToChannel ngay tai day. Drain thread giu dung lock do quanh MOI lan
+        // ghi, nen duong nay keo thread goi - thuong la UI thread - vao mot syscall ghi dia, dung
+        // luc log dang don dap va UI can muot nhat.
+        //
+        // Te hon: dong [GAP_STABILITY][WARN] long_cycle duoc phat ra dung khi Gap Cycle phinh to,
+        // tao vong phan hoi duong (cycle dai -> WARN -> chan UI thread -> tick cham -> cham hon).
+        //
+        // Tra ve true de LogCore van publish dong nay len panel realtime (duong do khong cham dia).
+        // LUU Y GIOI HAN: chi Log(...) / Log(level, ...) moi co publishRealtime=true. Voi
+        // LogFileOnly / LogGapStabilityRaw / LogSignalOutcomeRaw thi publishRealtime=false nen
+        // LogCore short-circuit va dong bi MAT HOAN TOAN - khong file, khong UI. Do la cai gia phai
+        // tra de khong keo thread goi vao mot syscall ghi dia; so dong mat duoc dem bang
+        // dropped_important va bao trong [LOGGER][HEALTH] cung nhu o dong ket phien.
+        // KHONG dung _droppedLogCount vi counter do sinh them mot dong WARN ra main log va panel Signal.
         if (level >= TradeLogLevel.Warn)
         {
-            lock (_sync)
-            {
-                WriteDroppedLogSummaryIfNeeded();
-                WriteToChannel(queuedLog);
-            }
+            Interlocked.Increment(ref _droppedImportantLogCount);
             return true;
         }
 
@@ -633,7 +735,8 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
             $"written_signal_outcome={Interlocked.Read(ref _writtenSignalOutcomeLogCount)} " +
             $"written_gap_tick={Interlocked.Read(ref _writtenGapTickLogCount)} " +
             $"dropped_info={Interlocked.Read(ref _totalDroppedLogCount)} " +
-            $"dropped_gap_tick={Interlocked.Read(ref _droppedGapTickLogCount)}");
+            $"dropped_gap_tick={Interlocked.Read(ref _droppedGapTickLogCount)} " +
+            $"dropped_important={Interlocked.Read(ref _droppedImportantLogCount)}");
     }
 
     private void PublishRealtimeLog(DateTime timestamp, string message, TradeLogLevel level)
@@ -734,6 +837,18 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
             if (writeFooter)
             {
                 WriteDroppedLogSummaryIfNeeded();
+
+                // WriteLoggerHealthIfDue chi chay trong vong drain, nhip 60 giay VA chi khi co item
+                // di qua. Khong co dong nay thi mot con bao lam rot WARN/ERROR roi phien dung ngay
+                // sau se khong de lai dau vet o bat ky dau. Chi ghi khi that su co dong bi mat.
+                var droppedImportant = Interlocked.Read(ref _droppedImportantLogCount);
+                if (droppedImportant > 0)
+                {
+                    WriteLineCore(
+                        $"[{stoppedAtLocal:yyyy-MM-dd HH:mm:ss.fff}] [LOGGER][WARN] " +
+                        $"Dropped {droppedImportant} WARN/ERROR lines from file because the bounded queue was full.");
+                }
+
                 if (_sessionStartedAt.HasValue)
                 {
                     var duration = stoppedAtLocal - _sessionStartedAt.Value;
@@ -889,7 +1004,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 stream,
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
             {
-                AutoFlush = true
+                AutoFlush = false
             };
 
             _gapTickWriter.Flush();
@@ -925,7 +1040,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 stream,
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
             {
-                AutoFlush = true
+                AutoFlush = false
             };
 
             _signalOutcomeWriter.Flush();
@@ -961,7 +1076,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                 stream,
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
             {
-                AutoFlush = true
+                AutoFlush = false
             };
 
             _gapStabilityRawWriter.Flush();
@@ -993,7 +1108,7 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
             var stream = new FileStream(nextFilePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
             var nextWriter = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
             {
-                AutoFlush = true
+                AutoFlush = false
             };
 
             _writer.Flush();
@@ -1018,6 +1133,27 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
         {
             SafeDebug($"RotateFile failed: {ex}");
         }
+    }
+
+    /// <summary>
+    /// Cac dong <c>[*_CYCLE][PROGRESS]</c> / <c>[TP_CYCLE][PROGRESS]</c> lap moi tick moi slot va
+    /// chiem ~95% khoi luong ghi dia khi nhieu slot mo (~83 KB/s o 8 slot). MAC DINH TAT; bat lai
+    /// bang <c>LOG_CYCLE_PROGRESS=1</c> khi can debug tien do chu ky theo tung tick.
+    /// Cac dong bien chu ky (STARTED/RESET/COMPLETED/TRIGGERED) KHONG bi anh huong.
+    /// </summary>
+    private static bool ResolveCycleProgressFromEnvironment()
+    {
+        var raw = Environment.GetEnvironmentVariable("LOG_CYCLE_PROGRESS");
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        var normalized = raw.Trim();
+        return normalized.Equals("1", StringComparison.Ordinal)
+            || normalized.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
 
     private static TradeLogLevel ResolveMinLevelFromEnvironment()

@@ -20,6 +20,8 @@ public sealed class SlotLogger : ISlotLogger, IGapStabilityRawLogger, ISignalOut
     // đường realtime UI (Parse + Dispatcher) vì chi phí nhân theo số slot đang mở.
     public void LogVerbose(string message) => _sessionLogger.LogFileOnly(message);
 
+    public bool IsCycleProgressEnabled => _sessionLogger.IsCycleProgressEnabled;
+
     public void LogGapStabilityRaw(string message) =>
         _sessionLogger.LogGapStabilityRaw(message);
 
