@@ -278,7 +278,69 @@ TradeDesktop.Tests/            # xUnit tests
   `SignalCycleStatusRenderMinIntervalMs=500` (chậm hơn nhịp render 200ms) vì số dòng nhân theo
   số slot và `LastValue` đổi gần như mỗi tick.
 
-### UI thread budget khi nhiều slot (đã gặp treo ở ~9 lệnh)
+### UI thread budget khi nhiều slot (đã gặp treo ở ~9 lệnh, rồi ở >5 lệnh)
+
+- **Cửa sổ mẫu của Gap Cycle KHÔNG có trần ở nhánh TIME — đây là nguyên nhân treo lần thứ hai.**
+  `GapCycleState.Process` giữ `_gaps` là `List<int>` không giới hạn. Khi Cycle đã Stable mà mẫu cuối
+  chưa đạt `open_pts`/`close_pts` thì cố ý KHÔNG reset, nên ở nhịp 50ms danh sách tăng 20 mẫu/giây
+  và không bao giờ dừng. Chi phí mỗi tick là `O(số_slot × n log n)` với `n` tăng vô hạn — bùng nổ
+  theo CẢ số slot LẪN thời gian chạy. Nhánh TICK cũ bị `FixedSizeSignalCycle` chặn nên chỉ O(1).
+- **Van an toàn `*_max_times_tick` là CODE CHẾT trong đúng kịch bản này.** Guard nằm SAU gate ngưỡng,
+  mà nhánh "chưa đạt ngưỡng" đã `return null` trước đó — ở cả Close (`CloseSignalEngine`) lẫn Open
+  (`GapSignalConfirmationEngine`). Muốn nó có tác dụng phải đưa lên TRƯỚC gate, nhưng đó là ĐỔI HÀNH
+  VI SIGNAL, phải hỏi user.
+- Điều kiện kích hoạt là tổ hợp: ngưỡng gap âm (commit `626cefb`) làm `confirmSatisfied` gần như luôn
+  đúng nên confirm gate không còn reset Cycle, cộng với việc chuyển sang TIME mode (`4165a45`) bỏ mất
+  trần `signal_cycle_size`. Dấu hiệu trong log: `[GAP_STABILITY][WARN] long_cycle` với `sample_count`
+  tăng dần. Nếu thấy dòng này, hãy rà `open_pts`/`close_pts` xem có đặt quá xa vùng gap thực tế không.
+- `GapStabilityCalculator.Calculate` từng được gọi HAI lần mỗi tick trong `Process`. Lần ở đầu hàm đã
+  được thay bằng `_metrics` cache + `WithTolerance` (chỉ Tolerance phụ thuộc config). Đừng nối lại
+  lời gọi `Calculate` thứ hai — nó cho kết quả y hệt.
+- `Median` dùng quickselect (O(n)), KHÔNG dùng `OrderBy` (O(n log n)). `MedianDestructive` XÁO TRỘN
+  buffer được truyền vào; `Calculate` dựa vào việc `magnitudes` không bị đụng tới nên chỉ được xáo
+  `scratch`. Đừng truyền thẳng `magnitudes` vào `MedianDestructive`.
+- **Logger KHÔNG được ghi file đồng bộ trên thread gọi.** Đường cũ trong `TryEnqueue` cho WARN/ERROR
+  lấy `lock(_sync)` rồi `WriteToChannel` ngay tại chỗ; drain thread giữ đúng lock ấy quanh mỗi lần ghi,
+  nên nó kéo UI thread vào syscall ghi đĩa. Tệ hơn, dòng `long_cycle` là WARN và phát ra đúng lúc
+  Cycle phình → vòng phản hồi dương. Nay chỉ đếm `dropped_important` và báo trong `[LOGGER][HEALTH]`.
+- `AutoFlush=false` trên cả 4 writer: flush theo lô trong `DrainQueue` (`FlushWritersIfDue`), vẫn flush
+  ngay khi hàng đợi rỗng. Nếu thêm writer mới thì phải thêm vào `FlushWriters`, và nhớ `StartSession`
+  phải `FlushWriters()` sau khi ghi header.
+- **`_metrics` của `GapCycleState` chỉ được tái sử dụng khi `_metricsFromGaps == true`.** Field này
+  DÙNG CHUNG cho hai engine: `Process` ghi từ `_gaps`, còn `ProcessFixedSize` / `StartFixedCycle` /
+  `CompleteFixedCycleIfReady` ghi từ `_fixedCycle.Values` mà KHÔNG đụng `_gaps`. Không có cờ này thì
+  một instance chạy `Process` → `ProcessFixedSize` → `Process` sẽ lấy `Center`/`Tolerance` của CHUỖI
+  KHÁC, làm đổi quyết định `NewCycle` — tức đổi việc cycle sống hay restart. Thêm bất kỳ điểm ghi
+  `_metrics` mới nào cũng PHẢI gán cờ này cùng lúc. Fallback về `Calculate` luôn đúng.
+- **WARN/ERROR bị rớt khỏi FILE khi hàng đợi logger đầy** (không còn ghi đồng bộ trên thread gọi).
+  Chỉ `Log(...)` mới còn lên panel realtime; `LogFileOnly` / `LogGapStabilityRaw` /
+  `LogSignalOutcomeRaw` thì mất hoàn toàn. Số dòng mất được đếm bằng `dropped_important`, báo trong
+  `[LOGGER][HEALTH]` và trong một dòng `[LOGGER][WARN]` lúc kết phiên.
+- **`CLOSE_MAX_TP_EXCEEDED` được throttle 60 giây mỗi slot, KHÔNG gate theo `LOG_CYCLE_PROGRESS`.**
+  Đây là nhánh duy nhất trong `ProcessTp` không reset cửa sổ nên lặp mỗi tick, nhưng nó báo "giới hạn
+  cấu hình đang chặn lệnh đóng" — panel Signal Cycle không hiển thị được điều đó.
+  `CLOSE_MAX_TIMES_TICK_EXCEEDED` có reset nên chỉ 1 dòng mỗi lần vi phạm, không gate.
+- **`[*_CYCLE][RESET]` từng là đường realtime ẩn — chế độ hỏng thứ hai.** `GapCycleTransition.NewCycle`
+  (khi `delta > tolerance`) ánh xạ thành event name `RESET`, mà nhánh RESET dùng `logger.Log` chứ không
+  phải `LogVerbose`. Trong thị trường NHIỄU điều kiện đó đúng mỗi tick → ở 8 slot là 160 dòng
+  realtime/giây, mỗi dòng kéo UI thread qua `SystemLogItem.Parse` + ~15 phép `Contains` + `Insert(0)`
+  trên collection cap 2000. Commit `066199c` chuyển PROGRESS sang file-only nhưng bỏ sót đúng đường này.
+  Nay RESET cũng đi `LogVerbose`. Lưu ý hai chế độ hỏng LOẠI TRỪ nhau: thị trường phẳng → cycle phình
+  vô hạn; thị trường nhiễu → bão log realtime. Sửa một cái không che được cái kia.
+- **Tách bạch `LogVerbose` với `IsCycleProgressEnabled`.** `LogVerbose` thuần là ĐỊNH TUYẾN (ghi file,
+  không publish realtime) và KHÔNG bị gate — dòng RESET dùng nó nhưng luôn được ghi.
+  `IsCycleProgressEnabled` CHỈ gate nhóm dòng tiến độ lặp mỗi tick, bật bằng env `LOG_CYCLE_PROGRESS`
+  (mặc định TẮT). Default interface trả `true` nên fake logger trong test giữ nguyên hành vi. Cả hai
+  chỗ gate (`GapCycleDiagnostics` và `CloseSignalEngine.LogTpCycle`) phải thoát TRƯỚC khi nội suy chuỗi.
+- **Không nối `ResolveSystemLogThrottleInterval` vào một `Dictionary` khoá theo `(Category, EventType)`.**
+  Nghe thì thay được 15 phép `Contains` bằng một lần tra, nhưng `SystemLogItem.Parse` gộp token level
+  vào `Category` khi token thứ hai là DEBUG/INFO/WARN/ERROR — nên `[CLOSE_SELECT][INFO]` (throttle 10s)
+  và `[CLOSE_SELECT][ERROR]` (30s) cho ra CÙNG một khoá. Muốn làm phải đưa thêm `Severity` vào khoá.
+- **Không dùng `Clear()` + `Add()` trên ObservableCollection đang bind.** `Clear()` phát `Reset`, khiến
+  ItemsControl phá và dựng lại TOÀN BỘ item container. `OrderPanelStatusViewModel.SyncCollection` gán
+  theo chỉ số (phát `Replace`) cho `Records`/`LeftItems`/`RightItems`/`TradeRows`/`HistoryRows`.
+  Ba DataGrid ở `MainWindow.xaml` vẫn đang `EnableRowVirtualization="False"` nên mọi dòng đều realize
+  container thật — càng phải tránh `Reset`.
 - `OnSnapshotReceived` bọc TOÀN BỘ thân hàm trong `Dispatcher.Invoke` → mọi signal engine, guard và
   log chạy trên UI thread mỗi 50ms, chi phí **tỉ lệ tuyến tính với số slot**. Đây là trần khả năng
   mở rộng hiện tại; muốn vượt phải đưa logic sang một context nền ĐƠN LUỒNG (giữ tuần tự) và

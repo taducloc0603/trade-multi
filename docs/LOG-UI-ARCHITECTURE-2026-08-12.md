@@ -126,6 +126,17 @@ giữ màu lifecycle: Detected xanh dương, Confirmed xanh lá, Blocked/Cancell
 Khi UI queue đầy, dòng mới có thể bị bỏ khỏi UI nhưng file log vẫn giữ vai trò nguồn đầy đủ.
 Điều này áp dụng cả với Warn/Error để bảo vệ bộ nhớ trước log storm.
 
+Ngược lại, khi hàng đợi GHI FILE đầy thì Warn/Error nay cũng bị bỏ khỏi file (đếm bằng
+`dropped_important` trong `[LOGGER][HEALTH]`) thay vì được ghi đồng bộ trên thread gọi — đường cũ
+kéo UI thread vào một syscall ghi đĩa đúng lúc log dồn dập. Dòng đó vẫn lên panel realtime.
+
+Nhóm dòng tiến độ lặp mỗi tick (`[*_CYCLE][PROGRESS]`, `[TP_CYCLE][PROGRESS]`) mặc định TẮT, bật bằng
+biến môi trường `LOG_CYCLE_PROGRESS`. Nhóm này từng chiếm ~95% khối lượng ghi đĩa khi nhiều slot mở
+(~83 KB/s ở 8 slot). Các dòng biên chu kỳ không bị ảnh hưởng.
+
+`[*_CYCLE][RESET]` đã chuyển sang file-only: `GapCycleTransition.NewCycle` cũng mang tên event `RESET`
+nên trong thị trường nhiễu nó phát mỗi tick mỗi slot, trước đây đi thẳng vào đường realtime.
+
 ### 4.3 Log được giảm lặp trên UI
 
 Việc throttle sau đây chỉ tác động panel System, không xóa dòng khỏi file:

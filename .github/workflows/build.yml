@@ -50,6 +50,18 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore TradeDesktop.sln -p:Platform="Any CPU"
 
+      - name: Run unit tests (non-blocking)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          # Pipeline release dang chay on va repo co san 19 test fail (no ky thuat da biet), nen
+          # buoc nay KHONG chan release. Muc dich la co mot con so de doi chieu: neu so fail vuot
+          # 19 thi thay doi vua day len da gay regression -> dung lai, dung lay artifact.
+          # Truoc buoc nay CI khong chay test, va `dotnet publish` cung khong bien dich project Test.
+          dotnet test TradeDesktop.Tests/TradeDesktop.Tests.csproj `
+            -c Release `
+            --logger "console;verbosity=normal"
+
       - name: Build native mt5engine C API DLL (x64)
         shell: cmd
         run: |

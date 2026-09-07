@@ -485,7 +485,8 @@ Chức năng:
 |------|--------|-------------------|
 | `LOG_LEVEL` | Mức log tối thiểu ghi vào file. Giá trị: `DEBUG`, `INFO`, `WARN`, `ERROR` | `INFO` |
 | `LOG_MAX_FILE_SIZE_MB` | Kích thước tối đa mỗi file log (MB) trước khi rotation | `50` |
-| `LOG_QUEUE_CAPACITY` | Số dòng log tối đa chờ ghi; WARN/ERROR vẫn được ghi trực tiếp khi queue đầy | `50000` |
+| `LOG_QUEUE_CAPACITY` | Số dòng log tối đa chờ ghi. Khi đầy, mọi dòng đều bị bỏ khỏi file (đếm riêng `dropped_info` / `dropped_important` trong `[LOGGER][HEALTH]`); WARN/ERROR vẫn lên panel realtime | `50000` |
+| `LOG_CYCLE_PROGRESS` | Bật các dòng tiến độ lặp mỗi tick `[*_CYCLE][PROGRESS]` và `[TP_CYCLE][PROGRESS]`. Nhận `1`/`true`/`yes`/`on`. **Mặc định TẮT** vì nhóm này chiếm ~95% khối lượng ghi đĩa khi nhiều slot mở | *(tắt)* |
 
 Ví dụ trong `.env`:
 
@@ -555,6 +556,17 @@ nên dấu thập phân luôn là dấu chấm bất kể locale máy).
 - Khi queue đầy, dòng gap-tick bị drop được đếm RIÊNG và chỉ báo trong `[LOGGER][HEALTH]`
   (`dropped_gap_tick=`), không sinh `[LOGGER][WARN] Dropped ...` ra main log/panel Signal —
   tránh 20 dòng/giây làm nhiễu chỗ theo dõi lỗi giao dịch.
+- **Khi queue đầy, WARN/ERROR KHÔNG còn được ghi đồng bộ trên thread gọi.** Đường cũ lấy `lock(_sync)`
+  rồi ghi file ngay tại chỗ, mà drain thread giữ đúng lock ấy quanh mỗi lần ghi — nghĩa là nó kéo UI
+  thread vào một syscall ghi đĩa đúng lúc log dồn dập. Nay dòng bị bỏ khỏi file được đếm bằng
+  `dropped_important=` trong `[LOGGER][HEALTH]`, nhưng **vẫn lên panel realtime** (đường đó không
+  chạm đĩa) nên operator không mất khả năng quan sát.
+- **Ghi file gộp lô 200ms (`AutoFlush=false`).** Nếu process bị kill đột ngột (unhandled exception,
+  Task Manager, OOM) thì tối đa 200ms log cuối bị mất. Riêng dòng **WARN/ERROR được flush ngay**, không
+  chờ gộp lô — nhóm này tần suất thấp và là thứ cần nhất khi điều tra sự cố.
+- **`LOG_CYCLE_PROGRESS` (mặc định TẮT)** chặn riêng nhóm dòng tiến độ lặp mỗi tick. Các dòng biên
+  chu kỳ `STARTED` / `RESET` / `COMPLETED` / `TRIGGERED` KHÔNG bị ảnh hưởng, nên vẫn tra được đầy đủ
+  vòng đời cycle. Gate được kiểm TRƯỚC khi nội suy chuỗi nên khi tắt là không tốn cả chi phí dựng dòng.
 
 ### 11.4 UI menu
 
