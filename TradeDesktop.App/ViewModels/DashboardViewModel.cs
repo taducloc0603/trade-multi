@@ -25,6 +25,11 @@ public sealed class DashboardViewModel : ObservableObject
     private static readonly string AssemblyVersion = GetAssemblyVersion();
     private static readonly string[] SystemLogThrottleSubjectKeys = ["pairId=", "slot=", "slotId=", "ticket=", "exchange=", "map="];
 
+    // Mang nay truoc day duoc cap phat MOI LAN goi ResolveThrottleSubject, tuc moi dong log
+    // realtime co subject can tra khoa.
+    private static readonly (string Prefix, string Label)[] SystemLogThrottleNumericPrefixes =
+        [("Ticket ", "ticket"), ("Slot ", "slot")];
+
     private readonly IServiceProvider _serviceProvider;
     private readonly RuntimeConfigState _runtimeConfigState;
     private readonly IConfigService _configService;
@@ -1215,7 +1220,7 @@ public sealed class DashboardViewModel : ObservableObject
 
         // Some CLOSE_SELECT messages use "Ticket 123"/"Slot 41" rather than key=value.
         // Keep each subject independent so one broken slot cannot hide another one.
-        foreach (var (prefix, label) in new[] { ("Ticket ", "ticket"), ("Slot ", "slot") })
+        foreach (var (prefix, label) in SystemLogThrottleNumericPrefixes)
         {
             var valueStart = message.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
             if (valueStart < 0)

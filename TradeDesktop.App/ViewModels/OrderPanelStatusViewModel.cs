@@ -215,46 +215,62 @@ public sealed class OrderPanelStatusViewModel : ObservableObject
     }
 
     private void ReplaceRecords(IEnumerable<OrderRecordItemViewModel> records)
-    {
-        Records.Clear();
-        foreach (var record in records)
-        {
-            Records.Add(record);
-        }
-    }
+        => SyncCollection(Records, records);
 
     private void ReplaceFields(
         IEnumerable<OrderInfoFieldViewModel> leftFields,
         IEnumerable<OrderInfoFieldViewModel> rightFields)
     {
-        LeftItems.Clear();
-        foreach (var item in leftFields)
-        {
-            LeftItems.Add(item);
-        }
-
-        RightItems.Clear();
-        foreach (var item in rightFields)
-        {
-            RightItems.Add(item);
-        }
+        SyncCollection(LeftItems, leftFields);
+        SyncCollection(RightItems, rightFields);
     }
 
     private void ReplaceHistoryRows(IEnumerable<HistoryRowViewModel> rows)
-    {
-        HistoryRows.Clear();
-        foreach (var row in rows)
-        {
-            HistoryRows.Add(row);
-        }
-    }
+        => SyncCollection(HistoryRows, rows);
 
     private void ReplaceTradeRows(IEnumerable<TradeRowViewModel> rows)
+        => SyncCollection(TradeRows, rows);
+
+    /// <summary>
+    /// Cập nhật collection TẠI CHỖ: gán theo chỉ số cho phần chung, chỉ Add/Remove phần dôi ra.
+    ///
+    /// Trước đây các hàm này dùng <c>Clear()</c> rồi <c>Add()</c> từng dòng.
+    /// <c>ObservableCollection.Clear()</c> phát <c>Reset</c>, mà <c>Reset</c> khiến ItemsControl
+    /// PHÁ và dựng lại TOÀN BỘ item container. Chi phí đó nhân theo số dòng và lặp:
+    /// panel Trade dựng lại 10 lần/giây (2 panel × nhịp render 200ms), panel History dựng lại
+    /// theo số bản ghi vốn chỉ tăng dần trong phiên. Cả ba DataGrid lại đang tắt row
+    /// virtualization nên mọi dòng đều realize container thật.
+    ///
+    /// Gán theo chỉ số chỉ phát <c>Replace</c>, nên WPF tái dùng container và chỉ vẽ lại đúng
+    /// dòng đó. Khi source rỗng và target đã rỗng thì hàm này không phát event nào, bỏ luôn các
+    /// <c>Reset</c> thừa mà <c>SetTradeData</c>/<c>SetHistoryData</c> vẫn bắn ra mỗi lần gọi.
+    ///
+    /// Lưu ý khác biệt hành vi duy nhất: <c>Reset</c> trước đây xoá selection của grid, còn
+    /// <c>Replace</c> thì giữ. Các collection này thuần hiển thị, không có logic đọc selection.
+    /// </summary>
+    private static void SyncCollection<T>(ObservableCollection<T> target, IEnumerable<T> source)
     {
-        TradeRows.Clear();
-        foreach (var row in rows)
+        var index = 0;
+        foreach (var item in source)
         {
-            TradeRows.Add(row);
+            if (index < target.Count)
+            {
+                if (!EqualityComparer<T>.Default.Equals(target[index], item))
+                {
+                    target[index] = item;
+                }
+            }
+            else
+            {
+                target.Add(item);
+            }
+
+            index++;
+        }
+
+        while (target.Count > index)
+        {
+            target.RemoveAt(target.Count - 1);
         }
     }
 }

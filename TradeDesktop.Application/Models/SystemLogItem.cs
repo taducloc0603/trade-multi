@@ -64,10 +64,33 @@ public sealed record SystemLogItem(
 
         return new SystemLogItem(
             timestamp,
-            category.ToUpperInvariant(),
-            eventType.ToUpperInvariant(),
+            ToUpperInvariantIfNeeded(category),
+            ToUpperInvariantIfNeeded(eventType),
             severity,
             message);
+    }
+
+    /// <summary>
+    /// Token category/event trong log gần như luôn đã viết hoa, nên <c>ToUpperInvariant()</c> chỉ
+    /// cấp phát thêm một chuỗi giống hệt. Parse chạy cho MỌI dòng publish realtime, tức trên UI
+    /// thread, nên hai lần cấp phát thừa mỗi dòng là đáng bỏ.
+    ///
+    /// Chỉ trả về nguyên chuỗi khi nó thuần ASCII và không có chữ thường — trong trường hợp đó
+    /// <c>ToUpperInvariant()</c> chắc chắn là phép đồng nhất. Gặp bất kỳ ký tự non-ASCII nào thì
+    /// vẫn gọi như cũ, tránh mọi khác biệt ở các ký tự Unicode titlecase.
+    /// </summary>
+    private static string ToUpperInvariantIfNeeded(string value)
+    {
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (character > 127 || (character >= 'a' && character <= 'z'))
+            {
+                return value.ToUpperInvariant();
+            }
+        }
+
+        return value;
     }
 
     private static string ReadBracketToken(string message, int tokenIndex)
