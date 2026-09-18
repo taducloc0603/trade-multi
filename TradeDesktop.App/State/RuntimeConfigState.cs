@@ -64,6 +64,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentOppositeOpenMinDistancePts { get; private set; }
     public int CurrentRdStartSameActionLockSeconds { get; private set; } = 3;
     public int CurrentRdEndSameActionLockSeconds { get; private set; } = 10;
+    // Khoảng random same-action riêng cho Close→Close (close_rd_*). rd_* ở trên chỉ dùng cho Open.
+    public int CurrentCloseRdStartSameActionLockSeconds { get; private set; } = 3;
+    public int CurrentCloseRdEndSameActionLockSeconds { get; private set; } = 10;
 
     public int CurrentRdStartPostCloseLockSeconds { get; private set; } = 300;
     public int CurrentRdEndPostCloseLockSeconds { get; private set; } = 300;
@@ -229,7 +232,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int rdStartPostOpenLockSeconds = -1,
         int rdEndPostOpenLockSeconds = -1,
         double minProfitToClose = -1,
-        int? openMaxLastGapPts = null)
+        int? openMaxLastGapPts = null,
+        int closeRdStartSameActionLockSeconds = -1,
+        int closeRdEndSameActionLockSeconds = -1)
         => Update(
             machineHostName,
             mapName1,
@@ -279,7 +284,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             rdStartPostOpenLockSeconds,
             rdEndPostOpenLockSeconds,
             minProfitToClose,
-            openMaxLastGapPts);
+            openMaxLastGapPts,
+            closeRdStartSameActionLockSeconds: closeRdStartSameActionLockSeconds,
+            closeRdEndSameActionLockSeconds: closeRdEndSameActionLockSeconds);
 
     public void Update(
         string machineHostName,
@@ -330,7 +337,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int rdStartPostOpenLockSeconds = -1,
         int rdEndPostOpenLockSeconds = -1,
         double minProfitToClose = -1,
-        int? openMaxLastGapPts = null)
+        int? openMaxLastGapPts = null,
+        int closeRdStartSameActionLockSeconds = -1,
+        int closeRdEndSameActionLockSeconds = -1)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
         var oldCloseN = CurrentCloseNumberOfQualifyingTimes;
@@ -429,6 +438,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentRdStartSameActionLockSeconds = Math.Min(start, end);
             CurrentRdEndSameActionLockSeconds = Math.Max(start, end);
         }
+        if (closeRdStartSameActionLockSeconds >= 0 || closeRdEndSameActionLockSeconds >= 0)
+        {
+            var start = closeRdStartSameActionLockSeconds > 0 ? closeRdStartSameActionLockSeconds : 3;
+            var end = closeRdEndSameActionLockSeconds > 0 ? closeRdEndSameActionLockSeconds : 10;
+            CurrentCloseRdStartSameActionLockSeconds = Math.Min(start, end);
+            CurrentCloseRdEndSameActionLockSeconds = Math.Max(start, end);
+        }
         if (rdStartPostCloseLockSeconds >= 0 || rdEndPostCloseLockSeconds >= 0)
         {
             var start = rdStartPostCloseLockSeconds > 0 ? rdStartPostCloseLockSeconds : 300;
@@ -507,7 +523,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             // minProfitToClose cũng phải forward tường minh: sentinel ở Update đã chặn việc bị
             // zero hoá, nhưng nêu rõ ở đây cho thấy overload ngắn KHÔNG được phép làm mất gate.
             minProfitToClose: CurrentMinProfitToClose,
-            openMaxLastGapPts: CurrentOpenMaxLastGapPts);
+            openMaxLastGapPts: CurrentOpenMaxLastGapPts,
+            closeRdStartSameActionLockSeconds: CurrentCloseRdStartSameActionLockSeconds,
+            closeRdEndSameActionLockSeconds: CurrentCloseRdEndSameActionLockSeconds);
 
     public void Update(string machineHostName, string mapName1, string mapName2)
         => Update(
@@ -553,7 +571,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             // minProfitToClose cũng phải forward tường minh: sentinel ở Update đã chặn việc bị
             // zero hoá, nhưng nêu rõ ở đây cho thấy overload ngắn KHÔNG được phép làm mất gate.
             minProfitToClose: CurrentMinProfitToClose,
-            openMaxLastGapPts: CurrentOpenMaxLastGapPts);
+            openMaxLastGapPts: CurrentOpenMaxLastGapPts,
+            closeRdStartSameActionLockSeconds: CurrentCloseRdStartSameActionLockSeconds,
+            closeRdEndSameActionLockSeconds: CurrentCloseRdEndSameActionLockSeconds);
 
     // Quota từ DB (max_total_opens / max_buy_opens / max_sell_opens). Floor về 1 để không
     // bao giờ khoá toàn bộ open. Raise StateChanged để ApplyRuntimeConfig → SyncPortfolioCoordinatorConfig

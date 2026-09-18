@@ -440,7 +440,9 @@ public sealed class ConfigViewModel : ObservableObject
                 // sentinel (sentinel chi giu gia tri cu, tuc se bo qua gia tri moi tu DB).
                 minProfitToClose: loadResult.MinProfitToClose,
                 maxLifeTimeBySecond: loadResult.MaxLifeTimeBySecond,
-                openMaxLastGapPts: loadResult.OpenMaxLastGapPts);
+                openMaxLastGapPts: loadResult.OpenMaxLastGapPts,
+                closeRdStartSameActionLockSeconds: loadResult.CloseRdStartSameActionLockSeconds,
+                closeRdEndSameActionLockSeconds: loadResult.CloseRdEndSameActionLockSeconds);
             _runtimeConfigState.UpdateSignalCycleSize(loadResult.SignalCycleSize);
             _runtimeConfigState.UpdateGapStability(
                 loadResult.OpenGapStability!,

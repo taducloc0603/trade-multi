@@ -97,6 +97,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             OppositeOpenMinDistancePts: row.OppositeOpenMinDistancePts,
             RdStartSameActionLockSeconds: row.RdStartSameActionLockSeconds,
             RdEndSameActionLockSeconds: row.RdEndSameActionLockSeconds,
+            CloseRdStartSameActionLockSeconds: row.CloseRdStartSameActionLockSeconds,
+            CloseRdEndSameActionLockSeconds: row.CloseRdEndSameActionLockSeconds,
             RdStartPostCloseLockSeconds: row.RdStartPostCloseLockSeconds,
             RdEndPostCloseLockSeconds: row.RdEndPostCloseLockSeconds,
             RdStartPostOpenLockSeconds: row.RdStartPostOpenLockSeconds,
@@ -351,6 +353,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("opposite_open_min_distance_pts", out var oppositeOpenMinDistancePtsElement);
         first.TryGetProperty("rd_start_same_action_lock_seconds", out var rdStartSameActionLockSecondsElement);
         first.TryGetProperty("rd_end_same_action_lock_seconds", out var rdEndSameActionLockSecondsElement);
+        first.TryGetProperty("close_rd_start_same_action_lock_seconds", out var closeRdStartSameActionLockSecondsElement);
+        first.TryGetProperty("close_rd_end_same_action_lock_seconds", out var closeRdEndSameActionLockSecondsElement);
         first.TryGetProperty("rd_start_post_close_lock_seconds", out var rdStartPostCloseLockSecondsElement);
         first.TryGetProperty("rd_end_post_close_lock_seconds", out var rdEndPostCloseLockSecondsElement);
         first.TryGetProperty("rd_start_post_open_lock_seconds", out var rdStartPostOpenLockSecondsElement);
@@ -428,6 +432,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             OppositeOpenMinDistancePts = oppositeOpenMinDistancePtsElement.ValueKind == JsonValueKind.Number && oppositeOpenMinDistancePtsElement.TryGetInt32(out var oppositeOpenMinDistancePts) ? oppositeOpenMinDistancePts : 0,
             RdStartSameActionLockSeconds = rdStartSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartSameActionLockSecondsElement.TryGetInt32(out var rdStartSameActionLockSeconds) ? rdStartSameActionLockSeconds : 3,
             RdEndSameActionLockSeconds = rdEndSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndSameActionLockSecondsElement.TryGetInt32(out var rdEndSameActionLockSeconds) ? rdEndSameActionLockSeconds : 10,
+            CloseRdStartSameActionLockSeconds = closeRdStartSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && closeRdStartSameActionLockSecondsElement.TryGetInt32(out var closeRdStartSameActionLockSeconds) ? closeRdStartSameActionLockSeconds : 3,
+            CloseRdEndSameActionLockSeconds = closeRdEndSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && closeRdEndSameActionLockSecondsElement.TryGetInt32(out var closeRdEndSameActionLockSeconds) ? closeRdEndSameActionLockSeconds : 10,
             RdStartPostCloseLockSeconds = rdStartPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostCloseLockSecondsElement.TryGetInt32(out var rdStartPostCloseLockSeconds) ? rdStartPostCloseLockSeconds : 300,
             RdEndPostCloseLockSeconds = rdEndPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostCloseLockSecondsElement.TryGetInt32(out var rdEndPostCloseLockSeconds) ? rdEndPostCloseLockSeconds : 300,
             RdStartPostOpenLockSeconds = rdStartPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostOpenLockSecondsElement.TryGetInt32(out var rdStartPostOpenLockSeconds) ? rdStartPostOpenLockSeconds : 0,
@@ -533,6 +539,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("opposite_open_min_distance_pts", out var oppositeOpenMinDistancePtsElement);
         first.TryGetProperty("rd_start_same_action_lock_seconds", out var rdStartSameActionLockSecondsElement);
         first.TryGetProperty("rd_end_same_action_lock_seconds", out var rdEndSameActionLockSecondsElement);
+        first.TryGetProperty("close_rd_start_same_action_lock_seconds", out var closeRdStartSameActionLockSecondsElement);
+        first.TryGetProperty("close_rd_end_same_action_lock_seconds", out var closeRdEndSameActionLockSecondsElement);
         first.TryGetProperty("rd_start_post_close_lock_seconds", out var rdStartPostCloseLockSecondsElement);
         first.TryGetProperty("rd_end_post_close_lock_seconds", out var rdEndPostCloseLockSecondsElement);
         first.TryGetProperty("rd_start_post_open_lock_seconds", out var rdStartPostOpenLockSecondsElement);
@@ -608,6 +616,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             OppositeOpenMinDistancePts = oppositeOpenMinDistancePtsElement.ValueKind == JsonValueKind.Number && oppositeOpenMinDistancePtsElement.TryGetInt32(out var oppositeOpenMinDistancePts) ? oppositeOpenMinDistancePts : 0,
             RdStartSameActionLockSeconds = rdStartSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartSameActionLockSecondsElement.TryGetInt32(out var rdStartSameActionLockSeconds) ? rdStartSameActionLockSeconds : 3,
             RdEndSameActionLockSeconds = rdEndSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndSameActionLockSecondsElement.TryGetInt32(out var rdEndSameActionLockSeconds) ? rdEndSameActionLockSeconds : 10,
+            CloseRdStartSameActionLockSeconds = closeRdStartSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && closeRdStartSameActionLockSecondsElement.TryGetInt32(out var closeRdStartSameActionLockSeconds) ? closeRdStartSameActionLockSeconds : 3,
+            CloseRdEndSameActionLockSeconds = closeRdEndSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && closeRdEndSameActionLockSecondsElement.TryGetInt32(out var closeRdEndSameActionLockSeconds) ? closeRdEndSameActionLockSeconds : 10,
             RdStartPostCloseLockSeconds = rdStartPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostCloseLockSecondsElement.TryGetInt32(out var rdStartPostCloseLockSeconds) ? rdStartPostCloseLockSeconds : 300,
             RdEndPostCloseLockSeconds = rdEndPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostCloseLockSecondsElement.TryGetInt32(out var rdEndPostCloseLockSeconds) ? rdEndPostCloseLockSeconds : 300,
             RdStartPostOpenLockSeconds = rdStartPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostOpenLockSecondsElement.TryGetInt32(out var rdStartPostOpenLockSeconds) ? rdStartPostOpenLockSeconds : 0,
@@ -933,6 +943,12 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         [JsonPropertyName("rd_end_same_action_lock_seconds")]
         public int RdEndSameActionLockSeconds { get; set; } = 10;
+
+        [JsonPropertyName("close_rd_start_same_action_lock_seconds")]
+        public int CloseRdStartSameActionLockSeconds { get; set; } = 3;
+
+        [JsonPropertyName("close_rd_end_same_action_lock_seconds")]
+        public int CloseRdEndSameActionLockSeconds { get; set; } = 10;
 
         [JsonPropertyName("rd_start_post_close_lock_seconds")]
         public int RdStartPostCloseLockSeconds { get; set; } = 300;
