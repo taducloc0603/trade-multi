@@ -18,6 +18,8 @@ nhận đóng lệnh** của app. Không có history thì Phase 7 không thể b
 
 ## Phụ thuộc phase trước
 
+- **Hoãn có điều kiện (2026-09-17):** Phase 5 Lớp 1 đạt; soak P5-D1 + P5-O1 chạy song song, bắt buộc xong trước Phase 7.
+  Làm Phase 6 **offline trước** (không restart app đang soak), nghiệm thu live dồn vào một lần restart có chủ đích.
 - Phase 5 đã merge và soak: trades decorator ổn định, R2 đã được chứng minh không xảy ra.
 - Phase 3: `CTraderHistoryProjector` đã có và đã test.
 
@@ -90,22 +92,26 @@ Một `ExecutionReport` khớp lệnh là order **đóng** khi nó mang `721 Pos
 
 ## Nghiệm thu
 
-Vẫn mở/đóng **bằng tay trong app cTrader**; TradeDesktop chỉ quan sát.
+> **Tái cấu trúc 2026-09-16:** như Phase 5 — **Lớp 1** (tài khoản trống) nghiệm thu ở đây; **Lớp 2**
+> (cần đóng position thật) chuyển sang [Phase 7 Bước B](phase-7-execution.md).
 
-### Dữ liệu đúng
+### Lớp 1 — tài khoản trống, không chạm tiền
 
-- [ ] Đóng tay một position trong cTrader → xuất hiện đúng ở tab History của app trong ≤ 1 chu kỳ poll.
-- [ ] `Ticket` trong history **trùng khớp** ticket đã thấy ở tab Trade trước đó.
-- [ ] `OpenPrice` / `ClosePrice` khớp với cTrader (so tay).
-- [ ] `closeExecutionMs` là số **hợp lý** (vài chục đến vài trăm ms), không phải 0, không phải số rác
-      cỡ `TickCount64` thô.
+- [ ] History map `MapNotFound` cho tới `TradeLoggedOn && SymbolResolved && PositionsSynced`; sau đó
+      `IsMapAvailable=true`, `Count=0`.
+- [ ] Content-version history **độc lập** với trades: AP `728=2` định kỳ không làm history version đổi.
+- [ ] Để yên 5 phút → `ApplyHistoryResult` không rebuild.
+- [ ] Unit test `CTraderHistoryProjector` với chuỗi message đóng hộp (fill có `721` khớp position trong
+      cache → 1 record; fill không khớp → 0 record; partial fill `LeavesQty>0` → chưa ghi).
+- [ ] Đổi `platform_b` về `mt5` → tab History y hệt trước Phase 6.
 
-### Bền bỉ
+### Lớp 2 — cần đóng position thật → **Phase 7 Bước B**
 
-- [ ] Chuỗi mở-đóng **10 lần liên tiếp** → đủ 10 record, **không mất, không nhân bản**.
-- [ ] Mở 3 position rồi đóng theo thứ tự ngược → history đúng thứ tự đóng.
-- [ ] `RegisterCloseExecutionForNewHistoryTickets` chạy đúng một lần cho mỗi ticket
-      (grep log, đếm).
+- Đóng tay trên cTrader Web → record ở tab History app ≤ 500 ms; `Ticket` trùng ticket ở tab Trade.
+- `OpenPrice`/`ClosePrice` khớp web; `closeExecutionMs` hợp lý (vài chục–vài trăm ms).
+- Chuỗi mở-đóng **3 lần** (giảm từ 10 để tiết kiệm spread) → đủ record, không mất, không nhân bản.
+- Mở 2 position, đóng thứ tự ngược → history đúng thứ tự.
+- `RegisterCloseExecutionForNewHistoryTickets` chạy đúng một lần mỗi ticket.
 
 ### Fail-closed (R2 áp dụng y hệt Phase 5)
 
@@ -139,9 +145,10 @@ Revert dòng đăng ký decorator ở `Infrastructure/DependencyInjection.cs`.
 
 Phase 7 là phase **duy nhất** app được đặt lệnh cTrader. Cổng này chặt nhất:
 
-- [ ] Toàn bộ checklist Phase 4, 5, 6 đã pass và đã soak đủ.
-- [ ] **Kết quả Phase 0 câu 1 (đóng bằng tag 721) và câu 4 (quy đổi volume) được xác nhận lại lần
-      cuối** — nếu spike đã cũ hơn vài tuần thì chạy lại.
+- [ ] Toàn bộ checklist **Lớp 1** của Phase 4, 5, 6 đã pass và đã soak đủ trên tài khoản trống.
+- [ ] Danh sách Lớp 2 của Phase 5 và 6 đã nằm trong checklist Phase 7 Bước B.
+- [ ] Tài khoản live 8220816 đã nạp đủ (≥ $30–50) và chọn được ngày chạy trọn A → B → C trong giờ
+      XAUUSD mở. **Câu 1/4/5/6 (spike 721) chạy ở Phase 7 Bước A**, không phải điều kiện vào Phase 7.
 - [ ] Đã chốt giá trị `volumeBUnits` thật sẽ dùng, và `contractSizeB` đã được Phase 0 xác minh.
 - [ ] `max_total_opens` đã được đặt về **1** cho toàn bộ giai đoạn nghiệm thu Phase 7.
 - [ ] `CurrentOpenPendingTimeMs >= 2000 ms` (≥ 4 × chu kỳ poll 500 ms) — xem [Phase 7](phase-7-execution.md).

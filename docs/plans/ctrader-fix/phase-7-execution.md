@@ -1,7 +1,13 @@
-# Phase 7 — Thực thi lệnh
+# Phase 7 — PHIÊN TIỀN THẬT duy nhất: spike 721 → nghiệm thu 5/6 có position → thực thi
 
-> **Phase duy nhất app được đặt lệnh cTrader.** Mọi thứ trước đây là read-only.
+> **Phase duy nhất chạm tiền thật.** Mọi thứ trước đây là read-only / tài khoản trống.
 > Cổng vào phase này là chặt nhất trong cả kế hoạch.
+>
+> **Tái cấu trúc 2026-09-16:** FxPro tắt FIX cho demo → tài khoản duy nhất là **live 8220816**. Để nạp
+> tiền và trả spread **một lần**, phase này gom **ba bước** vốn rải ở Phase 0/5/6/7 thành **một phiên**:
+> **A)** spike 721 bằng ConsoleSample (câu 4/1/5/6 cũ của Phase 0) · **B)** nghiệm thu Phase 5/6 Lớp 2
+> (cần position thật) · **C)** executor thật. Thứ tự A → B → C là bắt buộc: A là cổng chặn R1, B dùng
+> position mở tay để kiểm chiều đọc trước khi app được phép tự đặt lệnh ở C.
 
 [← Phase 6](phase-6-history.md) · [Index](README.md) · Phase sau: [Phase 8](phase-8-hardening.md)
 
@@ -9,15 +15,78 @@
 
 ## Mục tiêu
 
-Thay `NullCTraderTradeExecutor` bằng executor thật. Một cặp A(MT)/B(cTrader) được mở bởi **auto
-signal**, giữ, rồi đóng sạch cả hai chân.
+1. **Bước A:** chứng minh bằng log raw rằng market order ngược chiều + `721` đóng position trên tài khoản
+   hedged (R1), đo contract size thật (`38=1` → 0.01 lot), format reject tag 58, partial fill.
+2. **Bước B:** với position mở tay, chiều đọc của app (Phase 5/6) đúng: ticket mã hoá, R2 khi restart,
+   R3 version, R4 decode, history khi đóng.
+3. **Bước C:** thay `NullCTraderTradeExecutor` bằng executor thật. Một cặp A(MT)/B(cTrader) được mở bởi
+   **auto signal**, giữ, rồi đóng sạch cả hai chân.
 
 ---
 
 ## Phụ thuộc phase trước
 
-- Phase 4, 5, 6 đã pass và đã soak. Toàn bộ chiều đọc đã đúng.
-- **Phase 0 câu 1** (đóng bằng tag 721) và **câu 4** (quy đổi volume) được xác nhận lại lần cuối.
+- Phase 4, 5, 6 đã pass **Lớp 1** và đã soak trên tài khoản trống. Toàn bộ chiều đọc đã đúng.
+- **Đã đóng P5-D1 và P5-O1** ([Phase 5 "Cổng sang Phase 6"](phase-5-open-positions.md)): soak ≥ 2 ngày liên tục qua cuối tuần trên bản build cuối, kết luận QUOTE logout lặp.
+- **Đã đóng các mục Phase 4 hoãn P4-D1…D7** ([bảng](phase-4-quote-feed.md)): soak + giờ nghỉ, kill mạng với kiểm tra sống,
+  cServer trả lời TestRequest, tổng hợp R8, logout khi đóng app. P4-D7 (price-freeze + so log, cần Start) làm ở Bước B.
+- **Task R8-B (`confirm_latency_ms_b`) đã merge** và giá trị B đã đặt theo số liệu soak Phase 4 ([README R8](README.md)). Thiếu task này thì chân B bị skip/chặn `LATENCY` khi đặt lệnh thật.
+- Phase 0 **GO-READ** (câu 2/3/7/8/9/10) đã có log raw; `C:\tmp\ctrader-spike` còn build được.
+- **Tiền:** live 8220816 đã nạp **≥ $30–50** (margin 1 oz XAUUSD @1:500 ≈ $8.7; Bước C với
+  `max_total_opens=1` cần thêm chân A trên MT). Ước tính chi phí cả phiên: ~6–10 vòng mở/đóng 1 oz ×
+  ($0.24 spread + commission) ≈ **$3–5**.
+- **Giờ:** trong giờ XAUUSD mở (05:00 → 03:59:45 UTC+7). Toàn bộ A+B+C nên nằm trong **một ngày**.
+- **Người thao tác:** chủ dự án gõ mọi lệnh ConsoleSample và bấm mở/đóng tay trên cTrader Web (policy
+  chặn Claude gửi lệnh trên tài khoản thật). Claude phân tích output đã che 554, đọc tab Positions/History
+  qua Playwright (chỉ đọc), ghi memo.
+
+---
+
+## Bước A — Spike 721 bằng ConsoleSample (trước khi bật executor)
+
+Dùng `C:\tmp\ctrader-spike\ConsoleSample` với `Config-dev.LIVE-TRADE.cfg` (chủ dự án điền mật khẩu).
+Thứ tự và tiêu chí **y hệt** [phase-0-spike.md](phase-0-spike.md) câu 4 → **1** → 5 → 6:
+
+| Câu | Gõ | Kỳ vọng | Ghi memo Phase 0 §5 |
+|---|---|---|---|
+| 4 | `1\|spike-open-1\|41\|buy\|market\|1` | Hai `35=8`: `150=0/39=0` rồi `150=F/39=2`, ghi `721=<posId>`. cTrader Web tab Positions: Quantity **0.01**, Position ID = `721` | contract size = 100 |
+| 5 | *(quan sát câu 4)* | Số `35=8` có `150=F` cho cùng `11`; `14 CumQty` | partial fill |
+| **1** | `1\|spike-close-1\|41\|sell\|market\|1\|<posId>` → `7\|spike-pos-1` | Fill với `721` = posId cũ; AP **`728=2`**. Web tab Positions = 0 | **GO/NO-GO R1** |
+| 6 | `1\|spike-rej\|41\|buy\|market\|999999999` | `150=8`/`39=8`, đọc nguyên văn `58`, `103=0` | format reject |
+| — | `7\|spike-pos-final` | `728=2` | không mồ côi |
+
+> **NO-GO ở câu 1 → DỪNG phase.** Giữ nguyên Phase 1–6. Làm lại **chỉ** chiều đóng của
+> `CTraderTradeExecutor` bằng Open API `ProtoOAClosePositionReq(positionId, volume)`; Bước B/C chạy sau.
+
+## Bước B — Nghiệm thu Phase 5/6 Lớp 2 (position mở tay, app chỉ quan sát)
+
+`NullCTraderTradeExecutor` **vẫn tại chỗ**. Chủ dự án mở/đóng tay trên cTrader Web (tài khoản 8220816).
+
+- [ ] Mở tay 1 position 0.01 lot XAUUSD → app tab Trade: ticket mã hoá, symbol, type, open price đúng;
+      profit đúng chiều. R4: `TryDecode(ticket)` = Position ID trên web.
+- [ ] **Restart app khi đang có position** → cửa sổ chưa sync `MapUnavailableOrParseError`, **không**
+      `OnlyAOpen`, không external-partial-close, watchdog "skip".
+- [ ] R3: version tăng đúng một lần khi mở; để yên 3 phút không rebuild; nút "Đóng" per-pair **không
+      bấm** ở bước này (executor null) — chỉ kiểm nút không nuốt click về mặt UI.
+- [ ] Mở thêm 1 position (tổng 2) → hiện đủ, không nhân bản.
+- [ ] **(từ Phase 5 Lớp 2)** Đóng tay 1 position → row biến mất khỏi tab Trade **≤ 500 ms**; trong lúc có position,
+      log `[CTRADER][TRADE]` không có lần `trades map AVAILABLE` nào trước `PositionsSynced=true` sau restart.
+- [ ] **(từ Phase 5)** Có position + bật Start (Bước B đã chấp nhận Start): kill socket TRADE → log VM thấy
+      `MapUnavailableOrParseError`, watchdog/external-partial-close **skip** (bằng chứng log mà Phase 5 không lấy được khi chưa Start).
+- [ ] Đóng tay theo thứ tự ngược → tab History app ≤ 500 ms mỗi record, `Ticket` trùng, `OpenPrice`/
+      `ClosePrice` khớp web, `closeExecutionMs` hợp lý; `RegisterCloseExecutionForNewHistoryTickets` một
+      lần mỗi ticket; history version độc lập với trades.
+- [ ] **(từ Phase 1)** Trigger một auto open với `NullCTraderTradeExecutor` còn tại chỗ → chân B fail
+      `"cTrader chưa được kích hoạt"`, chân A (MT5) rollback qua `CloseOpenedLegByTimeoutAsync` sau
+      `open_pending_time_ms`; không exception chưa bắt. `max_total_opens = 1`.
+- [ ] **(từ Phase 2, câu 4 — luật đã có unit test `PlatformBSwitchGuardTests`; ở đây chỉ kiểm hiển thị UI)** Có 1 slot mở: đổi `platform_b` `mt5 → ctrader` trong Config → Save **bị từ chối** với
+      "Đang có N slot mở — đóng hết trước khi đổi nền tảng sàn B." (N đúng); đổi `mt4 ↔ mt5` → Save **OK như trước**.
+- [ ] Web tab Positions = 0 trước khi sang Bước C.
+
+## Bước C — Executor thật
+
+Thay `NullCTraderTradeExecutor` bằng `CTraderTradeExecutor` **chỉ sau khi A GO và B pass**. Chi tiết
+"Việc làm" và "Nghiệm thu" bên dưới.
 
 ---
 
@@ -25,7 +94,7 @@ signal**, giữ, rồi đóng sạch cả hai chân.
 
 | # | Câu hỏi | Bối cảnh |
 |---|---|---|
-| 1 | Xác nhận lại kết quả Phase 0 câu 1 — **tag 721 có thực sự đóng position không**? | R1. Nếu spike đã cũ hơn vài tuần thì **chạy lại**. Không có đường lùi sau khi executor thật lên. |
+| 1 | **Bước A đã GO** trong cùng phiên (hoặc ≤ 2 tuần)? | R1. Không có đường lùi sau khi executor thật lên. |
 | 2 | Giá trị `volumeBUnits` thật sẽ dùng? | Tag 38 tính bằng **đơn vị cơ sở**. Với XAUUSD contract 100 (Phase 0 xác minh): `1 unit = 0.01 lot`. Phải khớp với lot đang đặt ở panel one-click của terminal MT chân A (R5). |
 | 3 | `CurrentOpenPendingTimeMs` hiện là bao nhiêu? | **Phải ≥ 2000 ms** (≥ 4 × chu kỳ poll 500 ms). Thấp hơn thì chân B confirm *sau* khi rollback đã bắn → bão rollback. |
 | 4 | `max_total_opens` trong suốt nghiệm thu? | **1**. Chỉ nâng sau khi toàn bộ checklist pass. |
@@ -136,7 +205,10 @@ thay vì âm thầm sai.
 
 ## Nghiệm thu
 
-**Demo account. `max_total_opens = 1`. Tối thiểu một phiên đầy đủ.**
+**Nghiệm thu Bước C — live 8220816, `max_total_opens = 1`, tối thiểu một phiên đầy đủ.** Tiền đề: Bước A
+GO và Bước B pass trong cùng phiên. Chạy trong giờ giao dịch XAUUSD (05:00 → 03:59 UTC+7); máy dev hiện
+có **2 terminal MT5** nên đủ 6 ô ma trận có thể nghiệm thu tại chỗ. Chân A trên MT cũng là tiền thật
+nếu terminal A là live — chủ dự án xác nhận terminal A dùng cho nghiệm thu là demo hay live trước khi bắt đầu.
 
 ### Vòng đời cơ bản
 
@@ -144,7 +216,9 @@ thay vì âm thầm sai.
 - [ ] Ticket B được `RegisterOpenExpectedForNewTickets` nhận trong **≤ 1 chu kỳ poll** (500 ms).
 - [ ] Slippage và `openExecutionMs` chân B là số hợp lý, không phải rác.
 - [ ] Đợi close signal **tự nhiên** (không ép) → cả hai chân đóng sạch.
-- [ ] Verify trên **cả hai nền tảng** (terminal MT và app cTrader): **không còn position mồ côi**.
+- [ ] Verify trên **cả hai nền tảng**: terminal MT (chân A) và **tab Positions trên cTrader Web** (chân B,
+      đọc qua Playwright MCP) đều trống — **không còn position mồ côi**. Lưu snapshot web làm bằng chứng
+      (ngoài repo).
 - [ ] Record đóng xuất hiện ở tab History, `closeExecutionMs` hợp lý.
 
 ### Đường recovery — quan trọng không kém đường thường

@@ -19,7 +19,8 @@ thấy dữ liệu cTrader. Một sai sót ở đây khiến app **đóng chân 
 
 ## Phụ thuộc phase trước
 
-- Phase 4 đã soak nhiều ngày, QUOTE session ổn định.
+- Phase 4 đã soak nhiều ngày, QUOTE session ổn định. **Hoãn có điều kiện (2026-09-17):** soak và các mục P4-D1…D9
+  chạy song song, bắt buộc xong trước Phase 7 — xem [Phase 4 "Cổng sang Phase 5"](phase-4-quote-feed.md).
 - Phase 3: `CTraderPositionCache` (có content-version), `CTraderTicketCodec`, `CTraderSessionHealth`
   đã có và đã test.
 
@@ -29,10 +30,10 @@ thấy dữ liệu cTrader. Một sai sót ở đây khiến app **đóng chân 
 
 | # | Câu hỏi | Đề xuất |
 |---|---|---|
-| 1 | `PositionsSynced=false` kéo dài thì làm gì? | Log `[CTRADER][WARN]` ngay; Telegram `CTRADER_POSITIONS_NOT_SYNCED` sau **60 s**. Không tự retry bằng cách gửi lệnh gì khác ngoài `RequestForPositions`. |
-| 2 | Tần suất `RequestForPositions` định kỳ? | Một lần khi logon + một lần mỗi **60 s** làm reconciliation. ExecutionReport là nguồn chính, AN/AP là lưới an toàn. `710 PosReqID` mỗi lần một chuỗi mới (`pos-{unixMs}`) để phân biệt batch. |
-| 3 | Batch AP "xong" khi nào? | Khi (a) nhận AP có `728=2` (không có position — **vẫn là xong, `PositionsSynced=true`, danh sách rỗng**), hoặc (b) đã nhận đủ `727 TotNumPosReports` AP với `728=0` cho cùng `710`. Thiếu ca (a) thì tài khoản trống **không bao giờ** qua được R2 gate. |
-| 4 | Position **không phải do app mở** (user mở tay trong cTrader) hiển thị thế nào? | Vẫn hiện ở tab Trade như MMF đang làm. `IsAppGeneratedTicket` sẽ lọc chúng ra khỏi logic pair — **giữ nguyên hành vi đó**, không sửa. |
+| 1 | `PositionsSynced=false` kéo dài thì làm gì? | Log `[CTRADER][WARN]` ngay; Telegram `CTRADER_POSITIONS_NOT_SYNCED` sau **60 s**. Không tự retry bằng cách gửi lệnh gì khác ngoài `RequestForPositions`. **ĐÃ QUYẾT (2026-09-17): WARN ngay + Telegram `CTRADER_POSITIONS_NOT_SYNCED` sau 60 s.** |
+| 2 | Tần suất `RequestForPositions` định kỳ? | Một lần khi logon + một lần mỗi **60 s** làm reconciliation. ExecutionReport là nguồn chính, AN/AP là lưới an toàn. `710 PosReqID` mỗi lần một chuỗi mới (`pos-{unixMs}`) để phân biệt batch. **ĐÃ QUYẾT (2026-09-17): logon + mỗi 60 s, `710` mới mỗi lần.** |
+| 3 | Batch AP "xong" khi nào? | Khi (a) nhận AP có `728=2` (không có position — **vẫn là xong, `PositionsSynced=true`, danh sách rỗng**), hoặc (b) đã nhận đủ `727 TotNumPosReports` AP với `728=0` cho cùng `710`. Thiếu ca (a) thì tài khoản trống **không bao giờ** qua được R2 gate. **ĐÃ QUYẾT (2026-09-17): đúng (a)/(b) — đã cài trong `CTraderPositionCache.ApplyPositionReport` Phase 3 (chỉ một cách hợp lệ).** |
+| 4 | Position **không phải do app mở** (user mở tay trong cTrader) hiển thị thế nào? | Vẫn hiện ở tab Trade như MMF đang làm. `IsAppGeneratedTicket` sẽ lọc chúng ra khỏi logic pair — **giữ nguyên hành vi đó**, không sửa. **ĐÃ QUYẾT (2026-09-17): hiện ở tab Trade, giữ nguyên lọc `IsAppGeneratedTicket`.** |
 
 ---
 
@@ -112,47 +113,71 @@ nào `current_slots` còn — nên chỉ cắn ở nhánh fallback legacy với 
 
 ## Nghiệm thu
 
-Mở/đóng position **bằng tay trong app cTrader**; app TradeDesktop **chỉ quan sát**.
+> **Tái cấu trúc 2026-09-16:** phase này chia hai lớp. **Lớp 1 (ở đây)** chạy trên **tài khoản trống**,
+> không chạm tiền. **Lớp 2 — cần position thật** — chuyển sang [Phase 7 Bước B](phase-7-execution.md)
+> để chạy chung phiên tiền thật. Cổng sang Phase 6 chỉ đòi Lớp 1.
 
-### Dữ liệu đúng
+Chạy 2026-09-17 trên Windows 11, live 8220816 (trống), **không bấm Start** (tiếp #8 Phase 4). Bằng chứng:
+`Desktop/trade-log/20260917-ctrader.log` (raw log chẩn đoán bật bằng `CTRADER_FIX_RAW_LOG=1`, đã che 554),
+`netwatch2.ps1` (socket 5211/5212 mỗi 250 ms), ảnh tab Trade.
 
-- [ ] Position mở tay hiện ở tab Trade: ticket (dạng đã mã hoá), symbol, type, open price đều đúng.
-- [ ] Profit realtime chân B nhúc nhích **đúng chiều** khi giá chạy.
-- [ ] Đóng tay trong cTrader → row biến mất khỏi app trong ≤ 1 chu kỳ poll (500 ms).
-- [ ] Mở 2–3 position cùng lúc → hiện đủ, không nhân bản, không mất.
+### Thiết kế đã duyệt ở Bước 3 (2026-09-17)
 
-### Test R2 trực diện — quan trọng nhất
+- `CTraderTradeSession` riêng (transport riêng, chỉ start TRADE): SecurityList + `RequestForPositions` lúc logon, 60 s
+  reconciliation, WARN chưa sync ngay + Telegram `CTRADER_POSITIONS_NOT_SYNCED` sau 60 s; không gửi order nào.
+- `CTraderAwareTradesReader` bọc `TradesSharedMemoryReader`; vòng đời TRADE do decorator điều khiển → rollback = 1 dòng DI.
+- `CTraderPositionCache` (Phase 3): position mới qua AP stamp `Environment.TickCount64`, reconciliation giữ stamp cũ.
+- `DashboardViewModel.BuildResyncedOpenSlots`: chỉ THÊM log R10 `[CTRADER][WARN]` khi rơi nhánh inferred với ticket cTrader.
+- Mất mạng im lặng trên TRADE: chưa có kiểm tra sống (heartbeat ~35–60 s) — chấp nhận, gắn với P4-D3/D4.
+- Chẩn đoán (duyệt riêng): biến môi trường `CTRADER_FIX_RAW_LOG=1`; log "config thiếu" hạ INFO khi config chưa nạp.
 
-- [ ] **Restart app trong lúc đang có position B.** Trong cửa sổ chưa sync:
-  - [ ] `GetLivePairTradeState` phải là `MapUnavailableOrParseError`
-  - [ ] **Không được** là `OnlyAOpen`
-  - [ ] Log **không hề có** external-partial-close
-  - [ ] Watchdog log ghi "skip" chứ không phải "self-heal"
-- [ ] **Kill socket TRADE** (giữ QUOTE sống) → trades map thành unavailable **ngay**, mọi nhánh skip.
-- [ ] Logout rồi logon lại → `PositionsSynced` về `false` rồi `true`, không có cửa sổ nào
-      `IsMapAvailable=true` mà chưa sync.
+### Lớp 1 — tài khoản trống, không chạm tiền (nghiệm thu tại phase này)
 
-### Test R3 trực diện
+- [x] **`728=2` path (R2):** 17:23:31.545 TRADE logon → `710=pos-1789640611545` → AP `727=0|728=2` → 17:23:31.847
+      `PositionsSynced=true count=0 version=0` → 17:23:31.886 `trades map AVAILABLE count=0 version=0 connected=1`.
+      Tab Trade sàn B (`CTRADER_B_Trades`): "Chưa có dữ liệu" (xanh) thay cho "Không tìm thấy map". Unit
+      `R2_NoPositions728Eq2_IsSyncedEmpty_Available`.
+- [x] **Cửa sổ chưa sync (R2):** giữa logon và AP, `ReadTrades` = `MapNotFound` (`[STATS][TRADE]` phút đầu: 41/1345 lần đọc
+      không available, `reads_available` chỉ tăng sau 17:23:31.886). `GetLivePairTradeState` với `!IsMapAvailable` →
+      `MapUnavailableOrParseError` (code [DashboardViewModel.cs:4978-4983], không sửa); log VM của state này không ghi được
+      khi chưa Start (logger phiên) — bằng chứng là log chuyển trạng thái map + unit
+      `R2_UnsyncedWindow_IsMapNotFound_NeverAvailableWithZeroCount` (IsMapAvailable=false, Timestamp=0 — không phải true/Count=0).
+- [x] **Kill socket TRADE** (TCPView Close Connection, QUOTE giữ sống): `TRADE logged out` 17:28:47.307 → `trades map MapNotFound`
+      17:28:47.327 (**20 ms**); netwatch 17:28:48.1 chỉ còn 5211 Established. Watchdog/external-partial-close: nhận
+      `MapUnavailableOrParseError` và đều đang tắt vì chưa Start (guard `IsTradingLogicEnabled`) — log "skip" cần Start → Phase 7 B.
+- [x] **Logout rồi logon lại:** 17:28:49.680 logon → WARN `PositionsSynced=false` → `710=pos-1789640929680` → 17:28:49.904 synced →
+      17:28:49.922 AVAILABLE. Không có lần đọc available trước khi sync. Unit `R2_Logout_MapNotFoundImmediately_RelogonNeedsFreshBatch`.
+- [x] **R3 với danh sách rỗng:** 17:23:31 → 17:28:31, 5 cửa sổ `[STATS][TRADE]` liên tiếp `version=0 count=0`, qua 5 lần
+      reconciliation + 1 lần relogon. Timestamp không đổi → `ShouldApplyTradeResult` trả false (so khớp timestamp,
+      [DashboardViewModel.cs:5957]) → `ApplyTradeResult` không rebuild. (Đếm log `ApplyTradeResult` cần Start.) Unit
+      `R3_EmptyList_VersionStableAcrossReadsAndReconciliation` (600 lần đọc).
+- [x] **Reconciliation 60 s:** `710` mới mỗi phút: …611545, …672145, …732147, …792141, …852156, …913140; mỗi AP `728=2` lặp,
+      `version` giữ 0. Unit `Reconciliation_NotSentBefore60s`.
+- [x] **Đổi `platform_b` về `mt5`:** Save 17:30:58 → QUOTE unsubscribe `263=2` + `35=5`, TRADE `35=5`, cả hai được server xác nhận;
+      `QUOTE stopped` 17:31:00.570, `TRADE stopped` 17:31:00.706; netwatch 17:31:00.2 không còn 5211/5212; tab Trade B đọc lại
+      `Local\MT_B_Trades`. Decorator đi thẳng MMF khi không phải map cTrader (unit `Decorator_NonCTraderMapOrPlatform_PassesThroughToMmf`).
 
-- [ ] Để yên **5 phút** không thao tác → `ApplyTradeResult` **không** rebuild liên tục
-      (grep log, đếm số lần).
-- [ ] Nút "Đóng" per-pair **bấm một lần ăn ngay**, không phải bấm 2–3 lần (cạm bẫy CLAUDE.md §5).
-- [ ] Mở một position mới → version tăng đúng một lần, `ApplyTradeResult` chạy.
+### Lớp 2 — cần position thật → **Phase 7 Bước B** (chỉ liệt kê, không nghiệm thu ở đây)
 
-### Test R4
+- Position mở tay hiện ở tab Trade: ticket mã hoá, symbol, type, open price đúng; profit đúng chiều. → Phase 7 B
+- Đóng tay → row biến mất ≤ 500 ms. Mở 2–3 position → đủ, không nhân bản. → Phase 7 B
+- **Restart app khi đang có position B** → cửa sổ chưa sync là `MapUnavailableOrParseError`, không
+  external-partial-close, watchdog "skip". → Phase 7 B
+- R3: mở position mới → version tăng đúng một lần; nút "Đóng" per-pair ăn một lần bấm. → Phase 7 B
+- R4: `TryDecode(ticket)` = Position ID thật trên cTrader Web. → Phase 7 B (unit `R4_PositionFromReport_EncodedTicket_…` đã pass)
 
-- [ ] Ticket hiển thị nằm ngoài dải ticket MT; `TryDecode` cho lại đúng positionId gốc (kiểm bằng log).
-- [ ] Không có cảnh báo cross-wire nào trong log.
+### Vấn đề mở
 
-### Không hồi quy
-
-- [ ] Đổi `platform_b` về `mt5` → hành vi y hệt trước Phase 5.
-- [ ] Hai chân MT4/MT5 chạy song song bình thường trong lúc B là cTrader ở chế độ quan sát.
+- **P5-O1 — QUOTE bị server logout lặp khi chạy chung TRADE (17:19:12–17:19:39, 13 lần, `35=5` không có 58, ~0.45 s sau logon,
+  không có 35=3/j).** Không tái hiện ở 3 lần chạy sau (17:22:53, 17:23:31 kéo dài; relogon TRADE 17:28:49). Loại trừ trùng
+  `SessionID` QuickFIX/n (probe: `…/QUOTE->cServer/QUOTE` ≠ `…/TRADE->cServer/TRADE`). Raw log để bật suốt soak để bắt
+  chuỗi message thật nếu tái diễn. **Bắt buộc có kết luận trước Phase 7.**
 
 ### Gate chung
 
-- [ ] Test suite không tăng so với baseline Phase 0. Build sạch.
-- [ ] Soak ít nhất **2 ngày** với position mở tay để yên.
+- [x] Test suite: **922 total / 911 pass / 11 fail** — 11 tên trùng baseline memo §2.2b. Phase 5 thêm 18 test
+      (`CTraderTradeSessionTests`). Build App `--no-incremental`: 0 error, 3 warning `CA1416` baseline.
+- [ ] Soak ≥ 2 ngày tài khoản trống — **CHƯA KIỂM — cần soak 2 ngày** (bắt đầu lại lúc chuyển về cTrader sau 17:31 ngày 2026-09-17).
 
 ---
 
@@ -168,5 +193,19 @@ recovery discard như snapshot stale — hành vi đã có sẵn, an toàn.
 
 ## Cổng sang Phase 6
 
-- [ ] Toàn bộ checklist nghiệm thu pass, **đặc biệt là test R2 trực diện**.
-- [ ] Không có bất kỳ lần nào external-partial-close bị kích hoạt sai trong suốt thời gian soak.
+### Hoãn có điều kiện (chủ dự án quyết 2026-09-17)
+
+Phase 5 **tạm đóng để sang Phase 6** (chỉ đọc, tài khoản trống). Mục dưới đây **bắt buộc xong trước Phase 7**.
+Ràng buộc để soak không bị reset: Phase 6 code + unit test **offline**, build ra thư mục tạm, **không restart app đang soak**;
+nghiệm thu live Phase 6 dồn vào **một lần restart có chủ đích** sau ≥ 1 đêm soak; sau đó soak tiếp bằng bản Phase 6 (tính cho
+cả Phase 4/5/6). **Không chạy 2 instance app cùng lúc** (cùng login cTrader).
+
+| ID | Việc còn treo | Cách đóng | Chặn |
+|---|---|---|---|
+| P5-D1 | Soak ≥ 2 ngày liên tục qua cuối tuần, tài khoản trống: TRADE sống, AP `728=2` mỗi 60 s, không rò bộ nhớ/handle; không có external-partial-close sai | `-ctrader.log` (`[STATS][TRADE]`), Task Manager; bản build cuối cùng trước Phase 7 | Phase 7 |
+| P5-O1 | QUOTE bị server logout lặp khi chạy chung TRADE (xem Vấn đề mở) | Raw log bật suốt soak; tái diễn → phân tích chuỗi message; không tái diễn qua soak → ghi kết luận | Phase 7 |
+
+
+- [x] Toàn bộ checklist **Lớp 1** pass, đặc biệt cửa sổ chưa sync và `728=2` path (xem Nghiệm thu, 2026-09-17).
+- [ ] Không có bất kỳ lần nào external-partial-close bị kích hoạt sai trong suốt thời gian soak → **hoãn P5-D1**.
+- [x] Danh sách Lớp 2 đã được chép sang checklist Phase 7 Bước B (không bỏ sót) — 2026-09-17 đối chiếu 5/5, bổ sung mục "row biến mất ≤ 500 ms" và "kill TRADE có Start".

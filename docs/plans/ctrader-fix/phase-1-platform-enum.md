@@ -18,8 +18,9 @@ ràng; hai chân MT4/MT5 chạy y hệt như trước.
 
 ## Phụ thuộc phase trước
 
-- **Phase 0 phải kết luận GO.** Nếu câu hỏi R1 (đóng bằng tag 721) thất bại thì hướng tiếp cận đổi và
-  công sức phase này có thể bỏ đi.
+- **Phase 0 đạt GO-READ** ([phase-0-spike.md § Cổng sang Phase 1](phase-0-spike.md)): kết nối SSL,
+  SecurityList, market data, reconnect đã chứng minh trên live 8220816. R1 (đóng bằng tag 721) là cổng
+  của **Phase 7 Bước A**; nếu R1 fail thì chỉ đổi chiều đóng của executor — Phase 1 **không** bị ảnh hưởng.
 - Con số baseline test từ Phase 0 làm gate.
 
 ---
@@ -35,18 +36,21 @@ ràng; hai chân MT4/MT5 chạy y hệt như trước.
 
 ## Việc làm
 
-### R7 — sửa cả **3** bản sao `NormalizePlatform` trong cùng một commit
+### R7 — sửa cả **5** bản sao `NormalizePlatform` trong cùng một commit
 
-Ba bản hiện giống hệt nhau và đều fallback unknown → `"mt5"`:
+Năm bản giống hệt nhau và đều fallback unknown → `"mt5"`. **Plan gốc chỉ liệt kê 3** — hai bản cuối
+phát hiện khi làm Phase 1 (2026-09-17), chủ dự án duyệt đưa vào phạm vi:
 
 | File | Dòng |
 |---|---|
 | `TradeDesktop.Application/Services/ConfigService.cs` | `:25` |
 | `TradeDesktop.Application/Services/ConfigService.cs` | `:488` |
 | `TradeDesktop.App/State/RuntimeConfigState.cs` | `:460` |
+| `TradeDesktop.Infrastructure/Supabase/SupabaseConfigRepository.cs` | `:255` — dùng khi **đọc** row (`:46-47`) **và ghi** PATCH (`:648-649`). Thiếu bản này: `ctrader` bị đọc thành `mt5` và Save ghi đè `mt5` xuống DB |
+| `TradeDesktop.App/ViewModels/ConfigViewModel.cs` | `:709` — setter `PlatformA`/`PlatformB`. Thiếu bản này: bấm Save trong cửa sổ Config là ghi `mt5` xuống DB và đẩy `mt5` vào runtime |
 
 ```csharp
-// hiện tại — cả 3 chỗ
+// hiện tại — cả 5 chỗ
 return normalized is "mt4" or "mt5" ? normalized : "mt5";
 // sau khi sửa
 return normalized is "mt4" or "mt5" or "ctrader" ? normalized : "mt5";
@@ -114,20 +118,26 @@ services.AddSingleton<ITradePlatformExecutor, NullCTraderTradeExecutor>();
 
 ## Rủi ro liên quan
 
-**R7** (chủ đạo — 3 bản sao normalize) · §4.1 (không đụng `TryRefreshCloseRows`)
+**R7** (chủ đạo — 5 bản sao normalize) · §4.1 (không đụng `TryRefreshCloseRows`)
 
 ---
 
 ## Nghiệm thu
 
-### Unit test (macOS)
+### Unit test — kết quả 2026-09-17 (`TradeDesktop.Tests/Config/PlatformNormalizationTests.cs`, 22 test xanh)
 
-- [ ] **Test parity**: hai `NormalizePlatform` (`ConfigService` và `RuntimeConfigState`) nhận **cùng
-      tập** `{mt4, mt5, ctrader}` và cùng fallback unknown → `mt5`.
-      Test này tồn tại để bắt đúng R7 — đặt tên rõ, ví dụ `NormalizePlatform_BothCopiesAcceptSameSet`.
-- [ ] Test: `SaveByMachineHostNameAsync` với `platformA = "ctrader"` trả `Failed`.
-- [ ] Test: `platformB = "ctrader"` được chấp nhận và round-trip nguyên vẹn.
-- [ ] Test: `"CTRADER"`, `" ctrader "` đều normalize về `"ctrader"`.
+> Test project **không reference App** → không gọi được bản ở `RuntimeConfigState`/`ConfigViewModel`.
+> Parity khoá qua **API public** cho 3 bản Application/Infrastructure; 2 bản App kiểm bằng grep.
+
+- [x] **Parity** `NormalizePlatform_AllTestableCopiesAcceptSameSet` (9 ca: `mt4`, `mt5`, `ctrader`, `CTRADER`,
+      ` ctrader `, ` MT4 `, `xyz`, `""`, `null`) — cùng input qua **Save** (`ConfigService:28`), **Load**
+      (`ConfigService:496`) và **Supabase đọc row** (`SupabaseConfigRepository:255`) cho cùng output.
+- [x] Grep 2 bản App: không còn `is "mt4" or "mt5"` nào thiếu `or "ctrader"` (5/5 có).
+- [x] `Save_PlatformACTrader_IsRejectedAndNothingWritten` — `Failed("cTrader chỉ được dùng cho sàn B.")`, repository
+      **không** được gọi; kèm biến thể `CTRADER` / ` ctrader `.
+- [x] `platformB = ctrader` round-trip: Save (ma trận 6 ô), Load, và `SupabaseRepository_WritePath_KeepsCTraderInPatchPayload`
+      (PATCH body `platform_b = "ctrader"` từ input ` CTrader `).
+- [x] `"CTRADER"`, `" ctrader "` → `"ctrader"` (trong 9 ca parity).
 
 ### Ma trận platform
 
@@ -136,29 +146,39 @@ bằng unit test:
 
 | `platform_a` | `platform_b` | Kỳ vọng | ☐ |
 |---|---|---|---|
-| mt4 | mt4 | Save OK, resolve ra `(Mt4, Mt4)` | ☐ |
-| mt4 | mt5 | Save OK, resolve ra `(Mt4, Mt5)` | ☐ |
-| mt5 | mt4 | Save OK, resolve ra `(Mt5, Mt4)` | ☐ |
-| mt5 | mt5 | Save OK, resolve ra `(Mt5, Mt5)` | ☐ |
-| mt4 | ctrader | Save OK, resolve ra `(Mt4, CTrader)` | ☐ |
-| mt5 | ctrader | Save OK, resolve ra `(Mt5, CTrader)` | ☐ |
-| ctrader | bất kỳ | **Save bị reject** | ☐ |
-| (bypass config) A = CTrader tại dispatch | | **`ValidatePlatformOrThrow` throw** (B1) | ☐ |
+| mt4 | mt4 | Save OK, resolve ra `(Mt4, Mt4)` | ✅ Save test · resolve = review code |
+| mt4 | mt5 | Save OK, resolve ra `(Mt4, Mt5)` | ✅ Save test · resolve = review code |
+| mt5 | mt4 | Save OK, resolve ra `(Mt5, Mt4)` | ✅ Save + Load test · resolve = review code |
+| mt5 | mt5 | Save OK, resolve ra `(Mt5, Mt5)` | ✅ Save test · resolve = review code |
+| mt4 | ctrader | Save OK, resolve ra `(Mt4, CTrader)` | ✅ Save + Load test · resolve = review code |
+| mt5 | ctrader | Save OK, resolve ra `(Mt5, CTrader)` | ✅ Save + Load test · resolve = review code |
+| ctrader | bất kỳ | **Save bị reject** | ✅ test |
+| (bypass config) A = CTrader tại dispatch | | **`ValidatePlatformOrThrow` throw** (B1) | ⚠️ chỉ review code (`TradeExecutionRouter.cs` `ValidatePlatformOrThrow`) — App không được test reference |
+
+"resolve" = `DashboardViewModel.ResolveTradeLegPlatform` (thêm `"ctrader" => CTrader`) nằm ở App → không unit
+test được; App build 0 error / 0 warning.
 
 ### Smoke test (Windows)
 
-- [ ] App chạy y hệt như trước với `mt4`/`mt5` — không có log mới, không có hành vi khác.
-- [ ] Chạy thử **cả 4 tổ hợp MT-MT** (mt4/mt4, mt4/mt5, mt5/mt4, mt5/mt5) — không hồi quy.
-- [ ] Đặt `platform_b = ctrader` thủ công trong Supabase → app **không crash**, khởi động bình thường.
-- [ ] Trigger một auto open → chân B fail với `"cTrader chưa được kích hoạt"`, chân A rollback đúng
-      qua `CloseOpenedLegByTimeoutAsync`.
-- [ ] Không có exception chưa bắt nào trong log.
+- [x] App chạy với `mt5`/`mt5`, không crash — chủ dự án chạy 2026-09-17. Bằng chứng: `%LOCALAPPDATA%\TradeDesktop\logs\startup.log`
+      có 3 lần `OnStartup begin → Host started successfully → MainWindow shown` (13:49, 14:05, 14:21), 0 dòng error/exception.
+      Có `mt5engine_capi.dll` (build tại máy từ `native/mt5engine-capi` bằng cờ CI) và EA DataExporter A/B đang ghi 6 MMF.
+- [x] **4 tổ hợp MT-MT**: đổi `platform_a/b` trong Config + Save không lỗi — theo quan sát của chủ dự án; DB cuối phiên
+      đọc lại `A=mt5 B=mt5` (đã trả về cấu hình gốc).
+- [x] `platform_b = ctrader` trong Supabase → app mở lại **không crash**; Save trong Config → DB vẫn `ctrader` — theo quan
+      sát của chủ dự án (Claude không đọc DB đúng thời điểm đó). Đã trả `platform_b` về `mt5`.
+- [x] Không có exception trong `startup.log`. Log phiên `Desktop\trade-log\` **không được tạo** vì chỉ mở khi bấm Start
+      (không bấm theo phạm vi smoke) — nên không có log `[VM]` Save để đối chiếu thêm.
+- ⚠️ Phát hiện phụ (không do Phase 1): hostname máy dev trong `configs` có ký tự xuống dòng cuối → Load qua `ilike` vẫn
+  đọc được nhưng Save (`eq`) báo "không có bản ghi nào được cập nhật". Chủ dự án đã sửa dữ liệu. Bất đối xứng Load `ilike`
+  / Save `eq` trong `SupabaseConfigRepository` nên ghi thành pitfall CLAUDE.md khi commit gộp.
+- ↪ **Dời sang Phase 7 Bước B** (quyết 2026-09-17 — đặt lệnh thật trên MT5 chân A): trigger auto open với
+  `NullCTraderTradeExecutor` → chân B fail `"cTrader chưa được kích hoạt"`, chân A rollback qua `CloseOpenedLegByTimeoutAsync`.
 
 ### Gate chung
 
-- [ ] `DOTNET_ROLL_FORWARD=Major dotnet test TradeDesktop.Tests/TradeDesktop.Tests.csproj` không tăng
-      so với baseline Phase 0.
-- [ ] Build sạch, không warning mới.
+- [x] `dotnet test`: **675 tổng, 664 pass, 11 fail** — 11 fail **trùng từng tên** baseline memo §2.2b; +22 test mới xanh.
+- [x] `dotnet build TradeDesktop.App`: **0 error, 0 warning**.
 
 ---
 
@@ -174,7 +194,6 @@ khi revert, `ctrader` sẽ lại fallback về `mt5` — vẫn chạy được, 
 
 ## Cổng sang Phase 2
 
-- [ ] Toàn bộ checklist nghiệm thu pass.
-- [ ] Đã chốt các câu hỏi còn mở ở "Chốt trước khi code" của [Phase 2](phase-2-config.md): câu 2
-      (layout section cTrader) và câu 3 (`map_name_2` khi B là cTrader). Câu 1 (password → ô masked,
-      lưu `sans_json`) và câu 4 (từ chối Save khi còn slot) **đã quyết**.
+- [x] Toàn bộ checklist nghiệm thu pass (B1 chỉ review code; smoke đặt lệnh dời Phase 7 Bước B).
+- [x] Đã chốt cả 4 câu "Chốt trước khi code" của [Phase 2](phase-2-config.md) — câu 2 (UI 2 mode cho Sàn B) và
+      câu 3 (`map_name_2` = hằng `CTRADER_B`, giữ dữ liệu mode ẩn) quyết 2026-09-17; câu 1 và 4 đã quyết trước đó.

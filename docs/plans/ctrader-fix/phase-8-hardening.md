@@ -85,7 +85,8 @@ Ba việc:
 > - `SecurityList` tag `1007`/`1008` đọc bằng số thô; lớp `Tags` của QuickFIX/n gọi chúng là
 >   `SideReasonCd`/`SideTrdSubTyp`.
 > - `PositionReport` `728=2` = "không có position" **vẫn phải** set `PositionsSynced=true`.
-> - `NormalizePlatform` có **3 bản sao** (`ConfigService` :25 và :488, `RuntimeConfigState` :460).
+> - `NormalizePlatform` có **5 bản sao** (`ConfigService` :28 và :496, `RuntimeConfigState` :460,
+>   `SupabaseConfigRepository` :255, `ConfigViewModel` :709).
 >   Sửa một chỗ mà quên chỗ khác ⇒ `platform_b` âm thầm về `mt5` và app click vào HWND MT5 sai.
 
 §9 "Key external dependencies" — thêm cTrader FIX API (QuickFIXn.Core + QuickFIXn.FIX4.4 + dictionary

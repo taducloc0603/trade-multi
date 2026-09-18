@@ -34,6 +34,10 @@ Ràng buộc đã chốt với chủ dự án:
 | Sender/TargetSubID | `QUOTE` | `TRADE` |
 | Username (tag 553) | `10649643` | `10649643` |
 
+> Bảng trên **đã đối chiếu với panel FIX API của FxPro** ngày 2026-09-16 (chủ dự án chép tay): khớp
+> từng trường. Panel ghi mật khẩu là *"a/c 10649643 password"* — tức mật khẩu FIX chính là mật khẩu
+> đăng nhập tài khoản.
+
 Symbol B: **SymbolId `41`** (rất có thể XAUUSD — Phase 0 câu 3 xác nhận). Quy đổi khối lượng chủ dự án
 báo **OrderQty `1` = `0.01` lot** chính là 1 unit của XAUUSD với contract size 100 — không phải quy ước
 riêng của broker. Xem §5 `volumeBUnits` / `contractSizeB`; Phase 0 câu 4 xác minh contract size.
@@ -100,8 +104,11 @@ public interface ICTraderRouting
 }
 ```
 
-`map_name_2` vẫn là tên logic bình thường do user nhập (vd `CTRADER_B`); `OrderMapNameResolver` sinh
-`CTRADER_B_Trades` / `CTRADER_B_History` không cần sửa.
+Khi `platform_b = ctrader`, kênh B dùng **hằng `CTraderFixConfig.ChannelMapName = "CTRADER_B"` do app đặt**
+(người dùng không nhập — quyết 2026-09-17, Phase 2 câu 3). `RuntimeConfigState.CurrentMapName2` trả hằng này;
+`mapNames[1]` MT đã lưu trong `sans_json` giữ nguyên để chuyển về MT không mất cấu hình. `OrderMapNameResolver`
+sinh `CTRADER_B_Trades` / `CTRADER_B_History` không cần sửa. Không có MMF nào tên `CTRADER_B` nên reader không
+thể đọc nhầm EA MT sàn B còn chạy.
 
 ---
 
@@ -127,8 +134,13 @@ không phải suy luận từ forum. Đóng position là trường hợp riêng:
 **Câu còn phải verify trên demo thu hẹp lại một điểm:** với tài khoản **hedged**, market order **ngược
 chiều** mang 721 có net về 0 (đóng) không, hay bị từ chối / mở position đối ứng.
 
-**Nếu sai thì không có đường nào đóng lệnh B** và cả thiết kế sụp — nên Phase 0 câu 1 **vẫn là cổng
-chặn**, dù xác suất thất bại đã thấp hơn rõ rệt so với lúc chỉ có nguồn forum.
+**Nếu sai thì không có đường nào đóng lệnh B qua FIX** — chiều đóng của executor phải chuyển sang Open
+API (`ProtoOAClosePositionReq`). Chiều đọc (Phase 3–6) **không bị ảnh hưởng**.
+
+> **Tái cấu trúc 2026-09-16:** FxPro tắt FIX cho demo; live 8220816 là tài khoản duy nhất kết nối được.
+> Câu 1 (và 4/5/6) **chuyển từ Phase 0 sang Phase 7 Bước A** để gom mọi việc tiền thật vào một phiên.
+> Phase 7 vẫn **mở bằng spike 721 trước khi bật executor** — đó vẫn là cổng chặn, chỉ dời vị trí.
+> Xem [Phase 7](phase-7-execution.md) và [Phase 0 § Tái cấu trúc](phase-0-spike.md).
 
 ### R2 — `IsMapAvailable=true` khi chưa sync xong positions → **đóng nhầm chân A đang sống**
 
@@ -192,13 +204,17 @@ thì **mọi giá trị gap sai một luỹ thừa 10** → mở lệnh theo nhi
 `[CTRADER][ERROR]` + Telegram. Guard `!metrics.IsConnectedB` sẵn có ở router dừng toàn bộ giao dịch.
 Point sai 10 lần không phải "chế độ suy giảm", nó là chế độ **mở lệnh theo nhiễu**.
 
-### R7 — `NormalizePlatform` có **3 bản sao**, tất cả fallback unknown → `"mt5"`
+### R7 — `NormalizePlatform` có **5 bản sao**, tất cả fallback unknown → `"mt5"`
 
-`ConfigService` 2 chỗ (~:25, ~:468) + `RuntimeConfigState` (~:422). Thiếu một chỗ thì `platform_b` âm
+`ConfigService` 2 chỗ (:28, :496) + `RuntimeConfigState` (:460) + `SupabaseConfigRepository` (:255, dùng cả
+đọc lẫn ghi DB) + `ConfigViewModel` (:709, setter `PlatformA/B` → Save). Hai bản cuối phát hiện lúc làm
+Phase 1 (2026-09-17). Thiếu một chỗ thì `platform_b` âm
 thầm thành `mt5` và app **click vào HWND chart MT5 cũ hoặc sai symbol**. Fallback sai kiểu im lặng là
 loại nguy hiểm nhất.
 
-→ Sửa cả 3 trong cùng một commit + test parity khẳng định hai normalizer nhận cùng tập giá trị.
+→ Sửa cả 5 trong cùng một commit (Phase 1, đã làm). Test parity qua API public cho 3 bản ở Application/
+Infrastructure (`PlatformNormalizationTests`); 2 bản ở App (test không reference App) kiểm bằng grep:
+mọi `is "mt4" or "mt5"` phải đi kèm `or "ctrader"`.
 
 ### R8 — Latency / execution-delay của B khác A về bản chất
 
@@ -208,7 +224,8 @@ thưa thì vài giây là bình thường. `SignalEntryGuard.CheckLatency` so **
 cả round-trip broker → số delay lớn hơn hẳn, ngưỡng cảnh báo Telegram có thể phải chỉnh.
 
 → **Không special-case riêng B bên trong guard** (đổi hành vi service dùng chung = vi phạm §0.2).
-Hoặc chấp nhận skip, hoặc thêm ngưỡng riêng cho B như một task tách biệt. **Cần quyết ở Phase 4.**
+Hoặc chấp nhận skip, hoặc thêm ngưỡng riêng cho B như một task tách biệt.
+**ĐÃ QUYẾT (2026-09-17): tách ngưỡng** — task **R8-B** `confirm_latency_ms_b`: cột nullable (null → dùng `confirm_latency_ms`, MT-MT y hệt); nối `SupabaseConfigRepository` → `ConfigRecord` → `ConfigService` → `RuntimeConfigState` (sentinel `-1`, không mặc định `0`) → `SignalEntryGuard.CheckLatency` **và** `TradeExecutionRouter` (`LATEST_LATENCY_EXCEEDS_LIMIT`) sửa cùng nhịp: chân A so ngưỡng chung, chân B so ngưỡng B — tổng quát, không rẽ nhánh theo platform (§0.2); test: null = hành vi cũ, B dùng ngưỡng B, mở Config không mất giá trị, router khớp guard. Thời điểm: sau soak Phase 4 (lấy số liệu tuổi tick B), trước Phase 7. Chi tiết: [Phase 4](phase-4-quote-feed.md) "Chốt" câu 1.
 
 ### R9 — Mất session mà vẫn phục vụ tick cuối
 
@@ -415,15 +432,19 @@ Thêm guard lúc save config: `platform_a == "ctrader"` → reject.
 
 | Phase | File | Nội dung | Live? | Đặt lệnh được? | Trạng thái |
 |---|---|---|---|---|---|
-| 0 | [phase-0-spike.md](phase-0-spike.md) · [memo](phase-0-memo.md) | Khử rủi ro R1 trên demo — code vứt đi | — | — | 🔄 **đang dở** — offline xong trên macOS (baseline 11), spike FIX + điều tra 11 fail phải chạy trên Windows; xem [memo §6](phase-0-memo.md) |
-| 1 | [phase-1-platform-enum.md](phase-1-platform-enum.md) | Nhận diện `ctrader`, chưa có cTrader | không | không | ☐ |
-| 2 | [phase-2-config.md](phase-2-config.md) | UI + persistence `ctraderFix` | không | không | ☐ |
-| 3 | [phase-3-fix-core-offline.md](phase-3-fix-core-offline.md) | Lõi FIX + test macOS, không wire | không | không | ☐ |
-| 4 | [phase-4-quote-feed.md](phase-4-quote-feed.md) | Luồng **GIÁ** | QUOTE | không | ☐ |
-| 5 | [phase-5-open-positions.md](phase-5-open-positions.md) | Luồng **LỆNH ĐANG MỞ** | + TRADE | không | ☐ |
-| 6 | [phase-6-history.md](phase-6-history.md) | Luồng **LỊCH SỬ** | + TRADE | không | ☐ |
-| 7 | [phase-7-execution.md](phase-7-execution.md) | Đặt/đóng lệnh | đầy đủ | **có** | ☐ |
+| 0 | [phase-0-spike.md](phase-0-spike.md) · [memo](phase-0-memo.md) | Kết nối + chiều đọc trên live (câu 2,3,7,8,9,10) — code vứt đi | — | **không** (đã tách) | ✅ **GO-READ** (2026-09-17): câu 2/3/7/8/9/10 trên live 8220816; baseline Windows 11 = macOS, 0 regression; phát hiện cServer reject 553/554 trên Logout (Phase 3 sửa theo). Câu 1/4/5/6 → Phase 7 |
+| 1 | [phase-1-platform-enum.md](phase-1-platform-enum.md) | Nhận diện `ctrader`, chưa có cTrader | không | không | ✅ **Xong** (2026-09-17): 5 bản normalize, enum/router/B1, Null executor; +22 test xanh; baseline 11 giữ nguyên; App build 0 warning; smoke app (MT-MT + `platform_b=ctrader`) pass. Smoke đặt lệnh → Phase 7 B |
+| 2 | [phase-2-config.md](phase-2-config.md) | UI + persistence `ctraderFix` | không | không | ✅ **Xong** (2026-09-17): UI 2 mode Sàn B, `ctraderFix` trong `sans_json`, 3 cửa HWND B, `CTRADER_B`, Redact, chặn đổi platform khi còn slot; +91 test xanh, baseline 11 giữ nguyên; smoke app pass. Còn: log `[HWND][SKIP]` (Phase 4), 2 ca còn-slot (Phase 7 B) |
+| 3 | [phase-3-fix-core-offline.md](phase-3-fix-core-offline.md) | Lõi FIX + test, không wire | không | không | ✅ **Xong** (2026-09-17): QuickFIXn 1.10.0 trong Infrastructure, dictionary cServer, lõi health/codec/masker/book/catalog/AP parser/cache/history/factory/transport; +98 test xanh (message dựng validate qua `FIX44-CSERVER.xml`, W/X/y thật từ Phase 0), baseline 11 giữ nguyên; App build 3 warning baseline; 0 `using QuickFix` ở Application; 0 đăng ký DI. Chủ dự án đã xác nhận 2 lệch plan (câu 3 spot fail-closed; không gửi `265`) |
+| 4 | [phase-4-quote-feed.md](phase-4-quote-feed.md) | Luồng **GIÁ** | QUOTE | không | ⏸️ **Tạm đóng — hoãn có điều kiện P4-D1…D9, bắt buộc trước Phase 7** (2026-09-17, soak chạy song song từ 16:53): code xong, live 8220816 — gap 5/5, đối chiếu web, G3/G4, kill socket, R6 point sai đạt; kill mạng im lặng ❌ < 1 s (có kiểm tra sống 5 s/5 s, chưa đo lại); MT4 không có trên máy; price-freeze/so log cần Start (không bấm theo #8); soak + giờ nghỉ + probes CHƯA KIỂM. Test 904/893/11 |
+| 5 | [phase-5-open-positions.md](phase-5-open-positions.md) | Luồng **LỆNH ĐANG MỞ** — code + test + nghiệm thu **tài khoản trống** | + TRADE | không | ⏸️ **Tạm đóng — Lớp 1 xong; hoãn có điều kiện P5-D1/P5-O1, bắt buộc trước Phase 7** (2026-09-17): TRADE session chỉ đọc + decorator; 728=2 path, cửa sổ chưa sync, kill socket TRADE (MapNotFound 20 ms), relogon, R3 5 phút, reconciliation 60 s, về mt5 — đạt; test 922/911/11. Còn: soak 2 ngày (CHƯA KIỂM), vấn đề mở P5-O1 (QUOTE logout lặp 1 lần, không tái hiện). Lớp 2 → Phase 7 B |
+| 6 | [phase-6-history.md](phase-6-history.md) | Luồng **LỊCH SỬ** — code + test + nghiệm thu **tài khoản trống** | + TRADE | không | ☐ |
+| **7** | [phase-7-execution.md](phase-7-execution.md) | **PHIÊN TIỀN THẬT duy nhất**: A) spike 721 (câu 4/1/5/6) · B) nghiệm thu 5/6 **có position** · C) executor thật | đầy đủ | **có** | ☐ |
 | 8 | [phase-8-hardening.md](phase-8-hardening.md) | Cảnh báo, Telegram, tài liệu | đầy đủ | có | ☐ |
+
+**Nguyên tắc gom (2026-09-16):** mọi việc cần `NewOrderSingle` hay position thật nằm **chỉ** ở Phase 7,
+chạy trong **một phiên** trên live 8220816 (nạp ~$30–50; chi phí thực tế ≈ spread 24 pt/oz ≈ $0.24 mỗi
+vòng + commission). Phase 0–6 **không chạm tiền**: có thể hoàn thành toàn bộ trước khi nạp tiền.
 
 Quy ước chung cho mọi phase:
 - Mỗi phase là **một commit độc lập, revert được riêng**.
@@ -448,6 +469,21 @@ Application/Infrastructure.
 | Smoke test app | ❌ | ✅ | — |
 | Phase 0 spike | ✅ (`ConsoleSample` của Spotware, zero code) | ✅ | ✅ bắt buộc |
 | Phase 4–7 nghiệm thu | ❌ | ✅ | ✅ bắt buộc |
+| Đối chiếu phía cTrader (symbol info, Positions, History) | ✅ cTrader Web | ✅ cTrader Web | — |
+
+### cTrader Web + Playwright MCP — công cụ đối chiếu, không phải công cụ giao dịch
+
+Máy dev Windows hiện có **2 terminal MT5** đang chạy và đăng nhập được **cTrader Web** (`ct.fxpro.com`)
+qua Playwright MCP. Cách dùng thống nhất cho mọi phase:
+
+- MCP **chỉ đọc**: Symbol info, tab Positions/History, Bid/Ask, Market hours. Không bấm New order /
+  Close — ràng buộc #2 (§1) vẫn giữ nguyên; thao tác tay ở Phase 5/6 do **người dùng** làm.
+- Web **không có panel FIX API** (nút "FIX API" chỉ mở tài liệu). Host/port/CompID lấy từ cTrader
+  desktop hoặc email broker.
+- Snapshot Playwright nằm ở `.playwright-mcp/` (đã `.gitignore`) và chứa email đăng nhập — không đưa vào
+  memo, chỉ chép số liệu cần thiết.
+- Cùng đăng nhập có tài khoản **Live** (8220816, 8225904). Chỉ tài khoản Demo 10649643 được dùng cho
+  toàn bộ kế hoạch.
 
 Baseline test: CLAUDE.md §6 ghi 19 fail; ghi chú làm việc ghi macOS là 26. **Đo lại ở Phase 0**, đừng
 tin con số cũ.

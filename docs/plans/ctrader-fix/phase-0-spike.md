@@ -33,6 +33,24 @@ Không có. Đây là phase đầu tiên.
 | 1 | Spike dùng cổng SSL (5211/5212) hay plain (5201/5202)? | Plain dễ đọc log raw hơn nhiều; SSL mới là thứ production dùng. Đề xuất: **plain cho spike, SSL cho production** — nhưng phải xác nhận broker cho phép plain. |
 | 2 | Mật khẩu tài khoản 10649643 đưa vào spike bằng cách nào? | Nằm **plaintext** trong `Config-dev.cfg` của ConsoleSample (sample không đọc biến môi trường). Vì vậy: file phải ở **ngoài repo** (`/tmp/ctrader-spike/...`), `chmod 600`, **không** gõ mật khẩu vào lệnh shell (lưu history), **không** commit, và **xoá cùng `store/` + `log/`** ngay khi spike xong — `log/` của QuickFIX/n ghi Logon nguyên văn. |
 | 3 | Được phép đặt lệnh thật trên demo trong giờ thị trường mở không? | Câu hỏi 1 của spike bắt buộc phải mở rồi đóng một position thật trên demo. |
+| 4 | **Tài khoản demo có phải loại HEDGING không?** | R1 chỉ có nghĩa trên tài khoản hedged (tag 721 *"can be specified only for hedged accounts"*). Netting thì cách đóng khác hẳn. **ĐÃ XÁC NHẬN 2026-09-16 qua cTrader Web: `FxPro · Demo · 10649643 · Hedging`.** |
+
+### Kiểm chéo bằng cTrader Web (thay cho cTrader desktop)
+
+Máy dev không chắc có cTrader desktop. **cTrader Web** (`https://ct.fxpro.com/`) hiển thị đủ những gì
+plan này cần đối chiếu, đọc được qua Playwright MCP ở chế độ **chỉ đọc** (ràng buộc #2 README §1 vẫn
+giữ: không automate UI cTrader để đặt/đóng lệnh).
+
+| Cần đối chiếu | Ở đâu trên cTrader Web | Đã đọc 2026-09-16 |
+|---|---|---|
+| FIX symbol ID, tên chuẩn, digits, lot size | Panel phải → **Symbol info** | ID **41**, **XAUUSD**, pip position **2**, min change **0.01**, lot size **100 Oz**, min qty **0.01 lot** |
+| Loại tài khoản | Menu tài khoản (góc trên phải) | **Hedging** |
+| Position còn mở / lịch sử | Tab **Positions** / **History** (cột Position ID, Quantity, Entry) | Positions 0, Orders 0. History **đã có 4 lệnh XAUUSD cũ** (lỗ tổng $-562.21) — không phải của spike |
+| Giờ giao dịch XAUUSD | Symbol info → **Market hours** | Mỗi ngày **05:00 → 03:59:45 hôm sau (UTC+7)**; nghỉ ~1 giờ/ngày. Câu 1 và 4 phải chạy ngoài khung nghỉ |
+| Panel FIX API (host/port/CompID) | **Không có trên web** — nút "FIX API" chỉ mở tài liệu | Lấy từ cTrader desktop (Cog → FIX API) hoặc email FxPro cấp |
+
+> Cùng một đăng nhập web còn thấy **2 tài khoản Live** (8220816, 8225904). Mọi cfg spike chỉ dùng
+> `demo.fxpro.10649643`; không bao giờ thử SenderCompID có tiền tố `live.`.
 
 ---
 
@@ -75,8 +93,8 @@ nên cần hai file, chạy hai lần:
 |---|---|---|
 | **1** | **Trên tài khoản hedged, market order NGƯỢC CHIỀU mang `721=<positionId>` với đủ volume có net position về 0 (ĐÓNG) không** — hay bị từ chối, hay mở position đối ứng? Bằng chứng SDK đã cho thấy "721 + market = tác động lên position có sẵn"; câu này chỉ còn kiểm phần netting. | **R1 — sống còn** |
 | 2 | `264=1` đúng là SPOT (không phải full depth)? | R11 |
-| 3 | `SecurityList` cho symbolId 41: `1007 SymbolName` có đúng là **XAUUSD** không? `1008 SymbolDigits` là gì — có khớp `point` đang cấu hình và symbol ở sàn A không? **Kiểm chéo không cần FIX**: mở cTrader desktop → Active Symbol Panel → cửa sổ thông tin symbol XAUUSD → đọc "FIX symbol ID" (theo `/getting-credentials/`). | R6 |
-| 4 | **Contract size của symbol 41 tại FxPro là bao nhiêu?** Tag 38 tính bằng đơn vị cơ sở, không phải lot. Đặt `38=1` rồi đọc lại volume trên cTrader desktop — nếu hiện `0.01` thì contract size = 100 (đúng kỳ vọng vàng). Ghi con số này vào `contractSizeB`, **không hardcode**. | R5 |
+| 3 | `SecurityList` cho symbolId 41: `1007 SymbolName` có đúng là **XAUUSD** không? `1008 SymbolDigits` là gì — có khớp `point` đang cấu hình và symbol ở sàn A không? **Kiểm chéo không cần FIX — ĐÃ XONG qua cTrader Web** (xem bảng trên): ID 41 = XAUUSD, digits 2. Còn phải: (a) thấy `1007`/`1008` thật trong `35=y`; (b) **kiểm digits XAUUSD ở chân A (MT5)** cũng là 2 — đọc từ `-gap-tick.log` hoặc terminal; `point=100` trong DB chỉ nói app cấu hình vậy, không nói broker A báo giá mấy chữ số. | R6 |
+| 4 | **Contract size của symbol 41 tại FxPro là bao nhiêu?** Tag 38 tính bằng đơn vị cơ sở, không phải lot. cTrader Web đã cho **Lot size = 100 Oz** → kỳ vọng `38=1` = `0.01` lot. Đặt `38=1` rồi đọc lại cột Quantity ở tab Positions của web — hiện `0.01` thì chốt `contractSizeB = 100`, **không hardcode**. | R5 |
 | 5 | Market order partial fill có sinh nhiều `150=F` không? | R11 |
 | 6 | Format free-text tag 58 khi bị reject (vì `103` luôn = 0)? | R11 |
 | 7 | Hành vi seqnum/reconnect sau khi kill socket cưỡng bức? | §4.6 |
@@ -95,7 +113,7 @@ Cú pháp menu: `<số>|<tham số>|...`. Mọi output `Incoming:`/`Outgoing:` l
 | 3 | TRADE | `8\|spike-sec\|0` | `35=y`: tìm group có `55=41` → đọc `1007` (tên) và `1008` (digits) |
 | 10 | QUOTE | `8\|spike-sec-q\|0` | `SecurityListRequest` có được trả lời trên QUOTE session không, hay `35=j` reject? Quyết định Phase 4 có cần mở TRADE chỉ để lấy SecurityList |
 | 2 | QUOTE | `4\|41\|n` rồi `5\|41\|n`; sau đó `4\|41\|y` | `n` → sample gửi `264=1`: `35=W` phải có đúng 2 entry `269=0`/`269=1`. `y` → `264=0`: nhiều entry hơn = depth. Xác nhận chiều ngược của 264 |
-| 4 | TRADE | `1\|spike-open-1\|41\|buy\|market\|1` | `35=8` với `150=F`, `39=2`, `721=<posId>` — **ghi lại posId**. Mở cTrader desktop: volume phải hiện **0.01** ⇒ contract size 100 |
+| 4 | TRADE | `1\|spike-open-1\|41\|buy\|market\|1` | `35=8` với `150=F`, `39=2`, `721=<posId>` — **ghi lại posId**. Mở tab Positions trên cTrader Web: Quantity phải hiện **0.01** ⇒ contract size 100; Position ID trên web phải **bằng** `721` trong log |
 | 5 | TRADE | *(quan sát câu 4)* | Đếm số `35=8` có `150=F` cho cùng `11`. Một hay nhiều? `14 CumQty` cộng dồn thế nào |
 | **1** | TRADE | `1\|spike-close-1\|41\|sell\|market\|1\|<posId>` rồi `7\|spike-pos-1` | **Sống còn.** `35=8` của lệnh sell: `150=F` và `721` = posId cũ? Rồi `35=AP`: `728=2` (không còn position) = **ĐÓNG THÀNH CÔNG**. Nếu `728=0` với `721` mới hoặc `35=j` → **DỪNG** |
 | 6 | TRADE | `1\|spike-rej\|41\|buy\|market\|999999999` | `35=8` với `150=8`/`39=8`, đọc **nguyên văn** tag `58`; xác nhận `103=0` |
@@ -133,20 +151,34 @@ R1 (sống còn) · R5 · R6 · R11 · §4.2 · §4.6
 
 ## Nghiệm thu
 
-- [ ] Memo go/no-go, **mỗi câu hỏi (1–10) kèm log raw FIX** chứng minh câu trả lời — copy từ output
-      `Incoming:`/`Outgoing:` của ConsoleSample, **che tag 554** trước khi lưu.
-- [ ] `7|spike-pos-final` cuối phiên trả `728=2` — không để position mồ côi trên demo.
-- [ ] `Config-dev.cfg`, `store/`, `log/` đã xoá.
-- [ ] Con số baseline test được ghi lại rõ ràng.
-- [ ] Kết luận về layering (Infrastructure/CTrader hay project riêng).
+- [x] Memo, **câu 2, 3, 7, 7b, 8, 9, 10 kèm log raw FIX** (che 554) — memo §5. (Câu 1, 4, 5, 6 → Phase 7 Bước A.)
+- [x] Tài khoản demo là **Hedging** (chốt #4) — xác nhận 2026-09-16 qua cTrader Web; live 8220816 cũng Hedging.
+- [x] `store/` đã xoá; `log/` không bao giờ tồn tại (sample không có log factory); `Config-dev*.cfg`
+      **giữ có chủ đích** cho Phase 7 Bước A.
+- [x] Baseline test: Windows **11 fail / 642 pass**, danh sách = macOS, 0 regression — memo §2.2b, §4.4.
+- [x] Layering: **`Infrastructure/CTrader`** (QuickFIXn restore/build sạch trên SDK 8) — memo §3.
 
-### Điều kiện DỪNG
+### ⚠️ Tái cấu trúc 2026-09-16 — tách phần TIỀN THẬT ra khỏi Phase 0
 
-> **Nếu câu 1 sai → DỪNG TOÀN BỘ.**
->
-> Thiết kế cần làm lại — khả năng phải chuyển sang cTrader Open API (protobuf) cho chiều đóng lệnh,
-> vốn có `ProtoOAClosePositionReq(positionId, volume)` tường minh. Đó là một kế hoạch khác, không phải
-> bản vá của kế hoạch này.
+FxPro tắt FIX cho demo (`RET_ACCOUNT_DISABLED`); mọi kiểm chứng FIX phải chạy trên **live 8220816**.
+Chủ dự án quyết **gom toàn bộ việc chạm tiền thật vào MỘT phiên duy nhất** ở
+[Phase 7](phase-7-execution.md) để nạp tiền/trả spread một lần và tận dụng chung position.
+
+| Câu | Ở đâu bây giờ | Lý do |
+|---|---|---|
+| 2, 3, 7, 8, 9, 10 | **Phase 0** (chỉ đọc / kết nối) | Không đặt lệnh. 2/3/8/9/10 đã xong trên live (memo §5) |
+| **4, 1, 5, 6** | **Phase 7 — Bước A "Spike 721"** | Đều là `NewOrderSingle` tiền thật |
+
+**Vì sao trì hoãn R1 (câu 1) được:** chiều ĐỌC (Phase 3–6: QUOTE/TRADE session, SecurityList,
+W/X, PositionReport) đã được chứng minh hoạt động trên live và **không phụ thuộc** cách đóng lệnh.
+Nếu 721 không đóng được, thứ phải đổi chỉ là **chiều đóng của `CTraderTradeExecutor`** (Open API
+`ProtoOAClosePositionReq`) — một file, không phải cả thiết kế. Phase 7 vẫn mở bằng spike 721 **trước**
+khi bật executor, nên không có lệnh nào của app được gửi khi R1 chưa chứng minh.
+
+### Điều kiện DỪNG (nay áp dụng tại Phase 7 Bước A)
+
+> **Nếu câu 1 sai → DỪNG Phase 7**, giữ nguyên Phase 1–6, làm lại **chỉ** chiều đóng của executor
+> (Open API `ProtoOAClosePositionReq(positionId, volume)`), rồi mới nghiệm thu tiếp.
 
 ---
 
@@ -160,8 +192,16 @@ Ngoại lệ duy nhất: nếu spike mở position thật trên demo thì phải
 
 ## Cổng sang Phase 1
 
-Phase 1 **không** phụ thuộc kết quả spike về mặt kỹ thuật (nó chỉ thêm enum + normalize, chưa có FIX).
-Nhưng **không nên** bắt đầu Phase 1 khi câu 1 chưa được trả lời: nếu câu 1 sai thì toàn bộ hướng tiếp
-cận đổi và Phase 1 có thể thành công sức bỏ đi.
+Sau tái cấu trúc, cổng Phase 0 → 1 là **"GO-READ"** (chiều đọc + kết nối đã chứng minh):
 
-→ **Chỉ sang Phase 1 sau khi memo go/no-go kết luận GO.**
+- [x] Câu 8, 9 (logon SSL, cấu trúc 553/554) · câu 3 (`55=41 → XAUUSD`, digits 2) · câu 10 (SecurityList
+      trên QUOTE) · câu 2 (`264=1` = spot; spot không có X/278) — memo §5.
+- [x] Câu 7 (reconnect: `x` → `g`) — 2026-09-17: không `35=2`, seqnum reset về 1 (store `2 : 2` sau
+      Logon mới). Phát hiện 7b: cServer reject 553/554 trên Logout → Phase 3 chỉ gắn vào `35=A`.
+- [x] Baseline Windows + danh sách 11 fail, 0 regression (memo §2.2b, §4).
+- [x] Layering: `Infrastructure/CTrader`.
+- [x] `store/` đã xoá (chứa Logon có mật khẩu); `log/` không bao giờ được tạo (sample không có log factory).
+- [x] `Config-dev.cfg` / `Config-dev.LIVE-*.cfg`: giữ cho Phase 7. Mật khẩu từng hiện trên console sample
+      (memo §3); chủ dự án chấp nhận rủi ro — tài khoản dev, kiểm soát số tiền.
+
+→ **Sang Phase 1 khi GO-READ đủ.** R1 (câu 1) chuyển thành cổng mở của Phase 7.
