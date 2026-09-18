@@ -266,7 +266,8 @@ File: `TradeDesktop.Application/Services/TradingFlowEngine.cs`
 > `rd_end_post_open_lock_seconds`, `rd_start_post_close_lock_seconds` →
 > `rd_end_post_close_lock_seconds` và khoảng
 > random theo `rd_start_same_action_lock_seconds` → `rd_end_same_action_lock_seconds`
-> cho các transition cùng loại; chi tiết tại mục 13.3.
+> (Open→Open cùng chiều, Open→Close) và `close_rd_start_same_action_lock_seconds` →
+> `close_rd_end_same_action_lock_seconds` (Close→Close); chi tiết tại mục 13.3.
 
 ### 5.3 Race protection cho auto-open (3 lớp)
 
@@ -352,7 +353,8 @@ những limit còn lại dùng `0` để disable):
 | `sos_close_gap_pts` | `CurrentSosCloseGapPts` | `int` | Ngưỡng phát Gap Close khi SOS bật; được phép là số âm |
 | `rd_start_post_open_lock_seconds` / `rd_end_post_open_lock_seconds` | Runtime post-open range | `int` | Random một lần cho từng slot khi Open confirmed; chặn Auto Close của slot đó |
 | `rd_start_post_close_lock_seconds` / `rd_end_post_close_lock_seconds` | Runtime post-close range | `int` | Random một lần cho mỗi Auto Close; chặn Auto Open cho tới hết deadline |
-| `rd_start_same_action_lock_seconds` / `rd_end_same_action_lock_seconds` | Runtime same-action range | `int` | Random cho Open cùng chiều→Open cùng chiều, Open→Close và Close→Close |
+| `rd_start_same_action_lock_seconds` / `rd_end_same_action_lock_seconds` | Runtime same-action range (Open) | `int` | Random tại Auto Open dispatch, dùng cho Open cùng chiều→Open cùng chiều và Open→Close |
+| `close_rd_start_same_action_lock_seconds` / `close_rd_end_same_action_lock_seconds` | Runtime same-action range (Close) | `int` | Random tại Auto Close dispatch, dùng cho Close→Close. Migration: `docs/CLOSE-SAME-ACTION-LOCK-MIGRATION.sql` |
 
 **Signal cycle và price-freeze:**
 
@@ -393,15 +395,23 @@ nguồn dữ liệu nào đổ vào**; chúng chỉ phục vụ nhánh legacy `P
 `ProcessLegacyGap` mà test trực tiếp gọi. Đừng nối chúng lại vào config pipeline.
 
 Same-action range được random đúng một lần tại mỗi Auto dispatch và lưu cùng
-`LastAutoDispatchAtUtc`; không random lại mỗi snapshot. Nếu `start > end`, app tự đảo.
-Mỗi đầu `<= 0` fallback lần lượt về `3` và `10`. Manual/Recovery không đọc hoặc mutate range này.
+`LastAutoDispatchAtUtc`; không random lại mỗi snapshot. Khoảng random chọn theo loại dispatch:
+Auto Open lấy `rd_*` (giá trị này chặn Open→Open cùng chiều và Open→Close), Auto Close lấy
+`close_rd_*` (chặn Close→Close). Nếu `start > end`, app tự đảo. Mỗi đầu `<= 0` fallback lần lượt
+về `3` và `10`, áp dụng cho cả hai nhóm. Manual/Recovery không đọc hoặc mutate các range này.
 
 ```sql
 comment on column public.configs.rd_start_same_action_lock_seconds is
-'Số giây nhỏ nhất chờ giữa hai Auto Open cùng chiều, từ Auto Open đến Auto Close, hoặc giữa hai Auto Close liên tiếp.';
+'Số giây nhỏ nhất chờ giữa hai Auto Open cùng chiều, hoặc từ Auto Open đến Auto Close.';
 
 comment on column public.configs.rd_end_same_action_lock_seconds is
-'Số giây lớn nhất chờ giữa hai Auto Open cùng chiều, từ Auto Open đến Auto Close, hoặc giữa hai Auto Close liên tiếp.';
+'Số giây lớn nhất chờ giữa hai Auto Open cùng chiều, hoặc từ Auto Open đến Auto Close.';
+
+comment on column public.configs.close_rd_start_same_action_lock_seconds is
+'Số giây nhỏ nhất chờ giữa hai Auto Close liên tiếp.';
+
+comment on column public.configs.close_rd_end_same_action_lock_seconds is
+'Số giây lớn nhất chờ giữa hai Auto Close liên tiếp.';
 ```
 
 ### 7.2 Routing thực thi lệnh

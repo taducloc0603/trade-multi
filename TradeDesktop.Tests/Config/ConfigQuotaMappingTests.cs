@@ -158,6 +158,57 @@ public sealed class ConfigQuotaMappingTests
         Assert.Equal(12, result.RdEndSameActionLockSeconds);
     }
 
+    [Fact]
+    public void Success_MapsCloseSameActionRandomRange_IndependentlyOfOpenRange()
+    {
+        var result = ConfigLoadResult.Success(
+            machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
+            platformA: "mt5", platformB: "mt5", point: 100, openPts: 1,
+            confirmGapPts: 0, holdConfirmMs: 0, openPriceFreezeMs: 2000,
+            closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
+            closeConfirmTpProfit: 0, closeMaxTpProfit: 35,
+            closeHoldConfirmMs: 0, closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
+            configId: "id", sansJson: "{}",
+            rdStartSameActionLockSeconds: 6,
+            rdEndSameActionLockSeconds: 12,
+            closeRdStartSameActionLockSeconds: 20,
+            closeRdEndSameActionLockSeconds: 40);
+
+        Assert.Equal(6, result.RdStartSameActionLockSeconds);
+        Assert.Equal(12, result.RdEndSameActionLockSeconds);
+        Assert.Equal(20, result.CloseRdStartSameActionLockSeconds);
+        Assert.Equal(40, result.CloseRdEndSameActionLockSeconds);
+    }
+
+    [Fact]
+    public void Success_CloseSameActionRange_DefaultsToThreeToTen_AndClampsNegative()
+    {
+        var defaults = ConfigLoadResult.Success(
+            machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
+            platformA: "mt5", platformB: "mt5", point: 100, openPts: 1,
+            confirmGapPts: 0, holdConfirmMs: 0, openPriceFreezeMs: 2000,
+            closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
+            closeConfirmTpProfit: 0, closeMaxTpProfit: 35,
+            closeHoldConfirmMs: 0, closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
+            configId: "id", sansJson: "{}");
+        var negative = ConfigLoadResult.Success(
+            machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
+            platformA: "mt5", platformB: "mt5", point: 100, openPts: 1,
+            confirmGapPts: 0, holdConfirmMs: 0, openPriceFreezeMs: 2000,
+            closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
+            closeConfirmTpProfit: 0, closeMaxTpProfit: 35,
+            closeHoldConfirmMs: 0, closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
+            configId: "id", sansJson: "{}",
+            closeRdStartSameActionLockSeconds: -5,
+            closeRdEndSameActionLockSeconds: -1);
+
+        Assert.Equal(3, defaults.CloseRdStartSameActionLockSeconds);
+        Assert.Equal(10, defaults.CloseRdEndSameActionLockSeconds);
+        // Âm → 0 ở tầng load; coordinator/RuntimeConfigState sau đó fallback 0 → 3..10.
+        Assert.Equal(0, negative.CloseRdStartSameActionLockSeconds);
+        Assert.Equal(0, negative.CloseRdEndSameActionLockSeconds);
+    }
+
     [Theory]
     [InlineData(2.5, 2.5)]
     [InlineData(-1.0, 0.0)]

@@ -54,7 +54,10 @@ hiện tại là tổng `5`, cận trên Buy `3`, cận trên Sell `3`. `Portfol
 
 ### Rule B — Auto cooldown + non-auto close barrier
 - Auto dùng transition gate theo action/side trước và action/side kế tiếp; không dùng một global post-action timer.
-- Open cùng chiều→Open cùng chiều và Close→Close: random theo `rd_start_same_action_lock_seconds..rd_end_same_action_lock_seconds`, sinh đúng một lần tại dispatch; invalid fallback 3..10.
+- Same-action random sinh đúng một lần tại dispatch, khoảng chọn theo loại action; invalid fallback 3..10 cho cả hai nhóm:
+  - Auto Open dispatch → `rd_start_same_action_lock_seconds..rd_end_same_action_lock_seconds`; chặn Open cùng chiều→Open cùng chiều và Open→Close.
+  - Auto Close dispatch → `close_rd_start_same_action_lock_seconds..close_rd_end_same_action_lock_seconds`; chặn Close→Close.
+  - Hai nhóm độc lập: `UpdateSameActionLockConfig` / `UpdateCloseSameActionLockConfig`, cùng push trong `SyncPortfolioCoordinatorConfig`.
 - Close→Open: random một lần trong `rd_start_post_close_lock_seconds..rd_end_post_close_lock_seconds`, lưu theo slot Auto Close. Open ngược chiều: `opposite_side_lock_seconds` + Open point policy.
 - Open→Close theo phương án B: từng slot random một lần khi Open confirmed trong `rd_start_post_open_lock_seconds..rd_end_post_open_lock_seconds`, rồi chỉ eligible khi hết deadline riêng.
 - Auto Open đảo chiều còn phải qua `opposite_open_min_distance_pts`: Buy→Sell dùng `(A.Bid-AvgBuyOpenA)*Point`; Sell→Buy dùng `(AvgSellOpenA-A.Ask)*Point`. Chỉ tính ticket A của slot Auto Live/PendingClose, re-check trong router mutex; Manual/Recovery không áp dụng.

@@ -143,6 +143,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public int RdEndPostOpenLockSeconds => _state.RdEndPostOpenLockSeconds;
     public int RdStartSameActionLockSeconds => _state.RdStartSameActionLockSeconds;
     public int RdEndSameActionLockSeconds => _state.RdEndSameActionLockSeconds;
+    public int CloseRdStartSameActionLockSeconds => _state.CloseRdStartSameActionLockSeconds;
+    public int CloseRdEndSameActionLockSeconds => _state.CloseRdEndSameActionLockSeconds;
     public int GlobalCooldownMinSec => _state.GlobalCooldownMinSec;
     public int GlobalCooldownMaxSec => _state.GlobalCooldownMaxSec;
     public RandomQuotaState RandomQuotaState => new(
@@ -608,11 +610,16 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
                 return transition;
             }
 
-            // Sinh đúng một lần tại mỗi Auto dispatch. Giá trị này chỉ được dùng nếu
-            // transition kế tiếp là Open→Open cùng chiều hoặc Close→Close.
-            var randomSec = NextSecondsInRange(
-                _state.RdStartSameActionLockSeconds,
-                _state.RdEndSameActionLockSeconds);
+            // Sinh đúng một lần tại mỗi Auto dispatch, khoảng random theo loại action:
+            // dispatch Open lấy rd_* (dùng cho Open→Open cùng chiều và Open→Close);
+            // dispatch Close lấy close_rd_* (dùng cho Close→Close).
+            var randomSec = requestedType == AutoTradeActionType.Close
+                ? NextSecondsInRange(
+                    _state.CloseRdStartSameActionLockSeconds,
+                    _state.CloseRdEndSameActionLockSeconds)
+                : NextSecondsInRange(
+                    _state.RdStartSameActionLockSeconds,
+                    _state.RdEndSameActionLockSeconds);
             _state.LastAutoDispatchType = requestedType;
             _state.LastAutoDispatchSide = side;
             _state.LastAutoDispatchAtUtc = requestedUtc;
@@ -1273,6 +1280,14 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         var end = endSeconds > 0 ? endSeconds : 10;
         _state.RdStartSameActionLockSeconds = Math.Min(start, end);
         _state.RdEndSameActionLockSeconds = Math.Max(start, end);
+    }
+
+    public void UpdateCloseSameActionLockConfig(int startSeconds, int endSeconds)
+    {
+        var start = startSeconds > 0 ? startSeconds : 3;
+        var end = endSeconds > 0 ? endSeconds : 10;
+        _state.CloseRdStartSameActionLockSeconds = Math.Min(start, end);
+        _state.CloseRdEndSameActionLockSeconds = Math.Max(start, end);
     }
 
     private void EnsurePostCloseLockSelected(DateTime triggeredAtUtc)

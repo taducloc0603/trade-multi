@@ -63,6 +63,9 @@ public sealed record ConfigRecord(
     int OppositeOpenMinDistancePts = 0,
     int RdStartSameActionLockSeconds = 3,
     int RdEndSameActionLockSeconds = 10,
+    // Khoảng random same-action chỉ cho Close→Close. rd_* ở trên chỉ còn dùng cho Open.
+    int CloseRdStartSameActionLockSeconds = 3,
+    int CloseRdEndSameActionLockSeconds = 10,
     int RdStartPostCloseLockSeconds = 300,
     int RdEndPostCloseLockSeconds = 300,
     int RdStartPostOpenLockSeconds = 0,
