@@ -67,6 +67,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     // Khoảng random same-action riêng cho Close→Close (close_rd_*). rd_* ở trên chỉ dùng cho Open.
     public int CurrentCloseRdStartSameActionLockSeconds { get; private set; } = 3;
     public int CurrentCloseRdEndSameActionLockSeconds { get; private set; } = 10;
+    // false khi start hoặc end của nhóm là null trong DB → nhóm không áp dụng same-action lock.
+    public bool CurrentSameActionLockEnabled { get; private set; } = true;
+    public bool CurrentCloseSameActionLockEnabled { get; private set; } = true;
 
     public int CurrentRdStartPostCloseLockSeconds { get; private set; } = 300;
     public int CurrentRdEndPostCloseLockSeconds { get; private set; } = 300;
@@ -234,7 +237,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         double minProfitToClose = -1,
         int? openMaxLastGapPts = null,
         int closeRdStartSameActionLockSeconds = -1,
-        int closeRdEndSameActionLockSeconds = -1)
+        int closeRdEndSameActionLockSeconds = -1,
+        bool? sameActionLockEnabled = null,
+        bool? closeSameActionLockEnabled = null)
         => Update(
             machineHostName,
             mapName1,
@@ -286,7 +291,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             minProfitToClose,
             openMaxLastGapPts,
             closeRdStartSameActionLockSeconds: closeRdStartSameActionLockSeconds,
-            closeRdEndSameActionLockSeconds: closeRdEndSameActionLockSeconds);
+            closeRdEndSameActionLockSeconds: closeRdEndSameActionLockSeconds,
+            sameActionLockEnabled: sameActionLockEnabled,
+            closeSameActionLockEnabled: closeSameActionLockEnabled);
 
     public void Update(
         string machineHostName,
@@ -339,7 +346,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         double minProfitToClose = -1,
         int? openMaxLastGapPts = null,
         int closeRdStartSameActionLockSeconds = -1,
-        int closeRdEndSameActionLockSeconds = -1)
+        int closeRdEndSameActionLockSeconds = -1,
+        bool? sameActionLockEnabled = null,
+        bool? closeSameActionLockEnabled = null)
     {
         var oldOpenN = CurrentOpenNumberOfQualifyingTimes;
         var oldCloseN = CurrentCloseNumberOfQualifyingTimes;
@@ -445,6 +454,15 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentCloseRdStartSameActionLockSeconds = Math.Min(start, end);
             CurrentCloseRdEndSameActionLockSeconds = Math.Max(start, end);
         }
+        // null = giữ nguyên (caller không truyền); true/false = bật/tắt nhóm same-action.
+        if (sameActionLockEnabled is { } openEnabled)
+        {
+            CurrentSameActionLockEnabled = openEnabled;
+        }
+        if (closeSameActionLockEnabled is { } closeEnabled)
+        {
+            CurrentCloseSameActionLockEnabled = closeEnabled;
+        }
         if (rdStartPostCloseLockSeconds >= 0 || rdEndPostCloseLockSeconds >= 0)
         {
             var start = rdStartPostCloseLockSeconds > 0 ? rdStartPostCloseLockSeconds : 300;
@@ -525,7 +543,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             minProfitToClose: CurrentMinProfitToClose,
             openMaxLastGapPts: CurrentOpenMaxLastGapPts,
             closeRdStartSameActionLockSeconds: CurrentCloseRdStartSameActionLockSeconds,
-            closeRdEndSameActionLockSeconds: CurrentCloseRdEndSameActionLockSeconds);
+            closeRdEndSameActionLockSeconds: CurrentCloseRdEndSameActionLockSeconds,
+            sameActionLockEnabled: CurrentSameActionLockEnabled,
+            closeSameActionLockEnabled: CurrentCloseSameActionLockEnabled);
 
     public void Update(string machineHostName, string mapName1, string mapName2)
         => Update(
@@ -573,7 +593,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             minProfitToClose: CurrentMinProfitToClose,
             openMaxLastGapPts: CurrentOpenMaxLastGapPts,
             closeRdStartSameActionLockSeconds: CurrentCloseRdStartSameActionLockSeconds,
-            closeRdEndSameActionLockSeconds: CurrentCloseRdEndSameActionLockSeconds);
+            closeRdEndSameActionLockSeconds: CurrentCloseRdEndSameActionLockSeconds,
+            sameActionLockEnabled: CurrentSameActionLockEnabled,
+            closeSameActionLockEnabled: CurrentCloseSameActionLockEnabled);
 
     // Quota từ DB (max_total_opens / max_buy_opens / max_sell_opens). Floor về 1 để không
     // bao giờ khoá toàn bộ open. Raise StateChanged để ApplyRuntimeConfig → SyncPortfolioCoordinatorConfig

@@ -55,6 +55,9 @@ public sealed class PortfolioState
     public int RdEndSameActionLockSeconds { get; set; } = 10;
     public int CloseRdStartSameActionLockSeconds { get; set; } = 3;
     public int CloseRdEndSameActionLockSeconds { get; set; } = 10;
+    // false khi start hoặc end của nhóm là null trong DB → nhóm không áp dụng same-action lock.
+    public bool IsSameActionLockEnabled { get; set; } = true;
+    public bool IsCloseSameActionLockEnabled { get; set; } = true;
 
     public int CountLiveAndPendingBuy()
         => _slots.Count(s => s.Side == TradingPositionSide.Buy && IsLiveOrPending(s.Status));

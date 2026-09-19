@@ -145,6 +145,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public int RdEndSameActionLockSeconds => _state.RdEndSameActionLockSeconds;
     public int CloseRdStartSameActionLockSeconds => _state.CloseRdStartSameActionLockSeconds;
     public int CloseRdEndSameActionLockSeconds => _state.CloseRdEndSameActionLockSeconds;
+    public bool IsSameActionLockEnabled => _state.IsSameActionLockEnabled;
+    public bool IsCloseSameActionLockEnabled => _state.IsCloseSameActionLockEnabled;
     public int GlobalCooldownMinSec => _state.GlobalCooldownMinSec;
     public int GlobalCooldownMaxSec => _state.GlobalCooldownMaxSec;
     public RandomQuotaState RandomQuotaState => new(
@@ -614,12 +616,16 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             // dispatch Open lấy rd_* (dùng cho Open→Open cùng chiều và Open→Close);
             // dispatch Close lấy close_rd_* (dùng cho Close→Close).
             var randomSec = requestedType == AutoTradeActionType.Close
-                ? NextSecondsInRange(
-                    _state.CloseRdStartSameActionLockSeconds,
-                    _state.CloseRdEndSameActionLockSeconds)
-                : NextSecondsInRange(
-                    _state.RdStartSameActionLockSeconds,
-                    _state.RdEndSameActionLockSeconds);
+                ? _state.IsCloseSameActionLockEnabled
+                    ? NextSecondsInRange(
+                        _state.CloseRdStartSameActionLockSeconds,
+                        _state.CloseRdEndSameActionLockSeconds)
+                    : 0
+                : _state.IsSameActionLockEnabled
+                    ? NextSecondsInRange(
+                        _state.RdStartSameActionLockSeconds,
+                        _state.RdEndSameActionLockSeconds)
+                    : 0;
             _state.LastAutoDispatchType = requestedType;
             _state.LastAutoDispatchSide = side;
             _state.LastAutoDispatchAtUtc = requestedUtc;
@@ -685,26 +691,50 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             return AcquiredTransition("NO_PREVIOUS_AUTO_ACTION");
         }
 
+        // Nhóm same-action bị tắt (start hoặc end null trong DB) thì bỏ lock ngay tại lúc kiểm tra,
+        // kể cả với giá trị đã random từ trước khi tắt. Open (rd_*) tắt → bỏ Open→Open cùng chiều
+        // và Open→Close; Close (close_rd_*) tắt → bỏ Close→Close. Close→Open (post-close) không liên quan.
         DateTime? lockUntil = null;
         var reason = "TRANSITION_NO_DELAY";
         if (_state.LastAutoDispatchType == AutoTradeActionType.Open
             && requestedType == AutoTradeActionType.Open
             && _state.LastAutoDispatchSide == requestedSide)
         {
-            lockUntil = _state.LastAutoDispatchAtUtc.Value.AddSeconds(_state.LastAutoRandomIntervalSeconds);
-            reason = "SAME_SIDE_OPEN_RANDOM_LOCK";
+            if (_state.IsSameActionLockEnabled)
+            {
+                lockUntil = _state.LastAutoDispatchAtUtc.Value.AddSeconds(_state.LastAutoRandomIntervalSeconds);
+                reason = "SAME_SIDE_OPEN_RANDOM_LOCK";
+            }
+            else
+            {
+                reason = "SAME_ACTION_LOCK_DISABLED";
+            }
         }
         else if (_state.LastAutoDispatchType == AutoTradeActionType.Open
                  && requestedType == AutoTradeActionType.Close)
         {
-            lockUntil = _state.LastAutoDispatchAtUtc.Value.AddSeconds(_state.LastAutoRandomIntervalSeconds);
-            reason = "OPEN_TO_CLOSE_RANDOM_LOCK";
+            if (_state.IsSameActionLockEnabled)
+            {
+                lockUntil = _state.LastAutoDispatchAtUtc.Value.AddSeconds(_state.LastAutoRandomIntervalSeconds);
+                reason = "OPEN_TO_CLOSE_RANDOM_LOCK";
+            }
+            else
+            {
+                reason = "SAME_ACTION_LOCK_DISABLED";
+            }
         }
         else if (_state.LastAutoDispatchType == AutoTradeActionType.Close
                  && requestedType == AutoTradeActionType.Close)
         {
-            lockUntil = _state.LastAutoDispatchAtUtc.Value.AddSeconds(_state.LastAutoRandomIntervalSeconds);
-            reason = "CLOSE_TO_CLOSE_RANDOM_LOCK";
+            if (_state.IsCloseSameActionLockEnabled)
+            {
+                lockUntil = _state.LastAutoDispatchAtUtc.Value.AddSeconds(_state.LastAutoRandomIntervalSeconds);
+                reason = "CLOSE_TO_CLOSE_RANDOM_LOCK";
+            }
+            else
+            {
+                reason = "SAME_ACTION_LOCK_DISABLED";
+            }
         }
         else if (_state.LastAutoDispatchType == AutoTradeActionType.Close
                  && requestedType == AutoTradeActionType.Open)
@@ -1274,20 +1304,24 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
 
     public void UpdatePostOpenLockConfig(int seconds) => UpdatePostOpenLockConfig(seconds, seconds);
 
-    public void UpdateSameActionLockConfig(int startSeconds, int endSeconds)
+    // enabled = false khi start hoặc end của nhóm là null trong DB: nhóm không áp dụng same-action lock.
+    // Khoảng số vẫn được normalize như cũ để bật lại là dùng được ngay.
+    public void UpdateSameActionLockConfig(int startSeconds, int endSeconds, bool enabled = true)
     {
         var start = startSeconds > 0 ? startSeconds : 3;
         var end = endSeconds > 0 ? endSeconds : 10;
         _state.RdStartSameActionLockSeconds = Math.Min(start, end);
         _state.RdEndSameActionLockSeconds = Math.Max(start, end);
+        _state.IsSameActionLockEnabled = enabled;
     }
 
-    public void UpdateCloseSameActionLockConfig(int startSeconds, int endSeconds)
+    public void UpdateCloseSameActionLockConfig(int startSeconds, int endSeconds, bool enabled = true)
     {
         var start = startSeconds > 0 ? startSeconds : 3;
         var end = endSeconds > 0 ? endSeconds : 10;
         _state.CloseRdStartSameActionLockSeconds = Math.Min(start, end);
         _state.CloseRdEndSameActionLockSeconds = Math.Max(start, end);
+        _state.IsCloseSameActionLockEnabled = enabled;
     }
 
     private void EnsurePostCloseLockSelected(DateTime triggeredAtUtc)

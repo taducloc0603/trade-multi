@@ -353,8 +353,8 @@ những limit còn lại dùng `0` để disable):
 | `sos_close_gap_pts` | `CurrentSosCloseGapPts` | `int` | Ngưỡng phát Gap Close khi SOS bật; được phép là số âm |
 | `rd_start_post_open_lock_seconds` / `rd_end_post_open_lock_seconds` | Runtime post-open range | `int` | Random một lần cho từng slot khi Open confirmed; chặn Auto Close của slot đó |
 | `rd_start_post_close_lock_seconds` / `rd_end_post_close_lock_seconds` | Runtime post-close range | `int` | Random một lần cho mỗi Auto Close; chặn Auto Open cho tới hết deadline |
-| `rd_start_same_action_lock_seconds` / `rd_end_same_action_lock_seconds` | Runtime same-action range (Open) | `int` | Random tại Auto Open dispatch, dùng cho Open cùng chiều→Open cùng chiều và Open→Close |
-| `close_rd_start_same_action_lock_seconds` / `close_rd_end_same_action_lock_seconds` | Runtime same-action range (Close) | `int` | Random tại Auto Close dispatch, dùng cho Close→Close. Migration: `docs/CLOSE-SAME-ACTION-LOCK-MIGRATION.sql` |
+| `rd_start_same_action_lock_seconds` / `rd_end_same_action_lock_seconds` | Runtime same-action range (Open) | `int?` | Random tại Auto Open dispatch, dùng cho Open cùng chiều→Open cùng chiều và Open→Close. Start hoặc end `NULL` = tắt |
+| `close_rd_start_same_action_lock_seconds` / `close_rd_end_same_action_lock_seconds` | Runtime same-action range (Close) | `int?` | Random tại Auto Close dispatch, dùng cho Close→Close. Start hoặc end `NULL` = tắt. Migration: `docs/CLOSE-SAME-ACTION-LOCK-MIGRATION.sql` |
 
 **Signal cycle và price-freeze:**
 
@@ -398,7 +398,10 @@ Same-action range được random đúng một lần tại mỗi Auto dispatch v
 `LastAutoDispatchAtUtc`; không random lại mỗi snapshot. Khoảng random chọn theo loại dispatch:
 Auto Open lấy `rd_*` (giá trị này chặn Open→Open cùng chiều và Open→Close), Auto Close lấy
 `close_rd_*` (chặn Close→Close). Nếu `start > end`, app tự đảo. Mỗi đầu `<= 0` fallback lần lượt
-về `3` và `10`, áp dụng cho cả hai nhóm. Manual/Recovery không đọc hoặc mutate các range này.
+về `3` và `10`, áp dụng cho cả hai nhóm. **Nếu start HOẶC end của một nhóm là `NULL` thì nhóm đó bị
+tắt**: không chờ same-action (log `[DB]` in `rd_same_action=OFF` / `close_rd_same_action=OFF`, gate trả
+reason `SAME_ACTION_LOCK_DISABLED`). Nhóm kia và các lock post-close / post-open vẫn áp dụng.
+Manual/Recovery không đọc hoặc mutate các range này.
 
 ```sql
 comment on column public.configs.rd_start_same_action_lock_seconds is
