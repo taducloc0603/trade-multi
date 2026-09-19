@@ -209,6 +209,29 @@ public sealed class ConfigQuotaMappingTests
         Assert.Equal(0, negative.CloseRdEndSameActionLockSeconds);
     }
 
+    [Fact]
+    public void Success_KeepsNullSameActionBounds_SoGroupCanBeDisabled()
+    {
+        var result = ConfigLoadResult.Success(
+            machineHostName: "host", mapName1: "A", mapName2: "B", manualHwndColumns: null,
+            platformA: "mt5", platformB: "mt5", point: 100, openPts: 1,
+            confirmGapPts: 0, holdConfirmMs: 0, openPriceFreezeMs: 2000,
+            closePts: 1, closeConfirmGapPts: 0, closeTpProfit: 1,
+            closeConfirmTpProfit: 0, closeMaxTpProfit: 35,
+            closeHoldConfirmMs: 0, closePriceFreezeMs: 2000, startTimeHold: 5, endTimeHold: 15,
+            configId: "id", sansJson: "{}",
+            rdStartSameActionLockSeconds: null,
+            rdEndSameActionLockSeconds: 10,
+            closeRdStartSameActionLockSeconds: 20,
+            closeRdEndSameActionLockSeconds: null);
+
+        // Không được đổi null thành số: caller dựa vào HasValue để tắt nhóm.
+        Assert.Null(result.RdStartSameActionLockSeconds);
+        Assert.Equal(10, result.RdEndSameActionLockSeconds);
+        Assert.Equal(20, result.CloseRdStartSameActionLockSeconds);
+        Assert.Null(result.CloseRdEndSameActionLockSeconds);
+    }
+
     [Theory]
     [InlineData(2.5, 2.5)]
     [InlineData(-1.0, 0.0)]

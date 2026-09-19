@@ -37,6 +37,8 @@ public interface IPortfolioCoordinator
     int RdEndSameActionLockSeconds { get; }
     int CloseRdStartSameActionLockSeconds { get; }
     int CloseRdEndSameActionLockSeconds { get; }
+    bool IsSameActionLockEnabled { get; }
+    bool IsCloseSameActionLockEnabled { get; }
     int GlobalCooldownMinSec { get; }
     int GlobalCooldownMaxSec { get; }
     RandomQuotaState RandomQuotaState { get; }
@@ -102,8 +104,8 @@ public interface IPortfolioCoordinator
     void UpdateOppositeSideLockConfig(int seconds);
     void UpdatePostCloseLockConfig(int startSeconds, int endSeconds);
     void UpdatePostOpenLockConfig(int startSeconds, int endSeconds);
-    void UpdateSameActionLockConfig(int startSeconds, int endSeconds);
-    void UpdateCloseSameActionLockConfig(int startSeconds, int endSeconds);
+    void UpdateSameActionLockConfig(int startSeconds, int endSeconds, bool enabled = true);
+    void UpdateCloseSameActionLockConfig(int startSeconds, int endSeconds, bool enabled = true);
     void UpdateScheduleSleepingConfig(string? scheduleSleepingJson);
 
     // === Rollback (open/close execution failed) ===

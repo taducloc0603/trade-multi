@@ -58,6 +58,10 @@ hiện tại là tổng `5`, cận trên Buy `3`, cận trên Sell `3`. `Portfol
   - Auto Open dispatch → `rd_start_same_action_lock_seconds..rd_end_same_action_lock_seconds`; chặn Open cùng chiều→Open cùng chiều và Open→Close.
   - Auto Close dispatch → `close_rd_start_same_action_lock_seconds..close_rd_end_same_action_lock_seconds`; chặn Close→Close.
   - Hai nhóm độc lập: `UpdateSameActionLockConfig` / `UpdateCloseSameActionLockConfig`, cùng push trong `SyncPortfolioCoordinatorConfig`.
+  - **`null` ở start HOẶC end của một nhóm = TẮT nhóm đó** (không chờ same-action; `enabled = start.HasValue && end.HasValue`).
+    Khác với `<= 0` (vẫn fallback 3..10). `null` phải đi nguyên từ repository → `ConfigLoadResult` (`int?`),
+    đừng thêm fallback số ở tầng load. Cờ được kiểm cả lúc dispatch (random = 0) lẫn trong `EvaluateAutoTransition`
+    (reason `SAME_ACTION_LOCK_DISABLED`) để tắt qua Reconnect có hiệu lực ngay. Post-close / post-open không bị ảnh hưởng.
 - Close→Open: random một lần trong `rd_start_post_close_lock_seconds..rd_end_post_close_lock_seconds`, lưu theo slot Auto Close. Open ngược chiều: `opposite_side_lock_seconds` + Open point policy.
 - Open→Close theo phương án B: từng slot random một lần khi Open confirmed trong `rd_start_post_open_lock_seconds..rd_end_post_open_lock_seconds`, rồi chỉ eligible khi hết deadline riêng.
 - Auto Open đảo chiều còn phải qua `opposite_open_min_distance_pts`: Buy→Sell dùng `(A.Bid-AvgBuyOpenA)*Point`; Sell→Buy dùng `(AvgSellOpenA-A.Ask)*Point`. Chỉ tính ticket A của slot Auto Live/PendingClose, re-check trong router mutex; Manual/Recovery không áp dụng.

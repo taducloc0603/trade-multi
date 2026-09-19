@@ -426,8 +426,8 @@ public sealed class ConfigViewModel : ObservableObject
                 closeMaxTpProfit: loadResult.CloseMaxTpProfit,
                 limitMaxTp: loadResult.LimitMaxTp,
                 oppositeOpenMinDistancePts: loadResult.OppositeOpenMinDistancePts,
-                rdStartSameActionLockSeconds: loadResult.RdStartSameActionLockSeconds,
-                rdEndSameActionLockSeconds: loadResult.RdEndSameActionLockSeconds,
+                rdStartSameActionLockSeconds: loadResult.RdStartSameActionLockSeconds ?? -1,
+                rdEndSameActionLockSeconds: loadResult.RdEndSameActionLockSeconds ?? -1,
                 rdStartPostCloseLockSeconds: loadResult.RdStartPostCloseLockSeconds,
                 rdEndPostCloseLockSeconds: loadResult.RdEndPostCloseLockSeconds,
                 rdStartPostOpenLockSeconds: loadResult.RdStartPostOpenLockSeconds,
@@ -441,8 +441,11 @@ public sealed class ConfigViewModel : ObservableObject
                 minProfitToClose: loadResult.MinProfitToClose,
                 maxLifeTimeBySecond: loadResult.MaxLifeTimeBySecond,
                 openMaxLastGapPts: loadResult.OpenMaxLastGapPts,
-                closeRdStartSameActionLockSeconds: loadResult.CloseRdStartSameActionLockSeconds,
-                closeRdEndSameActionLockSeconds: loadResult.CloseRdEndSameActionLockSeconds);
+                closeRdStartSameActionLockSeconds: loadResult.CloseRdStartSameActionLockSeconds ?? -1,
+                closeRdEndSameActionLockSeconds: loadResult.CloseRdEndSameActionLockSeconds ?? -1,
+                // start HOẶC end null trong DB → tắt nhóm đó (không chờ same-action).
+                sameActionLockEnabled: loadResult.RdStartSameActionLockSeconds.HasValue && loadResult.RdEndSameActionLockSeconds.HasValue,
+                closeSameActionLockEnabled: loadResult.CloseRdStartSameActionLockSeconds.HasValue && loadResult.CloseRdEndSameActionLockSeconds.HasValue);
             _runtimeConfigState.UpdateSignalCycleSize(loadResult.SignalCycleSize);
             _runtimeConfigState.UpdateGapStability(
                 loadResult.OpenGapStability!,
