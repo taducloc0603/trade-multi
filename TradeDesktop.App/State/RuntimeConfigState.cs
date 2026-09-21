@@ -68,6 +68,18 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     // Khoảng random same-action riêng cho Close→Close (close_rd_*). rd_* ở trên chỉ dùng cho Open.
     public int CurrentCloseRdStartSameActionLockSeconds { get; private set; } = 3;
     public int CurrentCloseRdEndSameActionLockSeconds { get; private set; } = 10;
+
+    // Task R8-B: ngưỡng latency riêng cho chân B khi B là cTrader (cột nullable `ctrader_confirm_latency_b`).
+    // KHÔNG clamp: 0 = tắt guard latency riêng cho chân B.
+    public int? CurrentCTraderConfirmLatencyB { get; private set; }
+
+    // Ngưỡng có hiệu lực cho chân B — guard và router PHẢI dùng cùng giá trị này.
+    // Chỉ áp dụng khi platform_b = ctrader (đúng như tên cột): cặp MT-MT luôn dùng confirm_latency chung,
+    // kể cả khi cột này có giá trị sót lại từ lần chạy cTrader trước đó.
+    public int CurrentConfirmLatencyMsBEffective =>
+        CTraderRoutingRules.IsCTraderPlatform(CurrentPlatformB) && CurrentCTraderConfirmLatencyB is { } ctraderLatencyB
+            ? ctraderLatencyB
+            : CurrentConfirmLatencyMs;
     // false khi start hoặc end của nhóm là null trong DB → nhóm không áp dụng same-action lock.
     public bool CurrentSameActionLockEnabled { get; private set; } = true;
     public bool CurrentCloseSameActionLockEnabled { get; private set; } = true;
@@ -250,6 +262,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int? openMaxLastGapPts = null,
         int closeRdStartSameActionLockSeconds = -1,
         int closeRdEndSameActionLockSeconds = -1,
+        // Sentinel: -1 = caller không truyền → giữ nguyên; null = dùng chung confirm_latency; >= 0 = ngưỡng riêng cho cTrader.
+        int? ctraderConfirmLatencyB = -1,
         bool? sameActionLockEnabled = null,
         bool? closeSameActionLockEnabled = null)
         => Update(
@@ -304,6 +318,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             openMaxLastGapPts,
             closeRdStartSameActionLockSeconds: closeRdStartSameActionLockSeconds,
             closeRdEndSameActionLockSeconds: closeRdEndSameActionLockSeconds,
+            ctraderConfirmLatencyB: ctraderConfirmLatencyB,
             sameActionLockEnabled: sameActionLockEnabled,
             closeSameActionLockEnabled: closeSameActionLockEnabled);
 
@@ -359,6 +374,8 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
         int? openMaxLastGapPts = null,
         int closeRdStartSameActionLockSeconds = -1,
         int closeRdEndSameActionLockSeconds = -1,
+        // Sentinel: -1 = caller không truyền → giữ nguyên; null = dùng chung confirm_latency; >= 0 = ngưỡng riêng cho cTrader.
+        int? ctraderConfirmLatencyB = -1,
         bool? sameActionLockEnabled = null,
         bool? closeSameActionLockEnabled = null)
     {
@@ -459,6 +476,11 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentRdStartSameActionLockSeconds = Math.Min(start, end);
             CurrentRdEndSameActionLockSeconds = Math.Max(start, end);
         }
+        // -1 = caller không truyền (vd. ConfigViewModel mở cửa sổ Config) → giữ nguyên giá trị đang chạy.
+        if (ctraderConfirmLatencyB is not -1)
+        {
+            CurrentCTraderConfirmLatencyB = ctraderConfirmLatencyB;
+        }
         if (closeRdStartSameActionLockSeconds >= 0 || closeRdEndSameActionLockSeconds >= 0)
         {
             var start = closeRdStartSameActionLockSeconds > 0 ? closeRdStartSameActionLockSeconds : 3;
@@ -556,6 +578,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             openMaxLastGapPts: CurrentOpenMaxLastGapPts,
             closeRdStartSameActionLockSeconds: CurrentCloseRdStartSameActionLockSeconds,
             closeRdEndSameActionLockSeconds: CurrentCloseRdEndSameActionLockSeconds,
+            ctraderConfirmLatencyB: CurrentCTraderConfirmLatencyB,
             sameActionLockEnabled: CurrentSameActionLockEnabled,
             closeSameActionLockEnabled: CurrentCloseSameActionLockEnabled);
 
@@ -606,6 +629,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             openMaxLastGapPts: CurrentOpenMaxLastGapPts,
             closeRdStartSameActionLockSeconds: CurrentCloseRdStartSameActionLockSeconds,
             closeRdEndSameActionLockSeconds: CurrentCloseRdEndSameActionLockSeconds,
+            ctraderConfirmLatencyB: CurrentCTraderConfirmLatencyB,
             sameActionLockEnabled: CurrentSameActionLockEnabled,
             closeSameActionLockEnabled: CurrentCloseSameActionLockEnabled);
 

@@ -66,6 +66,10 @@ public sealed record ConfigRecord(
     // Khoảng random same-action chỉ cho Close→Close. rd_* ở trên chỉ còn dùng cho Open.
     int? CloseRdStartSameActionLockSeconds = 3,
     int? CloseRdEndSameActionLockSeconds = 10,
+    // Ngưỡng latency riêng cho chân B khi B là cTrader (cột nullable `ctrader_confirm_latency_b`).
+    // null — hoặc platform_b là MT — thì dùng chung `ConfirmLatencyMs` (hành vi trước task R8-B).
+    // KHÔNG clamp ở bất kỳ tầng nào: 0 = tắt guard latency riêng cho chân B.
+    int? CTraderConfirmLatencyB = null,
     int RdStartPostCloseLockSeconds = 300,
     int RdEndPostCloseLockSeconds = 300,
     int RdStartPostOpenLockSeconds = 0,

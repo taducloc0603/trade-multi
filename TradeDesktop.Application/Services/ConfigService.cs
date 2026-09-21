@@ -142,6 +142,7 @@ public sealed class ConfigService(
             rdEndSameActionLockSeconds: record.RdEndSameActionLockSeconds,
             closeRdStartSameActionLockSeconds: record.CloseRdStartSameActionLockSeconds,
             closeRdEndSameActionLockSeconds: record.CloseRdEndSameActionLockSeconds,
+            ctraderConfirmLatencyB: record.CTraderConfirmLatencyB,
             rdStartPostCloseLockSeconds: record.RdStartPostCloseLockSeconds,
             rdEndPostCloseLockSeconds: record.RdEndPostCloseLockSeconds,
             rdStartPostOpenLockSeconds: record.RdStartPostOpenLockSeconds,
@@ -375,7 +376,8 @@ public sealed record ConfigLoadResult(
         GapStabilityConfig? openGapStability = null,
         GapStabilityConfig? closeGapStability = null,
         int signalCycleSize = 10,
-        int? openMaxLastGapPts = null) =>
+        int? openMaxLastGapPts = null,
+        int? ctraderConfirmLatencyB = null) =>
         new(
             true,
             true,
@@ -450,7 +452,8 @@ public sealed record ConfigLoadResult(
             closeGapStability,
             signalCycleSize,
             // Signed, không clamp: null = tắt gate, 0 và số âm vẫn hiệu lực.
-            openMaxLastGapPts);
+            openMaxLastGapPts,
+            CTraderConfirmLatencyB: ctraderConfirmLatencyB);
 
     public static ConfigLoadResult NotFound(string machineHostName) =>
         new(

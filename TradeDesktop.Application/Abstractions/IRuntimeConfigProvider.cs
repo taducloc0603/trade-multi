@@ -20,6 +20,10 @@ public interface IRuntimeConfigProvider
     int CurrentStartTimeHold { get; }
     int CurrentEndTimeHold { get; }
     int CurrentConfirmLatencyMs { get; }
+
+    // Task R8-B: ngưỡng latency có hiệu lực cho chân B (ctrader_confirm_latency_b khi B là cTrader, không thì dùng chung).
+    // Default giữ nguyên hành vi cũ cho các provider tối giản trong test.
+    int CurrentConfirmLatencyMsBEffective => CurrentConfirmLatencyMs;
     int CurrentMaxGap { get; }
     int CurrentLimitMaxGap { get; }
     double CurrentLimitMaxTp { get; }

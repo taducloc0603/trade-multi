@@ -663,10 +663,12 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             }
         }
 
+        // Task R8-B: chân A dùng confirm_latency, chân B dùng ctrader_confirm_latency_b khi B là cTrader. PHẢI khớp
+        // SignalEntryGuard.CheckLatency (cùng hàm ResolveLatencyLimitB) — lệch hai nơi là chặn sạch hoặc bỏ lọt.
         var maxLatency = Math.Max(0, _runtimeConfig.CurrentConfirmLatencyMs);
-        if (maxLatency > 0
-            && (metrics.ExchangeA.LatencyMs > maxLatency
-                || metrics.ExchangeB.LatencyMs > maxLatency))
+        var maxLatencyB = Math.Max(0, _runtimeConfig.CurrentConfirmLatencyMsBEffective);
+        if ((maxLatency > 0 && metrics.ExchangeA.LatencyMs > maxLatency)
+            || (maxLatencyB > 0 && metrics.ExchangeB.LatencyMs > maxLatencyB))
         {
             return (false, "LATEST_LATENCY_EXCEEDS_LIMIT");
         }

@@ -18,7 +18,12 @@ public static class SignalEntryGuard
         int ConfirmLatencyMs,
         int MaxGap,
         int MaxSpread,
-        int PointMultiplier);
+        int PointMultiplier,
+        // Ngưỡng latency RIÊNG cho chân B (task R8-B, cột `ctrader_confirm_latency_b`). `-1` = không cấu hình → chân B dùng chung
+        // `ConfirmLatencyMs` y như trước. Lý do tách: MT đo EA→app (dưới 1 ms) còn cTrader đo "bao lâu rồi
+        // chưa có tick" (đo trên live: p50 317 ms, p95 2 043 ms) — dùng chung một ngưỡng thì hoặc chặn sạch
+        // chân cTrader, hoặc phải nới ngưỡng và làm mất tác dụng guard ở chân MT.
+        int ConfirmLatencyMsB = -1);
 
     public sealed record GuardResult(bool CanTrade, string? SkipReason);
 
@@ -61,7 +66,7 @@ public static class SignalEntryGuard
         int priceFreezeMs)
     {
         // 1. Latency
-        var latencyResult = CheckLatency(metrics, config.ConfirmLatencyMs);
+        var latencyResult = CheckLatency(metrics, config.ConfirmLatencyMs, config.ConfirmLatencyMsB);
         if (!latencyResult.CanTrade) return latencyResult;
 
         // 2. Max gap
@@ -79,21 +84,29 @@ public static class SignalEntryGuard
         return new GuardResult(true, null);
     }
 
-    private static GuardResult CheckLatency(DashboardMetrics? metrics, int confirmLatencyMs)
+    // Chân A luôn dùng confirm_latency. Chân B dùng ngưỡng riêng khi caller truyền (>= 0), không thì dùng chung.
+    // Ai quyết định 'có truyền hay không' là RuntimeConfigState (chỉ khi platform_b = ctrader) — guard thuần theo tham số.
+    // Mỗi ngưỡng tự tắt riêng khi <= 0 — đặt ngưỡng B = 0 chỉ tắt guard ở chân B, không đụng chân A.
+    // TradeExecutionRouter phải giữ ĐÚNG luật này (re-check sau mutex) — sửa một nơi mà quên nơi kia sẽ lệch.
+    public static int ResolveLatencyLimitB(int confirmLatencyMs, int confirmLatencyMsB)
+        => confirmLatencyMsB >= 0 ? confirmLatencyMsB : confirmLatencyMs;
+
+    private static GuardResult CheckLatency(DashboardMetrics? metrics, int confirmLatencyMs, int confirmLatencyMsB)
     {
-        if (confirmLatencyMs <= 0 || metrics is null)
+        if (metrics is null)
             return new GuardResult(true, null);
 
+        var limitB = ResolveLatencyLimitB(confirmLatencyMs, confirmLatencyMsB);
         var latA = metrics.ExchangeA.LatencyMs;
         var latB = metrics.ExchangeB.LatencyMs;
 
-        if (latA.HasValue && latA.Value > confirmLatencyMs)
+        if (confirmLatencyMs > 0 && latA.HasValue && latA.Value > confirmLatencyMs)
             return new GuardResult(false,
                 $"Latency sàn A={latA.Value.ToString("0", CultureInfo.InvariantCulture)} ms > confirm_latency={confirmLatencyMs} ms");
 
-        if (latB.HasValue && latB.Value > confirmLatencyMs)
+        if (limitB > 0 && latB.HasValue && latB.Value > limitB)
             return new GuardResult(false,
-                $"Latency sàn B={latB.Value.ToString("0", CultureInfo.InvariantCulture)} ms > confirm_latency={confirmLatencyMs} ms");
+                $"Latency sàn B={latB.Value.ToString("0", CultureInfo.InvariantCulture)} ms > confirm_latency{(confirmLatencyMsB >= 0 ? "_b" : string.Empty)}={limitB} ms");
 
         return new GuardResult(true, null);
     }

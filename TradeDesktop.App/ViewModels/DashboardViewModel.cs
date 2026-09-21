@@ -3820,9 +3820,10 @@ public sealed class DashboardViewModel : ObservableObject
             : $"Sàn B ({_runtimeConfigState.MapName2})";
 
         RuntimeSummary =
-            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  MinProfitToClose: {_runtimeConfigState.CurrentMinProfitToClose}  |  MaxLifeTime: {_runtimeConfigState.CurrentMaxLifeTimeBySecond}s  |  SOS A Distance: {_runtimeConfigState.CurrentSosTriggerAOpenDistancePts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
+            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  MinProfitToClose: {_runtimeConfigState.CurrentMinProfitToClose}  |  MaxLifeTime: {_runtimeConfigState.CurrentMaxLifeTimeBySecond}s  |  SOS A Distance: {_runtimeConfigState.CurrentSosTriggerAOpenDistancePts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  CTraderConfirmLatencyB: {(_runtimeConfigState.CurrentCTraderConfirmLatencyB is { } latencyB ? latencyB.ToString(CultureInfo.InvariantCulture) : "SHARED")} (effective {_runtimeConfigState.CurrentConfirmLatencyMsBEffective})  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
 
-        HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsComplete);
+        var requiresExchangeBHwnd = !IsExchangeBCTrader();
+        HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsCompleteFor(requiresExchangeBHwnd));
         RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict()));
 
         SyncPortfolioCoordinatorConfig();
@@ -7148,6 +7149,7 @@ public sealed class DashboardViewModel : ObservableObject
                     startTimeHold: result.StartTimeHold,
                     endTimeHold: result.EndTimeHold,
                     confirmLatencyMs: result.ConfirmLatencyMs,
+                    ctraderConfirmLatencyB: result.CTraderConfirmLatencyB,
                     maxGap: result.MaxGap,
                     limitMaxGap: result.LimitMaxGap,
                     maxSpread: result.MaxSpread,
@@ -7430,7 +7432,9 @@ public sealed class DashboardViewModel : ObservableObject
                 ConfirmLatencyMs: _runtimeConfigState.CurrentConfirmLatencyMs,
                 MaxGap: _runtimeConfigState.CurrentMaxGap,
                 MaxSpread: _runtimeConfigState.CurrentMaxSpread,
-                PointMultiplier: _runtimeConfigState.CurrentPoint);
+                PointMultiplier: _runtimeConfigState.CurrentPoint,
+                // Task R8-B: chân B dùng ngưỡng riêng khi B là cTrader và cột có giá trị; còn lại dùng chung như trước.
+                ConfirmLatencyMsB: _runtimeConfigState.CurrentConfirmLatencyMsBEffective);
             var guardResult = SignalEntryGuard.Check(
                 trigger, metrics, guardConfig, _priceHistory, priceFreezeMs);
             var signalSummary = BuildAutoSignalSummary(trigger);
