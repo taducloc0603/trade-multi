@@ -1,5 +1,6 @@
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
+using TradeDesktop.Application.Services.CTrader;
 using TradeDesktop.Domain.Models;
 
 namespace TradeDesktop.App.State;
@@ -87,7 +88,18 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public int CurrentMaxSellOpens { get; private set; } = 3;
 
     public string CurrentMapName1 { get; private set; } = string.Empty;
-    public string CurrentMapName2 { get; private set; } = string.Empty;
+    // map_name_2 đã lưu (sans_json.mapNames[1]). Luôn là giá trị người dùng nhập cho đường MT.
+    public string StoredMapName2 { get; private set; } = string.Empty;
+
+    // Map sàn B có hiệu lực: khi platform_b = ctrader dùng kênh cố định để reader MMF không đọc nhầm EA MT
+    // sàn B còn chạy. Chỗ nào GHI config ngược lại (ConfigViewModel, reload không có record) phải dùng
+    // StoredMapName2, nếu không sẽ ghi đè map MT bằng CTRADER_B.
+    public string CurrentMapName2 =>
+        string.Equals(CurrentPlatformB, "ctrader", StringComparison.Ordinal)
+            ? CTraderFixConfig.ChannelMapName
+            : StoredMapName2;
+
+    public CTraderFixConfig CurrentCTraderFixConfig { get; private set; } = CTraderFixConfig.Empty;
     public string CurrentPlatformA { get; private set; } = "mt5";
     public string CurrentPlatformB { get; private set; } = "mt5";
     public string CurrentChartHwndA { get; private set; } = string.Empty;
@@ -478,7 +490,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             CurrentRdEndPostOpenLockSeconds = Math.Max(start, end);
         }
         CurrentMapName1 = (mapName1 ?? string.Empty).Trim();
-        CurrentMapName2 = (mapName2 ?? string.Empty).Trim();
+        StoredMapName2 = (mapName2 ?? string.Empty).Trim();
         CurrentPlatformA = NormalizePlatform(platformA);
         CurrentPlatformB = NormalizePlatform(platformB);
 
@@ -494,7 +506,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" ? normalized : "mt5";
     }
 
     public void Update(string machineHostName, string mapName1, string mapName2, int point)
@@ -625,6 +637,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     {
         CurrentPlatformA = NormalizePlatform(platformA);
         CurrentPlatformB = NormalizePlatform(platformB);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    // Tách riêng khỏi Update(...) (đã 30+ tham số, hai overload) theo khuôn UpdateManualTradeHwnd.
+    public void UpdateCTraderFix(CTraderFixConfig? ctraderFix)
+    {
+        CurrentCTraderFixConfig = (ctraderFix ?? CTraderFixConfig.Empty).Normalize();
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 

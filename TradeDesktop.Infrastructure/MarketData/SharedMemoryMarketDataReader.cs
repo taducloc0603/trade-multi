@@ -22,6 +22,7 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
     private const long TickTimeMscOffset = 40;
     private const long SymbolOffset = 48;
     private const int MaxSymbolBytesToRead = 64;
+    private const string CTraderPlatformName = "ctrader";
 
     private readonly object _syncRoot = new();
     private readonly IRuntimeConfigProvider _runtimeConfigProvider;
@@ -32,10 +33,14 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
     private readonly Dictionary<string, decimal?> _lastLatencyMsByMap = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? _cts;
     private Task? _worker;
+    private readonly ICTraderQuoteSession? _ctraderQuoteSession;
 
-    public SharedMemoryMarketDataReader(IRuntimeConfigProvider runtimeConfigProvider)
+    public SharedMemoryMarketDataReader(
+        IRuntimeConfigProvider runtimeConfigProvider,
+        ICTraderQuoteSession? ctraderQuoteSession = null)
     {
         _runtimeConfigProvider = runtimeConfigProvider;
+        _ctraderQuoteSession = ctraderQuoteSession;
     }
 
     public event EventHandler<SharedMemorySnapshot>? SnapshotReceived;
@@ -108,8 +113,17 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
 
             RefreshMapReaders(mapName1, mapName2);
 
+            // Phase 4 G3/G4: nguồn giá sàn B resolve lại MỖI TICK theo platform_b hiện hành. Session tự no-op khi
+            // B không phải cTrader và tự logout khi đổi khỏi cTrader. Không có session (mock/test) → đường MMF cũ.
+            var platformB = _runtimeConfigProvider.CurrentPlatformB;
+            _ctraderQuoteSession?.EnsureState(platformB, _runtimeConfigProvider.CurrentCTraderFixConfig);
+            var isCTraderB = _ctraderQuoteSession is not null
+                && string.Equals(platformB, CTraderPlatformName, StringComparison.OrdinalIgnoreCase);
+
             var sanA = ReadExchangeMetrics(mapName1, "SanA");
-            var sanB = ReadExchangeMetrics(mapName2, "SanB");
+            var sanB = isCTraderB
+                ? _ctraderQuoteSession!.Read(sanA, _runtimeConfigProvider.CurrentPoint, _runtimeConfigProvider.CurrentConfirmLatencyMs)
+                : ReadExchangeMetrics(mapName2, "SanB");
 
             SnapshotReceived?.Invoke(this, new SharedMemorySnapshot(sanA, sanB, DateTime.UtcNow));
         }

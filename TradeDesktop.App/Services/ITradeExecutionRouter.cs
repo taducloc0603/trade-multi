@@ -11,7 +11,8 @@ public interface ITradeExecutionRouter
 public enum TradeLegPlatform
 {
     Mt4 = 0,
-    Mt5 = 1
+    Mt5 = 1,
+    CTrader = 2
 }
 
 public enum TradeLegAction

@@ -284,17 +284,23 @@ dòng trong lúc tách thì revert không còn là thao tác an toàn.
 
 ### Hoãn có điều kiện (chủ dự án quyết 2026-09-17)
 
+> **Phát hiện thêm khi soak (2026-09-21 07:00:00 = 00:00 UTC):** QuickFIX/n tự reset sequence number theo mốc ngày
+> (`StartTime=EndTime=00:00:00`) nên gửi tiếp với `34=1` trong khi server vẫn đếm tiếp → server trả
+> `35=5 text="MsgSeqNum too low, expecting 275 but received 1"`, app logout + fail-closed và tự logon lại sau **3 s**
+> (QUOTE cùng lúc làm ResendRequest/SequenceReset, không rớt phiên). Hành vi an toàn (fail-closed) và tự khỏi;
+> nếu muốn tránh hẳn 3 s gián đoạn mỗi ngày thì dời `StartTime` khỏi 00:00 UTC — **xét ở Phase 8**, không sửa ở đây.
+
 Phase 4 **tạm đóng để sang Phase 5/6** (hai phase đó chạy tài khoản trống, không đặt lệnh). Các mục dưới đây
 **chưa xong**, được mang sang và là **điều kiện bắt buộc trước Phase 7** (phiên tiền thật) — xem
 [Phase 7 "Phụ thuộc phase trước"](phase-7-execution.md). Có thể chạy soak song song trong lúc làm Phase 5/6.
 
 | ID | Việc còn treo | Cách đóng | Chặn |
 |---|---|---|---|
-| P4-D1 | Soak nhiều ngày, qua cuối tuần; không rò bộ nhớ/handle | Để app chạy `platform_b=ctrader`, không Start; đọc `-ctrader.log` + Task Manager | Phase 7 |
-| P4-D2 | Giờ nghỉ hằng ngày 03:59:45 → 05:00 (UTC+7): QUOTE có logout, book xoá, IsConnected B thế nào | Đọc `-ctrader.log` quanh 03:59–05:01 | Phase 7 |
-| P4-D3 | Kill mạng im lặng với kiểm tra sống bản cuối 5 s/5 s (thiết kế ≤ 10 s) — plan gốc đòi < 1 s, **❌ không đạt được với mất mạng im lặng** | Tắt Wi-Fi ~20 s, đo từ `netwatch.ps1` + log; chủ dự án chấp nhận ngưỡng ≤ 10 s hoặc chọn khác | Phase 7 |
-| P4-D4 | cServer QUOTE có trả lời TestRequest không | `[STATS] probes_sent/probes_answered`; nếu 0 trả lời → quyết giữ/gỡ kiểm tra sống | Phase 7 |
-| P4-D5 | Tổng hợp R8: tần suất skip `LATENCY` B + min/median/p95/max tuổi tick cả phiên soak | Gom các dòng `[STATS]` | Task R8-B → Phase 7 |
+| P4-D1 | ~~Soak nhiều ngày~~ **1 đêm xong (2026-09-20 20:53 → 09-21 07:20, 10,5 h liên tục, PID 21580): không rò rỉ** — RAM 282 → 191 MB, handle 1773 → 1263, thread 24 → 25. Còn: qua cuối tuần trọn vẹn trên bản build cuối. | `-ctrader.log` + Task Manager | Phase 7 |
+| P4-D2 | ~~Giờ nghỉ hằng ngày~~ **ĐÃ ĐO (2026-09-21):** server **không** ngắt lúc 03:59:45; nó gửi `35=5 text=Session reset` đúng **05:00:00.371** cho CẢ QUOTE và TRADE → app xoá book + trades/history map về MapNotFound ngay → QuickFIX tự logon lại **05:00:03.698** (3,3 s), SecurityList + `728=2` + map AVAILABLE lại. Không cần thao tác tay. | log 05:00 | ✅ đóng |
+| P4-D3 | ~~Kill mạng im lặng với kiểm tra sống 5 s/5 s~~ **ĐÃ ĐO (2026-09-21 08:55, giờ giao dịch):** Wi-Fi tắt 08:55:44.9 → QUOTE fail-closed **9,2 s** (08:55:54.1, im lặng 10 s + TestRequest không phản hồi 5 s); QuickFIX mới logout ở 26,5 s. **TRADE không có kiểm tra sống → 46 s** (08:56:30.9) mới về MapNotFound (đúng như ghi nhận Phase 5 #7). Bật lại mạng 08:56:48.7 → TRADE logon 0,7 s, QUOTE logon 2,2 s, Telegram logout/logon đúng debounce 30 s. Chuỗi: 46,8 s (không có) → 4,2 s (3 s/2 s, báo oan) → **9,2 s (5 s/5 s, không báo oan)**. **Mục tiêu < 1 s không đạt với mất mạng im lặng — cần chủ dự án chấp nhận 9,2 s** (hoặc thêm kiểm tra sống cho TRADE ở Phase 8). | log + netwatch 08:55–08:56 | chờ duyệt |
+| P4-D4 | ~~cServer có trả lời TestRequest không~~ **CÓ (2026-09-20/21):** trả lời trong ~330 ms; giờ giao dịch 20/20 probe được trả lời, `stale_events=0`. Cuối tuần (thị trường đóng) có **4 lần** server trả lời chậm > 5 s → app fail-closed 0,7–7 s rồi tự phục hồi bằng `35=0`. → **GIỮ kiểm tra sống 5 s/5 s**; cân nhắc nới timeout nếu muốn hết false-stale cuối tuần. | `[STATS] probes_*` | ✅ đóng (còn theo dõi) |
+| P4-D5 | ~~Tổng hợp R8~~ **ĐÃ CÓ (2026-09-21, 141 phút sau khi mở cửa):** 155 tick/phút; tuổi tick p50 **317 ms**, p95 **2 043 ms**, max 27 s (phút đầu mở cửa); với `confirm_latency_ms=100` thì **76 %** số lần đọc sẽ bị skip `LATENCY`. → đề xuất `confirm_latency_ms_b` ≈ **3 000 ms** (trên p95, dưới ngưỡng fail-closed 10 s của kiểm tra sống). | Gom `[STATS]` | Task R8-B → Phase 7 |
 | P4-D6 | Logout khi đóng app bằng nút X (đã sửa monitor giữ handler log, chưa kiểm lại) | Đóng app bằng X, log phải có `unsubscribe` + `QUOTE stopped` | Phase 7 |
 | P4-D7 | `CheckPriceFreeze` khi dừng EA chân A + so log phiên mt5/mt5 với trước Phase 4 — cần Start | Làm trong Phase 7 Bước B (lúc đó đã chấp nhận Start) | Phase 7 |
 | P4-D8 | Ma trận có MT4 (4 ô) — máy không có terminal MT4 | Cài MT4 hoặc chủ dự án chấp nhận chỉ unit test | Phase 8 |

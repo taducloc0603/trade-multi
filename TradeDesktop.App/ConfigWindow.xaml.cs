@@ -21,6 +21,12 @@ public partial class ConfigWindow : Window
         base.OnClosed(e);
     }
 
+    // PasswordBox không bind hai chiều được: đẩy giá trị một chiều vào ViewModel, không bao giờ đọc ngược.
+    private void OnCTraderPasswordChanged(object sender, RoutedEventArgs e)
+    {
+        _viewModel.SetCTraderPassword(CTraderPasswordBox.Password);
+    }
+
     private void OnRequestClose(bool? dialogResult)
     {
         DialogResult = dialogResult;

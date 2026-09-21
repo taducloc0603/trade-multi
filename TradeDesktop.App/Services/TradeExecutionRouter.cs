@@ -11,6 +11,7 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
 {
     private readonly ITradePlatformExecutor _mt4Executor;
     private readonly ITradePlatformExecutor _mt5Executor;
+    private readonly ITradePlatformExecutor? _ctraderExecutor;
     private readonly ITradeSessionFileLogger _logger;
     private readonly IPortfolioCoordinator _portfolioCoordinator;
     private readonly IRuntimeConfigProvider _runtimeConfig;
@@ -28,6 +29,7 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
     {
         _mt4Executor = executors.First(x => x.Platform == TradeLegPlatform.Mt4);
         _mt5Executor = executors.First(x => x.Platform == TradeLegPlatform.Mt5);
+        _ctraderExecutor = executors.FirstOrDefault(x => x.Platform == TradeLegPlatform.CTrader);
         _logger = logger;
         _portfolioCoordinator = portfolioCoordinator;
         _runtimeConfig = runtimeConfig;
@@ -798,7 +800,13 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
 
     private static void ValidatePlatformOrThrow(TradeLegPlatform platform, string exchange)
     {
-        if (platform is TradeLegPlatform.Mt4 or TradeLegPlatform.Mt5)
+        // Chốt chặn cuối cho trường hợp platform_a bị sửa thẳng trong DB, bỏ qua guard lúc Save config.
+        if (exchange == "A" && platform == TradeLegPlatform.CTrader)
+        {
+            throw new InvalidOperationException("cTrader chỉ được dùng cho sàn B.");
+        }
+
+        if (platform is TradeLegPlatform.Mt4 or TradeLegPlatform.Mt5 or TradeLegPlatform.CTrader)
         {
             return;
         }
@@ -890,6 +898,8 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         {
             TradeLegPlatform.Mt4 => _mt4Executor,
             TradeLegPlatform.Mt5 => _mt5Executor,
+            TradeLegPlatform.CTrader => _ctraderExecutor
+                ?? throw new InvalidOperationException("Chưa đăng ký executor cho cTrader."),
             _ => throw new InvalidOperationException($"Unsupported platform: {platform}")
         };
     }

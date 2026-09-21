@@ -48,6 +48,11 @@ public interface IRuntimeConfigProvider
     string CurrentMapName2 { get; }
     DashboardMetrics? CurrentDashboardMetrics { get; }
 
+    // Phase 4 (cTrader): reader chọn nguồn giá sàn B mỗi tick theo platform_b. Default giữ các provider
+    // tối giản ở chế độ MT như trước.
+    string CurrentPlatformB => "mt5";
+    CTraderFixConfig CurrentCTraderFixConfig => CTraderFixConfig.Empty;
+
     // Thời điểm ứng dụng quan sát thấy Bid/Ask thực sự thay đổi trên từng sàn.
     // Default null giữ tương thích với các provider tối giản; production provider
     // phải cập nhật các giá trị này trên mỗi dashboard snapshot.

@@ -32,15 +32,79 @@
   cServer trả lời TestRequest, tổng hợp R8, logout khi đóng app. P4-D7 (price-freeze + so log, cần Start) làm ở Bước B.
 - **Task R8-B (`confirm_latency_ms_b`) đã merge** và giá trị B đã đặt theo số liệu soak Phase 4 ([README R8](README.md)). Thiếu task này thì chân B bị skip/chặn `LATENCY` khi đặt lệnh thật.
 - Phase 0 **GO-READ** (câu 2/3/7/8/9/10) đã có log raw; `C:\tmp\ctrader-spike` còn build được.
-- **Tiền:** live 8220816 đã nạp **≥ $30–50** (margin 1 oz XAUUSD @1:500 ≈ $8.7; Bước C với
-  `max_total_opens=1` cần thêm chân A trên MT). Ước tính chi phí cả phiên: ~6–10 vòng mở/đóng 1 oz ×
-  ($0.24 spread + commission) ≈ **$3–5**.
+- **Tiền:** live 8220816 đã nạp **$50** (tính chi tiết ở mục "Vốn tối thiểu và bảng chi phí" bên dưới:
+  ký quỹ đỉnh $17,42 + chi phí ~$3,4 + đệm $20). Số dư ngày 2026-09-21 là **$0,01** → cần nạp.
+  Đòn bẩy xác nhận trên web: **1:500**, tài khoản **Hedging**.
 - **Giờ:** trong giờ XAUUSD mở (05:00 → 03:59:45 UTC+7). Toàn bộ A+B+C nên nằm trong **một ngày**.
 - **Người thao tác:** chủ dự án gõ mọi lệnh ConsoleSample và bấm mở/đóng tay trên cTrader Web (policy
   chặn Claude gửi lệnh trên tài khoản thật). Claude phân tích output đã che 554, đọc tab Positions/History
   qua Playwright (chỉ đọc), ghi memo.
 
 ---
+
+## Vốn tối thiểu và bảng chi phí (đo thật 2026-09-21)
+
+### Số liệu gốc (không phải ước lượng)
+
+| Thông số | Giá trị | Nguồn |
+|---|---|---|
+| Tài khoản | Live **8220816**, loại **Hedging**, số dư **USD 0,01** | cTrader Web (chỉ đọc) |
+| Đòn bẩy | **1:500** cho khối lượng ≤ $1 000 000 | cTrader Web → Leverage |
+| Giá XAUUSD | ≈ **4 354** | web + `[STATS]` soak |
+| Khối lượng nhỏ nhất dùng cho test | `volumeBUnits = 1` oz = **0,01 lot** (contract size 100) | `sans_json.ctraderFix` |
+| Ký quỹ 1 oz | 4 354 / 500 = **$8,71** | tính từ 2 dòng trên |
+| Spread chân B | 12–20 pt = **$0,12–0,20** mỗi oz mỗi vòng | 141 dòng `[STATS]` ngày 2026-09-21 |
+| Commission | ≈ **$35 / $1 000 000** khối lượng (vòng) → 1 oz ≈ **$0,15** | thống kê tài khoản demo cùng nhóm: $90,58 / $2,59m |
+| **Chi phí mỗi vòng 1 oz** | **≈ $0,31** | spread ~$0,16 + commission ~$0,15 |
+| Swap | **$0** | mọi vị thế đóng trong phiên, không giữ qua đêm |
+
+### Bảng ca test và chi phí
+
+Mỗi "vòng" = mở rồi đóng 1 oz. `Ký quỹ đỉnh` là lượng ký quỹ bị chiếm tại thời điểm nhiều vị thế nhất của ca đó.
+
+| # | Bước | Ca kiểm | Phủ được gì | Khối lượng | Vòng (oz) | Ký quỹ đỉnh | Chi phí |
+|---|---|---|---|---|---|---|---|
+| A1 | A | Mở 1 oz bằng ConsoleSample, đọc `721` trong ER | Phase 0 câu 4 (tag 721 = positionId), R11 (150=0 rồi 150=F) | 1 oz | — | $8,71 | — |
+| A2 | A | Gửi lệnh ngược **kèm 721** đủ volume | **Phase 0 câu 1 — đóng bằng 721** (điều kiện sống còn của executor) | 1 oz | 1 | $8,71 | $0,31 |
+| A3 | A | Mở 2 oz, đóng 1 oz (kèm 721), rồi đóng nốt 1 oz | Phase 0 câu 5 — **partial close**; xác nhận Phase 6 chỉ ghi history khi đóng hẳn | 2 oz | 2 | **$17,42** | $0,62 |
+| A4 | A | Gửi lệnh ngược **KHÔNG kèm 721** → tài khoản hedging tạo vị thế đối ứng; rồi đóng cả hai bằng 721 | Phase 0 câu 4b — chứng minh **bắt buộc** phải gắn 721, nếu không sẽ mở thêm vị thế thay vì đóng | 2 oz | 2 | **$17,42** | $0,62 |
+| A5 | A | Gửi order sai cỡ (0,005 lot) | Phase 0 câu 6 — reject có `58`, không tạo vị thế | 0 | 0 | $0 | **$0** |
+| B1 | B | Mở tay 1 oz trên web → app hiện ở tab Trade | Phase 5 Lớp 2: ticket mã hoá, symbol, giá mở, R4 decode = Position ID trên web | 1 oz | — | $8,71 | — |
+| B2 | B | **Restart app khi đang có vị thế** | **R2 — invariant cứng nhất**: cửa sổ chưa sync phải là `MapUnavailableOrParseError`, không `OnlyAOpen`, không external-partial-close | (giữ B1) | — | $8,71 | — |
+| B3 | B | Mở thêm 1 oz (tổng 2) | Không nhân bản; R3 version tăng đúng một lần | 1 oz | — | **$17,42** | — |
+| B4 | B | Đóng tay lần lượt theo thứ tự ngược | Phase 6 Lớp 2: record history ≤ 500 ms, ticket trùng, giá khớp web, `closeExecutionMs` | — | 2 | — | $0,62 |
+| C1 | C | Auto open 1 pair (A trên MT5 + B 1 oz) rồi chờ **close signal tự nhiên** | Executor thật: khớp 2 chân, slippage, `openExecutionMs`, Rule E (mọi close đều từ signal) | 1 oz | 1 | $8,71 | $0,31 |
+| C2 | C | Partial open rollback: chân A fail (đóng terminal MT trước khi signal bắn) | `CloseOpenedLegByTimeoutAsync` đóng chân B đã mở | 1 oz | 1 | $8,71 | $0,31 |
+| C3 | C | Chiều ngược: kill TRADE session lúc mở | Chân A được rollback; chân B **không** mở → không tốn phí bên cTrader | 0 | 0 | $0 | $0 |
+| C4 | C | Nút "Đóng" per-pair thủ công | Rule F — đường manual per-pair đóng sạch cả hai chân | 1 oz | 1 | $8,71 | $0,31 |
+| C5 | C | **Restart app khi đang có pair mở** | Recovery: khôi phục slot, decode ticket cTrader, không đóng nhầm | (dùng C4) | — | $8,71 | — |
+| C6 | C | Ép reject từ broker (đặt `volumeBUnits` sai cỡ) | `Success=false` kèm lý do từ tag 58, không mở vị thế | 0 | 0 | $0 | $0 |
+| | | **Tổng** | | | **11 oz** | **đỉnh $17,42** | **≈ $3,4** |
+
+### Vốn tối thiểu
+
+| Khoản | Số tiền | Giải thích |
+|---|---|---|
+| Ký quỹ đỉnh | $17,42 | 2 oz cùng lúc (ca A3, A4, B3) |
+| Chi phí giao dịch | $3,40 | 11 vòng × $0,31 |
+| Đệm biến động | $15 | mỗi vị thế giữ vài phút; XAUUSD dao động ~$1–3/5 phút, cực đoan ~$10 khi có tin. 1 oz lỗ $1 cho mỗi $1 giá chạy |
+| Đệm chạy lại ca lỗi | $5 | làm lại 1–2 ca nếu sai thao tác |
+| **Cộng** | **≈ $41** | |
+| **Khuyến nghị nạp** | **$50** | làm tròn lên, dư ~$9 phòng stop-out và tin bất ngờ |
+
+**Phương án rút gọn $25** (chỉ khi không muốn nạp $50): bỏ ca **A3** (partial close) và **B3** (2 vị thế) để không bao giờ giữ quá 1 oz → ký quỹ đỉnh $8,71 + phí $2,8 + đệm $12. Đổi lại **mất hai bằng chứng**: hành vi partial close (Phase 0 câu 5) và "2 vị thế không nhân bản". Không khuyến nghị: câu 5 là thứ quyết định Phase 6 ghi history đúng hay sai.
+
+**Lưu ý khi nạp:** FxPro thường có mức nạp tối thiểu cho lần đầu (~$100 tuỳ phương thức) — nếu vậy thì phần dư cứ để trong tài khoản, không ảnh hưởng test. Số dư hiện tại là **$0,01**.
+
+### Quy tắc kiểm soát chi phí trong phiên Phase 7
+
+- `max_total_opens = 1` suốt Bước C → không bao giờ có 2 pair auto cùng lúc.
+- Luôn dùng **1 oz** (0,01 lot); chỉ ca A3/A4/B3 mới lên 2 oz và đóng ngay sau khi xác nhận.
+- Chạy **trong giờ XAUUSD mở**, tránh 30 phút quanh tin mạnh (NFP/CPI/FOMC) — biến động lúc đó ăn đệm rất nhanh.
+- Mỗi ca xác nhận xong thì **đóng ngay**, không để vị thế chạy tiếp "cho tiện".
+- Không giữ qua 03:59:45 UTC+7 (giờ nghỉ) để tránh swap và tránh vị thế treo qua lúc session reset.
+- Thứ tự A → B → C là bắt buộc: nếu ca A2 cho thấy `721` **không** đóng được vị thế thì **dừng luôn**, không sang Bước C (executor sẽ không có đường đóng lệnh) — lúc đó chi phí đã tiêu chỉ ~$1.
+
 
 ## Bước A — Spike 721 bằng ConsoleSample (trước khi bật executor)
 

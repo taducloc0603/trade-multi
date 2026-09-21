@@ -13,6 +13,7 @@ using TradeDesktop.App.Helpers;
 using TradeDesktop.App.Services;
 using TradeDesktop.App.State;
 using TradeDesktop.Application.Abstractions;
+using TradeDesktop.Application.Helpers;
 using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
 using TradeDesktop.Application.Services.Portfolio;
@@ -833,12 +834,18 @@ public sealed class DashboardViewModel : ObservableObject
     /// log, và popup 1 lần/đợt lỗi. Nếu trở lại hợp lệ → gỡ SKIP + log resume.
     /// Gọi tại: Start, định kỳ 60s (polling), và sau khi lưu config (ManualHwndChanged).
     /// </summary>
+    // Sàn B là cTrader thì không có cửa sổ MT để click → HWND B không bắt buộc ở mọi cửa chặn HWND.
+    private bool IsExchangeBCTrader()
+        => string.Equals(_runtimeConfigState.CurrentPlatformB, "ctrader", StringComparison.Ordinal);
+
     private void RunHwndHealthCheck(string source)
     {
         IReadOnlyList<HwndIssue> issues;
         try
         {
-            issues = _hwndHealthChecker.Check(_runtimeConfigState.CurrentManualHwndColumns);
+            issues = _hwndHealthChecker.Check(
+                _runtimeConfigState.CurrentManualHwndColumns,
+                requiresExchangeBHwnd: !IsExchangeBCTrader());
         }
         catch (Exception ex)
         {
@@ -3270,6 +3277,7 @@ public sealed class DashboardViewModel : ObservableObject
         {
             "mt4" => TradeLegPlatform.Mt4,
             "mt5" => TradeLegPlatform.Mt5,
+            "ctrader" => TradeLegPlatform.CTrader,
             _ => throw new InvalidOperationException($"Unsupported platform: '{platformRaw}'")
         };
     }
@@ -7206,6 +7214,7 @@ public sealed class DashboardViewModel : ObservableObject
                     result.MinSellOpens,
                     result.MaxSellOpens);
                 _runtimeConfigState.UpdateManualTradeHwnd(result.ManualHwndColumns);
+                _runtimeConfigState.UpdateCTraderFix(result.CTraderFix);
                 IsShowConfigVisible = result.IsShowConfig == 1;
                 ResetTradingLogicState();
                 _portfolioCoordinator.EnableRandomQuota();
@@ -7221,7 +7230,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
                     DbInlineData =
-                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | signal_cycle_size={result.SignalCycleSize} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={FormatSameActionRange(result.RdStartSameActionLockSeconds, result.RdEndSameActionLockSeconds)} | close_rd_same_action={FormatSameActionRange(result.CloseRdStartSameActionLockSeconds, result.CloseRdEndSameActionLockSeconds)} |open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | open_max_last_gap_pts={result.OpenMaxLastGapPts?.ToString() ?? "null"} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | sos_trigger_a_open_distance_pts={result.SosTriggerAOpenDistancePts} | sos_trigger_after_seconds={result.SosTriggerAfterSeconds} | sos_close_confirm_gap_pts={result.SosCloseConfirmGapPts} | sos_close_gap_pts={result.SosCloseGapPts} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={result.SansJson}";
+                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | signal_cycle_size={result.SignalCycleSize} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={FormatSameActionRange(result.RdStartSameActionLockSeconds, result.RdEndSameActionLockSeconds)} | close_rd_same_action={FormatSameActionRange(result.CloseRdStartSameActionLockSeconds, result.CloseRdEndSameActionLockSeconds)} |open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | open_max_last_gap_pts={result.OpenMaxLastGapPts?.ToString() ?? "null"} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | sos_trigger_a_open_distance_pts={result.SosTriggerAOpenDistancePts} | sos_trigger_after_seconds={result.SosTriggerAfterSeconds} | sos_close_confirm_gap_pts={result.SosCloseConfirmGapPts} | sos_close_gap_pts={result.SosCloseGapPts} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={SansJsonHelper.Redact(result.SansJson)}";
                     IsDbInlineDataVisible = true;
                 }
                 else
@@ -7257,7 +7266,7 @@ public sealed class DashboardViewModel : ObservableObject
                     _runtimeConfigState.Update(
                         result.MachineHostName,
                         _runtimeConfigState.MapName1,
-                        _runtimeConfigState.MapName2,
+                        _runtimeConfigState.StoredMapName2,
                         _runtimeConfigState.CurrentPoint);
                 }
 
@@ -8425,6 +8434,12 @@ public sealed class DashboardViewModel : ObservableObject
         IReadOnlyList<TradeSharedRecord> recordsB)
     {
         var tracked = BuildTrackedResyncedOpenSlots(recordsA, recordsB);
+        // Phase 5 R10 — chỉ log, không đổi kết quả: position cTrader từ AP có TimeMsc=0 nên nhánh inferred ghép theo thứ tự suy giảm.
+        if (tracked.Count == 0 && recordsB.Any(r => TradeDesktop.Application.Services.CTrader.CTraderTicketCodec.IsCTraderTicket(r.Ticket)))
+        {
+            SafeVmLog($"[CTRADER][WARN] Resync rơi vào nhánh inferred với ticket cTrader (TimeMsc có thể = 0, thứ tự ghép suy giảm): countA={recordsA.Count} countB={recordsB.Count}");
+        }
+
         return tracked.Count > 0 ? tracked : BuildInferredResyncedOpenSlots(recordsA, recordsB);
     }
 

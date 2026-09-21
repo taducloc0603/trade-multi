@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TradeDesktop.Application.Abstractions;
+using TradeDesktop.Infrastructure.CTrader;
 using TradeDesktop.Infrastructure.MarketData;
 using TradeDesktop.Infrastructure.Signals;
 using TradeDesktop.Infrastructure.SharedMemory;
@@ -15,10 +16,17 @@ public static class DependencyInjection
 
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        // Phase 4: đăng ký không điều kiện; session chỉ mở socket khi platform_b = ctrader (G4). Container dispose
+        // lúc thoát app → logout.
+        services.AddSingleton<ICTraderQuoteSession>(_ => CTraderQuoteSession.CreateDefault());
         services.AddSingleton<ISharedMemoryReader, SharedMemoryMarketDataReader>();
         services.AddSingleton<IExchangePairReader>(sp => sp.GetRequiredService<ISharedMemoryReader>());
-        services.AddSingleton<ITradesSharedMemoryReader, TradesSharedMemoryReader>();
-        services.AddSingleton<IHistorySharedMemoryReader, HistorySharedMemoryReader>();
+        services.AddSingleton<ICTraderTradeSession>(_ => CTraderTradeSession.CreateDefault());
+        // Phase 5 ROLLBACK = thay dòng dưới bằng `services.AddSingleton<ITradesSharedMemoryReader, TradesSharedMemoryReader>();`
+        // — quay về MMF và TRADE session không bao giờ được start (vòng đời do decorator điều khiển).
+        services.AddSingleton<ITradesSharedMemoryReader>(sp => new CTraderAwareTradesReader(new TradesSharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()));
+        // Phase 6 ROLLBACK = thay dòng dưới bằng `services.AddSingleton<IHistorySharedMemoryReader, HistorySharedMemoryReader>();`
+        services.AddSingleton<IHistorySharedMemoryReader>(sp => new CTraderAwareHistoryReader(new HistorySharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()));
         services.AddSingleton<MockSharedMemoryMarketDataReader>();
         services.AddSingleton<ISignalEngine, SimpleSignalEngine>();
         services.AddHttpClient();

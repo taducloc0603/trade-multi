@@ -243,6 +243,10 @@ Nếu giữ tick cuối, freeze guard vẫn bắt được nhưng phải chờ h
   `BuildTrackedResyncedOpenSlots` (dùng `_pairIdByTicket` từ `current_slots`) thắng bất cứ khi nào
   `current_slots` còn — nên chỉ cắn ở nhánh fallback legacy với >1 slot mở sau restart mất
   `current_slots`. Chấp nhận + log `[CTRADER][WARN]` khi rơi vào nhánh inferred.
+- **Tab History sàn B (Phase 6, ĐÃ QUYẾT 2026-09-19):** `Commission = 0`, `Profit = (ClosePrice − OpenPrice) × point`
+  theo chiều lệnh — là **số TÍNH LẠI**, không phải số broker (không có swap/commission thật). Không có chú thích trên UI;
+  mỗi record ghi log `[CTRADER][TRADE][INFO] History record … (Profit/Commission là số TÍNH LẠI)`. Record chỉ sinh khi
+  position đóng hẳn qua fill; position biến mất qua AP mà không có fill (đóng lúc mất kết nối) → chỉ `[WARN]`, không có record.
 
 ### R11 — Quirk FIX của cTrader dễ gây lỗi câm
 
@@ -438,7 +442,7 @@ Thêm guard lúc save config: `platform_a == "ctrader"` → reject.
 | 3 | [phase-3-fix-core-offline.md](phase-3-fix-core-offline.md) | Lõi FIX + test, không wire | không | không | ✅ **Xong** (2026-09-17): QuickFIXn 1.10.0 trong Infrastructure, dictionary cServer, lõi health/codec/masker/book/catalog/AP parser/cache/history/factory/transport; +98 test xanh (message dựng validate qua `FIX44-CSERVER.xml`, W/X/y thật từ Phase 0), baseline 11 giữ nguyên; App build 3 warning baseline; 0 `using QuickFix` ở Application; 0 đăng ký DI. Chủ dự án đã xác nhận 2 lệch plan (câu 3 spot fail-closed; không gửi `265`) |
 | 4 | [phase-4-quote-feed.md](phase-4-quote-feed.md) | Luồng **GIÁ** | QUOTE | không | ⏸️ **Tạm đóng — hoãn có điều kiện P4-D1…D9, bắt buộc trước Phase 7** (2026-09-17, soak chạy song song từ 16:53): code xong, live 8220816 — gap 5/5, đối chiếu web, G3/G4, kill socket, R6 point sai đạt; kill mạng im lặng ❌ < 1 s (có kiểm tra sống 5 s/5 s, chưa đo lại); MT4 không có trên máy; price-freeze/so log cần Start (không bấm theo #8); soak + giờ nghỉ + probes CHƯA KIỂM. Test 904/893/11 |
 | 5 | [phase-5-open-positions.md](phase-5-open-positions.md) | Luồng **LỆNH ĐANG MỞ** — code + test + nghiệm thu **tài khoản trống** | + TRADE | không | ⏸️ **Tạm đóng — Lớp 1 xong; hoãn có điều kiện P5-D1/P5-O1, bắt buộc trước Phase 7** (2026-09-17): TRADE session chỉ đọc + decorator; 728=2 path, cửa sổ chưa sync, kill socket TRADE (MapNotFound 20 ms), relogon, R3 5 phút, reconciliation 60 s, về mt5 — đạt; test 922/911/11. Còn: soak 2 ngày (CHƯA KIỂM), vấn đề mở P5-O1 (QUOTE logout lặp 1 lần, không tái hiện). Lớp 2 → Phase 7 B |
-| 6 | [phase-6-history.md](phase-6-history.md) | Luồng **LỊCH SỬ** — code + test + nghiệm thu **tài khoản trống** | + TRADE | không | ☐ |
+| 6 | [phase-6-history.md](phase-6-history.md) | Luồng **LỊCH SỬ** — code + test + nghiệm thu **tài khoản trống** | + TRADE | không | ⏳ **Lớp 1 xong (offline + live 2026-09-21), đang soak**: decorator history + projector; 13 unit test; live: map MapNotFound→AVAILABLE sau sync, version history độc lập 6 phút, kill socket TRADE → MapNotFound 40 ms, về mt5 đọc lại `MT_B_History`. Test 964/953/11. Còn: soak 2 ngày; Lớp 2 → Phase 7 B |
 | **7** | [phase-7-execution.md](phase-7-execution.md) | **PHIÊN TIỀN THẬT duy nhất**: A) spike 721 (câu 4/1/5/6) · B) nghiệm thu 5/6 **có position** · C) executor thật | đầy đủ | **có** | ☐ |
 | 8 | [phase-8-hardening.md](phase-8-hardening.md) | Cảnh báo, Telegram, tài liệu | đầy đủ | có | ☐ |
 

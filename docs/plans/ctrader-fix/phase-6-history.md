@@ -29,9 +29,10 @@ nhận đóng lệnh** của app. Không có history thì Phase 7 không thể b
 
 | # | Câu hỏi | Bối cảnh |
 |---|---|---|
-| 1 | `Profit` và `Commission` của history B là **số tổng hợp**, không phải số broker cấp (R10). Hiển thị thế nào để không bị hiểu nhầm? | FIX không trả P&L. Đề xuất: điền `0` cho `Commission`, tính `Profit` từ `(closePrice - openPrice)` theo điểm giá, và **ghi rõ trong README §8** rằng cột này với chân cTrader là số tính lại. Nếu tab History đang hiển thị như số broker thì cần một chú thích trên UI. |
-| 2 | Position đóng **một phần** (partial close) thì sinh mấy record history? | Theo kết quả Phase 0 câu 5. Nếu cTrader cho partial close thì mỗi lần đóng một phần là một fill — cần quyết: một record mỗi fill, hay chỉ ghi khi position đóng hẳn. Đề xuất: **chỉ ghi khi position đóng hẳn** (`LeavesQty = 0`), vì app không dùng partial close. |
-| 3 | Giữ history bao lâu trong bộ nhớ? | MMF history map có `HISTORY_MEMORY_SIZE 65536` / `HISTORY_RECORD_SIZE 124` ≈ 528 record. Đề xuất giữ tương đương, FIFO. |
+| 1 | `Profit` và `Commission` của history B là **số tổng hợp**, không phải số broker cấp (R10). Hiển thị thế nào để không bị hiểu nhầm? | FIX không trả P&L. Đề xuất: điền `0` cho `Commission`, tính `Profit` từ `(closePrice - openPrice)` theo điểm giá, và **ghi rõ trong README §8** rằng cột này với chân cTrader là số tính lại. Nếu tab History đang hiển thị như số broker thì cần một chú thích trên UI. **ĐÃ QUYẾT (2026-09-19): Commission=0, Profit tính lại; chỉ ghi README §8 + log, KHÔNG sửa UI.** |
+| 2 | Position đóng **một phần** (partial close) thì sinh mấy record history? | Theo kết quả Phase 0 câu 5. Nếu cTrader cho partial close thì mỗi lần đóng một phần là một fill — cần quyết: một record mỗi fill, hay chỉ ghi khi position đóng hẳn. Đề xuất: **chỉ ghi khi position đóng hẳn** (`LeavesQty = 0`), vì app không dùng partial close. **ĐÃ QUYẾT (2026-09-19): chỉ ghi khi position đóng hẳn (biến mất khỏi cache); kiểm lại Phase 7 Bước A câu 5.** |
+| 3 | Giữ history bao lâu trong bộ nhớ? | MMF history map có `HISTORY_MEMORY_SIZE 65536` / `HISTORY_RECORD_SIZE 124` ≈ 528 record. Đề xuất giữ tương đương, FIFO. **ĐÃ QUYẾT: 528 FIFO — đã có `CTraderHistoryProjector.DefaultCapacity` (Phase 3).** |
+| 4 | (phát sinh 2026-09-19) Position biến mất qua PositionReport mà **không có fill đóng** (đóng lúc mất kết nối TRADE, ER bị lỡ)? | **ĐÃ QUYẾT: chỉ log `[CTRADER][TRADE][WARN]`**, không bịa record (không có ClosePrice thật). Xét lại ở Phase 7. |
 
 ---
 
@@ -97,13 +98,23 @@ Một `ExecutionReport` khớp lệnh là order **đóng** khi nó mang `721 Pos
 
 ### Lớp 1 — tài khoản trống, không chạm tiền
 
-- [ ] History map `MapNotFound` cho tới `TradeLoggedOn && SymbolResolved && PositionsSynced`; sau đó
-      `IsMapAvailable=true`, `Count=0`.
-- [ ] Content-version history **độc lập** với trades: AP `728=2` định kỳ không làm history version đổi.
-- [ ] Để yên 5 phút → `ApplyHistoryResult` không rebuild.
-- [ ] Unit test `CTraderHistoryProjector` với chuỗi message đóng hộp (fill có `721` khớp position trong
-      cache → 1 record; fill không khớp → 0 record; partial fill `LeavesQty>0` → chưa ghi).
-- [ ] Đổi `platform_b` về `mt5` → tab History y hệt trước Phase 6.
+- [x] History map `MapNotFound` cho tới `TradeLoggedOn && SymbolResolved && PositionsSynced`; sau đó
+      `IsMapAvailable=true`, `Count=0`. **Live 2026-09-20 (tài khoản trống, cuối tuần):** 20:53:03.323
+      `history map MapNotFound (trade_logged_on=False symbol_resolved=False positions_synced=False)` →
+      20:53:05.168 `PositionsSynced=true … 728=2` → 20:53:05.327 `history map AVAILABLE count=0 version=0 connected=1`.
+      Unit: `R2_HistoryMapNotFoundUntilSynced_ThenAvailableEmpty`.
+- [x] Content-version history **độc lập** với trades: AP `728=2` định kỳ không làm history version đổi.
+      **Live:** 6 cửa sổ `[STATS][TRADE]` liên tiếp 20:54→20:59 đều `version=0 … history_version=0 history_count=0`
+      qua 6 lần reconciliation (`710` mới mỗi phút). Unit: `R3_HistoryVersionIndependentFromTradesAndReconciliation`.
+- [x] Để yên 5 phút → `ApplyHistoryResult` không rebuild: `history_version` giữ 0 suốt 6 phút, `reads_available`
+      1320/1320 mỗi phút → `ShouldApplyHistoryResult` so khớp Timestamp trả false (không rebuild).
+- [x] Unit test với chuỗi message đóng hộp (2026-09-19, `TradeDesktop.Tests/CTrader/CTraderHistoryTests.cs`, 13 test xanh):
+      fill có `721` khớp position → đúng 1 record (`OpenAndFullClose_…`, `SellClosedHigher_ProfitNegative`); fill không khớp →
+      0 record, mở position mới (`FillForUnknownPosition_…`); đóng bớt → chưa ghi, đóng nốt → 1 record (`PartialClose_…`);
+      fill trùng ExecID → không nhân đôi; ticket history = ticket trades (`R4_…`); mất qua AP không fill → 0 record + 1 WARN.
+- [x] Đổi `platform_b` về `mt5` → tab History y hệt trước Phase 6. **Live 2026-09-21 09:00:39:** Save MT5 → QUOTE `unsubscribe` + logout, TRADE logout, `QUOTE stopped` 09:00:41.555,
+      `TRADE stopped` 09:00:42.135, netwatch `fix=none` 09:00:41.8; ảnh chụp: tab Trade `Sàn B (Local\MT_B_Trades)`,
+      tab History `Sàn B (Local\MT_B_History)` — y hệt trước Phase 6. Đổi lại cTrader 09:09:10 → sync + hai map AVAILABLE.
 
 ### Lớp 2 — cần đóng position thật → **Phase 7 Bước B**
 
@@ -115,23 +126,29 @@ Một `ExecutionReport` khớp lệnh là order **đóng** khi nó mang `721 Pos
 
 ### Fail-closed (R2 áp dụng y hệt Phase 5)
 
-- [ ] Kill socket TRADE → history map thành unavailable ngay.
-- [ ] Restart app → không có cửa sổ nào `IsMapAvailable=true` mà chưa sync.
+- [x] Kill socket TRADE → history map thành unavailable ngay. **Live 2026-09-21 08:54:55** (TCPView Close Connection
+      cổng 5212, QUOTE giữ nguyên): `TRADE logged out` 08:54:55.569 → trades map MapNotFound 08:54:55.594 (**25 ms**) →
+      **history map MapNotFound 08:54:55.609 (40 ms)**; logon lại 08:54:58.310 → `728=2` → trades AVAILABLE 08:54:58.544 →
+      history AVAILABLE 08:54:58.600. Không có lần đọc nào available trước khi sync xong.
+- [x] Restart app → không có cửa sổ nào `IsMapAvailable=true` mà chưa sync: lần mở app 20:53 (live) có đúng thứ tự
+      MapNotFound → synced → AVAILABLE, không có lần đọc nào available trước `PositionsSynced=true`.
 
 ### R3
 
-- [ ] Để yên 5 phút → `ApplyHistoryResult` không rebuild liên tục.
-- [ ] Content-version của history **độc lập** với trades — mở một position (trades đổi) không làm
-      history rebuild.
+- [x] Để yên 5 phút → `ApplyHistoryResult` không rebuild liên tục (xem Lớp 1).
+- [x] Content-version của history **độc lập** với trades — unit `R3_…`: mở position làm trades version đổi nhưng
+      history version giữ nguyên; chỉ khi position đóng hẳn history version mới tăng. Live có position → Phase 7 B.
 
 ### Không hồi quy
 
-- [ ] Đổi `platform_b` về `mt5` → tab History hành xử y hệt trước Phase 6.
+- [x] Đổi `platform_b` về `mt5` → tab History hành xử y hệt trước Phase 6 (xem Lớp 1, live 2026-09-21 09:00).
 
 ### Gate chung
 
-- [ ] Test suite không tăng so với baseline Phase 0. Build sạch.
-- [ ] Soak ít nhất **2 ngày**.
+- [x] Test suite: **964 total / 953 pass / 11 fail**, 11 tên trùng baseline memo §2.2b (+13 test Phase 6
+      `CTraderHistoryTests`). Build App `--no-incremental`: 0 error, 3 warning `CA1416` baseline.
+- [ ] Soak ít nhất **2 ngày** — **CHƯA KIỂM — cần soak 2 ngày** (đang chạy: 2026-09-20 20:53 → nay, PID 21580, ~12 h,
+      RAM 282 → 203 MB, handle 1773 → 1317; gộp với P5-D1/P4-D1).
 
 ---
 

@@ -5,8 +5,11 @@ using TradeDesktop.App.Commands;
 using TradeDesktop.App.Helpers;
 using TradeDesktop.App.Services;
 using TradeDesktop.App.State;
+using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
+using TradeDesktop.Application.Services.CTrader;
+using System.Globalization;
 
 namespace TradeDesktop.App.ViewModels;
 
@@ -16,7 +19,31 @@ public sealed class ConfigViewModel : ObservableObject
     private readonly IConfigService _configService;
     private readonly ITradeSessionFileLogger _tradeSessionFileLogger;
     private readonly IHwndHealthChecker _hwndHealthChecker;
+    private readonly IPortfolioCoordinator _portfolioCoordinator;
+    private readonly ICTraderQuoteSession? _ctraderQuoteSession;
+    private string _ctraderSessionStatus = "Chưa kiểm tra";
     private string _machineHostName = string.Empty;
+
+    // Form cTrader (mode cTrader của khối Sàn B). Giữ dạng chuỗi để TextBox bind hai chiều; parse khi Save.
+    private string _ctraderQuoteHost = string.Empty;
+    private string _ctraderQuotePortSsl = string.Empty;
+    private string _ctraderQuotePortPlain = string.Empty;
+    private string _ctraderTradeHost = string.Empty;
+    private string _ctraderTradePortSsl = string.Empty;
+    private string _ctraderTradePortPlain = string.Empty;
+    private bool _ctraderUseSsl = true;
+    private string _ctraderSenderCompId = string.Empty;
+    private string _ctraderTargetCompId = CTraderFixConfig.DefaultTargetCompId;
+    private string _ctraderUsernameOverride = string.Empty;
+    private string _ctraderSymbolId = string.Empty;
+    private string _ctraderSymbolName = string.Empty;
+    private string _ctraderVolumeBUnits = string.Empty;
+    private string _ctraderContractSizeB = string.Empty;
+    private string _ctraderVolumeALots = string.Empty;
+    // Mật khẩu KHÔNG bind hai chiều: _storedCTraderPassword lấy từ config đã lưu, _pendingCTraderPassword
+    // do PasswordBox đẩy vào. Ô trống khi Save = giữ mật khẩu cũ.
+    private string _storedCTraderPassword = string.Empty;
+    private string _pendingCTraderPassword = string.Empty;
 
     private string _mapName1 = string.Empty;
     private string _mapName2 = string.Empty;
@@ -40,15 +67,20 @@ public sealed class ConfigViewModel : ObservableObject
         RuntimeConfigState runtimeConfigState,
         IConfigService configService,
         ITradeSessionFileLogger tradeSessionFileLogger,
-        IHwndHealthChecker hwndHealthChecker)
+        IHwndHealthChecker hwndHealthChecker,
+        IPortfolioCoordinator portfolioCoordinator,
+        ICTraderQuoteSession? ctraderQuoteSession = null)
     {
         _runtimeConfigState = runtimeConfigState;
         _configService = configService;
         _tradeSessionFileLogger = tradeSessionFileLogger;
         _hwndHealthChecker = hwndHealthChecker;
+        _portfolioCoordinator = portfolioCoordinator;
+        _ctraderQuoteSession = ctraderQuoteSession;
 
         CheckMap1Command = new AsyncRelayCommand(CheckMap1Async, CanCheckMap1);
         CheckMap2Command = new AsyncRelayCommand(CheckMap2Async, CanCheckMap2);
+        CheckCTraderSessionCommand = new AsyncRelayCommand(CheckCTraderSessionAsync);
         SaveCommand = new AsyncRelayCommand(SaveAsync, CanSaveCommand);
         CancelCommand = new AsyncRelayCommand(CancelAsync);
         AddHwndColumnCommand = new AsyncRelayCommand(AddHwndColumnAsync);
@@ -56,9 +88,13 @@ public sealed class ConfigViewModel : ObservableObject
 
         MachineHostName = runtimeConfigState.CurrentMachineHostName;
         MapName1 = runtimeConfigState.CurrentMapName1;
-        MapName2 = runtimeConfigState.CurrentMapName2;
+        // StoredMapName2, KHÔNG phải CurrentMapName2: khi platform_b = ctrader giá trị hiệu lực là CTRADER_B,
+        // Save ghi nó xuống DB sẽ đè mất map MT của sàn B.
+        MapName2 = runtimeConfigState.StoredMapName2;
         PlatformA = runtimeConfigState.CurrentPlatformA;
         PlatformB = runtimeConfigState.CurrentPlatformB;
+        ApplyCTraderFixToForm(runtimeConfigState.CurrentCTraderFixConfig);
+        CTraderSessionStatus = _ctraderQuoteSession?.StatusText ?? "Không có FIX session";
 
         var hasRuntimeState =
             !string.IsNullOrWhiteSpace(MachineHostName) ||
@@ -220,6 +256,9 @@ public sealed class ConfigViewModel : ObservableObject
 
             OnPropertyChanged(nameof(IsPlatformBMt4));
             OnPropertyChanged(nameof(IsPlatformBMt5));
+            OnPropertyChanged(nameof(IsPlatformBCTrader));
+            OnPropertyChanged(nameof(IsPlatformBMtMode));
+            RefreshButtons();
         }
     }
 
@@ -279,6 +318,174 @@ public sealed class ConfigViewModel : ObservableObject
         }
     }
 
+    // UI 2 mode của khối Sàn B: suy ra từ PlatformB, không lưu cờ riêng.
+    public bool IsPlatformBCTrader
+    {
+        get => string.Equals(PlatformB, "ctrader", StringComparison.OrdinalIgnoreCase);
+        set
+        {
+            if (!value)
+            {
+                return;
+            }
+
+            PlatformB = "ctrader";
+        }
+    }
+
+    public bool IsPlatformBMtMode => !IsPlatformBCTrader;
+
+    public string CTraderChannelMapName => CTraderFixConfig.ChannelMapName;
+
+    // Phase 4: mode cTrader thay "Check Map 2" bằng trạng thái FIX QUOTE session (chỉ đọc, phản ánh config ĐANG CHẠY,
+    // không phải form chưa Save).
+    public string CTraderSessionStatus
+    {
+        get => _ctraderSessionStatus;
+        private set => SetProperty(ref _ctraderSessionStatus, value);
+    }
+
+    public string CTraderQuoteHost
+    {
+        get => _ctraderQuoteHost;
+        set => SetCTraderField(ref _ctraderQuoteHost, value);
+    }
+
+    public string CTraderQuotePortSsl
+    {
+        get => _ctraderQuotePortSsl;
+        set => SetCTraderField(ref _ctraderQuotePortSsl, value);
+    }
+
+    public string CTraderQuotePortPlain
+    {
+        get => _ctraderQuotePortPlain;
+        set => SetCTraderField(ref _ctraderQuotePortPlain, value);
+    }
+
+    public string CTraderTradeHost
+    {
+        get => _ctraderTradeHost;
+        set => SetCTraderField(ref _ctraderTradeHost, value);
+    }
+
+    public string CTraderTradePortSsl
+    {
+        get => _ctraderTradePortSsl;
+        set => SetCTraderField(ref _ctraderTradePortSsl, value);
+    }
+
+    public string CTraderTradePortPlain
+    {
+        get => _ctraderTradePortPlain;
+        set => SetCTraderField(ref _ctraderTradePortPlain, value);
+    }
+
+    public bool CTraderUseSsl
+    {
+        get => _ctraderUseSsl;
+        set
+        {
+            if (SetProperty(ref _ctraderUseSsl, value))
+            {
+                RefreshButtons();
+            }
+        }
+    }
+
+    public string CTraderSenderCompId
+    {
+        get => _ctraderSenderCompId;
+        set
+        {
+            if (!SetCTraderField(ref _ctraderSenderCompId, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(CTraderUsername));
+            OnPropertyChanged(nameof(IsCTraderLiveSender));
+        }
+    }
+
+    public string CTraderTargetCompId
+    {
+        get => _ctraderTargetCompId;
+        set => SetCTraderField(ref _ctraderTargetCompId, value);
+    }
+
+    // Tag 553 read-only: tự suy từ SenderCompID (hoặc giá trị ghi đè đã lưu).
+    public string CTraderUsername => BuildCTraderFixFromForm().ResolveUsername();
+
+    // Chỉ cảnh báo, KHÔNG tham gia CanSave: cùng login FxPro có cả tài khoản live.
+    public bool IsCTraderLiveSender =>
+        !string.IsNullOrWhiteSpace(CTraderSenderCompId) && !BuildCTraderFixFromForm().IsDemoSender;
+
+    public string CTraderSymbolId
+    {
+        get => _ctraderSymbolId;
+        set => SetCTraderField(ref _ctraderSymbolId, value);
+    }
+
+    public string CTraderSymbolName => _ctraderSymbolName;
+
+    public string CTraderVolumeBUnits
+    {
+        get => _ctraderVolumeBUnits;
+        set
+        {
+            if (SetCTraderField(ref _ctraderVolumeBUnits, value))
+            {
+                OnPropertyChanged(nameof(CTraderVolumeLotHint));
+            }
+        }
+    }
+
+    public string CTraderContractSizeB
+    {
+        get => _ctraderContractSizeB;
+        set
+        {
+            if (SetCTraderField(ref _ctraderContractSizeB, value))
+            {
+                OnPropertyChanged(nameof(CTraderVolumeLotHint));
+            }
+        }
+    }
+
+    public string CTraderVolumeALots
+    {
+        get => _ctraderVolumeALots;
+        set => SetCTraderField(ref _ctraderVolumeALots, value);
+    }
+
+    public string CTraderVolumeLotHint
+    {
+        get
+        {
+            var units = ParseDecimal(CTraderVolumeBUnits);
+            var contract = ParseDecimal(CTraderContractSizeB);
+            return units > 0m && contract > 0m
+                ? $"= {(units / contract).ToString("0.####", CultureInfo.InvariantCulture)} lot"
+                : string.Empty;
+        }
+    }
+
+    public string CTraderPasswordStatus =>
+        !string.IsNullOrEmpty(_pendingCTraderPassword)
+            ? "Mật khẩu mới sẽ được lưu"
+            : !string.IsNullOrEmpty(_storedCTraderPassword)
+                ? "Đã lưu (để trống = giữ nguyên)"
+                : "Chưa có mật khẩu";
+
+    // Gọi từ PasswordBox.PasswordChanged ở code-behind. Không có getter trả mật khẩu.
+    public void SetCTraderPassword(string? password)
+    {
+        _pendingCTraderPassword = password ?? string.Empty;
+        OnPropertyChanged(nameof(CTraderPasswordStatus));
+        RefreshButtons();
+    }
+
     public bool IsMapName1Valid
     {
         get => _isMap1Valid;
@@ -311,6 +518,7 @@ public sealed class ConfigViewModel : ObservableObject
 
     public AsyncRelayCommand CheckMap1Command { get; }
     public AsyncRelayCommand CheckMap2Command { get; }
+    public AsyncRelayCommand CheckCTraderSessionCommand { get; }
     public AsyncRelayCommand SaveCommand { get; }
     public AsyncRelayCommand CancelCommand { get; }
     public AsyncRelayCommand AddHwndColumnCommand { get; }
@@ -320,10 +528,11 @@ public sealed class ConfigViewModel : ObservableObject
     private bool CanCheckMap2() => AreMapNamesEnabled && !string.IsNullOrWhiteSpace(MapName2);
     private bool CanDeleteHwndColumn() => ManualHwndColumns.Count > 1;
 
+    // Mode MT giữ nguyên điều kiện cũ. Mode cTrader không đòi MapName2 (kênh B là hằng CTRADER_B).
     private bool CanSaveCommand() =>
         CanSave &&
         !string.IsNullOrWhiteSpace(MapName1) &&
-        !string.IsNullOrWhiteSpace(MapName2);
+        (IsPlatformBCTrader || !string.IsNullOrWhiteSpace(MapName2));
 
     // Add/Delete chỉ tác động số cột CHART.
     private Task AddHwndColumnAsync()
@@ -389,6 +598,7 @@ public sealed class ConfigViewModel : ObservableObject
             PlatformA = loadResult.PlatformA;
             PlatformB = loadResult.PlatformB;
             InitializeColumns(loadResult.ManualHwndColumns);
+            ApplyCTraderFixToForm(loadResult.CTraderFix);
 
             _runtimeConfigState.Update(
                 loadResult.MachineHostName,
@@ -452,6 +662,7 @@ public sealed class ConfigViewModel : ObservableObject
                 loadResult.CloseGapStability!);
             _runtimeConfigState.UpdateScheduleSleeping(loadResult.ScheduleSleepingJson);
             _runtimeConfigState.UpdateManualTradeHwnd(BuildManualHwndColumns());
+            _runtimeConfigState.UpdateCTraderFix(loadResult.CTraderFix);
 
             IsExistingRecordLoaded = true;
             AreMapNamesEnabled = true;
@@ -485,6 +696,12 @@ public sealed class ConfigViewModel : ObservableObject
         return Task.CompletedTask;
     }
 
+    private Task CheckCTraderSessionAsync()
+    {
+        CTraderSessionStatus = _ctraderQuoteSession?.StatusText ?? "Không có FIX session";
+        return Task.CompletedTask;
+    }
+
     private Task CheckMap2Async()
     {
         ClearError();
@@ -510,7 +727,8 @@ public sealed class ConfigViewModel : ObservableObject
 
             // Re-validate HWND trước khi persist: chặn lưu nếu có handle sai định dạng /
             // trống / cửa sổ không tồn tại (tránh lưu cấu hình hỏng rồi vẫn skip).
-            var hwndIssues = _hwndHealthChecker.Check(columns);
+            // Sàn B là cTrader thì HWND B không bắt buộc.
+            var hwndIssues = _hwndHealthChecker.Check(columns, requiresExchangeBHwnd: !IsPlatformBCTrader);
             if (hwndIssues.Count > 0)
             {
                 LoadStatus = "✖ Save thất bại";
@@ -520,7 +738,33 @@ public sealed class ConfigViewModel : ObservableObject
                 return;
             }
 
-            var saveResult = await _configService.SaveByMachineHostNameAsync(MapName1, MapName2, PlatformA, PlatformB, columns);
+            // Câu 4: đổi nền tảng sàn B có liên quan cTrader khi còn slot → chặn (luật + test ở PlatformBSwitchGuard).
+            var switchDecision = PlatformBSwitchGuard.Evaluate(
+                _runtimeConfigState.CurrentPlatformB,
+                PlatformB,
+                _portfolioCoordinator.LiveAndPendingTotalCount);
+            if (!switchDecision.Allowed)
+            {
+                LoadStatus = "✖ Save thất bại";
+                ErrorMessage = switchDecision.Message ?? string.Empty;
+                return;
+            }
+
+            var ctraderFix = BuildCTraderFixFromForm();
+            if (IsPlatformBCTrader)
+            {
+                var missing = ctraderFix.GetMissingRequiredFields(ctraderFix.HasPassword);
+                if (missing.Count > 0)
+                {
+                    LoadStatus = "✖ Save thất bại";
+                    ErrorMessage = "Thiếu thông số cTrader: " + string.Join(", ", missing);
+                    return;
+                }
+            }
+
+            // Save ghi CẢ mapNames[1] MT lẫn khối ctraderFix (giữ dữ liệu mode đang ẩn).
+            var saveResult = await _configService.SaveByMachineHostNameAsync(
+                MapName1, MapName2, PlatformA, PlatformB, columns, ctraderFix: ctraderFix);
             if (!saveResult.IsSuccess)
             {
                 LoadStatus = "✖ Save thất bại";
@@ -539,6 +783,9 @@ public sealed class ConfigViewModel : ObservableObject
             _runtimeConfigState.Update(MachineHostName, MapName1, MapName2, _runtimeConfigState.CurrentPoint);
             _runtimeConfigState.UpdatePlatform(PlatformA, PlatformB);
             _runtimeConfigState.UpdateManualTradeHwnd(columns);
+            _runtimeConfigState.UpdateCTraderFix(ctraderFix);
+            _storedCTraderPassword = ctraderFix.Password;
+            _pendingCTraderPassword = string.Empty;
             SafeConfigLog(
                 $"[CONFIG][INFO] Runtime config updated: host={MachineHostName} " +
                 $"map1={MapName1} map2={MapName2} platformA={PlatformA} platformB={PlatformB} " +
@@ -571,9 +818,78 @@ public sealed class ConfigViewModel : ObservableObject
         CanSave =
             IsExistingRecordLoaded &&
             !string.IsNullOrWhiteSpace(MapName1) &&
-            !string.IsNullOrWhiteSpace(MapName2) &&
+            (IsPlatformBCTrader
+                ? BuildCTraderFixFromForm() is var fix && fix.GetMissingRequiredFields(fix.HasPassword).Count == 0
+                : !string.IsNullOrWhiteSpace(MapName2)) &&
             ManualHwndColumns.Count > 0;
     }
+
+    private bool SetCTraderField(ref string field, string? value)
+    {
+        if (!SetProperty(ref field, value ?? string.Empty))
+        {
+            return false;
+        }
+
+        RefreshButtons();
+        return true;
+    }
+
+    private void ApplyCTraderFixToForm(CTraderFixConfig? source)
+    {
+        var fix = (source ?? CTraderFixConfig.Empty).Normalize();
+        CTraderQuoteHost = fix.Quote.Host;
+        CTraderQuotePortSsl = FormatInt(fix.Quote.PortSsl);
+        CTraderQuotePortPlain = FormatInt(fix.Quote.PortPlain);
+        CTraderTradeHost = fix.Trade.Host;
+        CTraderTradePortSsl = FormatInt(fix.Trade.PortSsl);
+        CTraderTradePortPlain = FormatInt(fix.Trade.PortPlain);
+        CTraderUseSsl = fix.UseSsl;
+        CTraderSenderCompId = fix.SenderCompId;
+        CTraderTargetCompId = fix.TargetCompId;
+        _ctraderUsernameOverride = fix.Username;
+        CTraderSymbolId = FormatInt(fix.SymbolId);
+        _ctraderSymbolName = fix.SymbolName;
+        CTraderVolumeBUnits = FormatDecimal(fix.VolumeBUnits);
+        CTraderContractSizeB = FormatDecimal(fix.ContractSizeB);
+        CTraderVolumeALots = FormatDecimal(fix.VolumeALots);
+        // Không đổ mật khẩu ngược vào PasswordBox; chỉ nhớ để Save với ô trống giữ nguyên.
+        _storedCTraderPassword = fix.Password;
+        _pendingCTraderPassword = string.Empty;
+        OnPropertyChanged(nameof(CTraderUsername));
+        OnPropertyChanged(nameof(CTraderSymbolName));
+        OnPropertyChanged(nameof(CTraderPasswordStatus));
+    }
+
+    private CTraderFixConfig BuildCTraderFixFromForm()
+        => new CTraderFixConfig(
+            new CTraderEndpoint(CTraderQuoteHost, ParseInt(CTraderQuotePortSsl), ParseInt(CTraderQuotePortPlain)),
+            new CTraderEndpoint(CTraderTradeHost, ParseInt(CTraderTradePortSsl), ParseInt(CTraderTradePortPlain)),
+            CTraderUseSsl,
+            CTraderSenderCompId,
+            CTraderTargetCompId,
+            string.IsNullOrEmpty(_pendingCTraderPassword) ? _storedCTraderPassword : _pendingCTraderPassword,
+            _ctraderUsernameOverride,
+            ParseInt(CTraderSymbolId),
+            _ctraderSymbolName,
+            ParseDecimal(CTraderVolumeBUnits),
+            ParseDecimal(CTraderContractSizeB),
+            ParseDecimal(CTraderVolumeALots)).Normalize();
+
+    private static int ParseInt(string? text)
+        => int.TryParse((text ?? string.Empty).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : 0;
+
+    private static decimal ParseDecimal(string? text)
+        => decimal.TryParse((text ?? string.Empty).Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : 0m;
+
+    private static string FormatInt(int value) => value > 0 ? value.ToString(CultureInfo.InvariantCulture) : string.Empty;
+
+    private static string FormatDecimal(decimal value)
+        => value > 0m ? value.ToString("0.########", CultureInfo.InvariantCulture) : string.Empty;
 
     private void RefreshButtons()
     {
@@ -714,7 +1030,7 @@ public sealed class ConfigViewModel : ObservableObject
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" ? normalized : "mt5";
     }
 
     private void SafeConfigLog(string message)

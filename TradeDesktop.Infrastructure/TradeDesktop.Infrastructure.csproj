@@ -4,6 +4,17 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+    <!-- Pin 1.10.0: đúng phiên bản Phase 0 đã chạy thật với cServer (logon SSL, SecurityList, W/X, reconnect).
+         Nâng cấp là task riêng vì 1.11+ đổi API transport/log. -->
+    <PackageReference Include="QuickFIXn.Core" Version="1.10.0" />
+    <PackageReference Include="QuickFIXn.FIX4.4" Version="1.10.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="CTrader\FIX44-CSERVER.xml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>FIX44-CSERVER.xml</Link>
+    </None>
   </ItemGroup>
 
   <ItemGroup>

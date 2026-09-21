@@ -58,6 +58,8 @@ public partial class App : System.Windows.Application
                     services.AddSingleton<IMt5ManualTradeService, Mt5ManualTradeService>();
                     services.AddSingleton<ITradePlatformExecutor, Mt5TradeExecutor>();
                     services.AddSingleton<ITradePlatformExecutor, Mt4TradeExecutor>();
+                    services.AddSingleton<ITradePlatformExecutor, NullCTraderTradeExecutor>();
+                    services.AddSingleton<CTraderSessionMonitor>();
                     services.AddSingleton<ITradeExecutionRouter, TradeExecutionRouter>();
                     services.AddSingleton<IWindowProbe, NativeWindowProbe>();
                     services.AddSingleton<IHwndHealthChecker, HwndHealthChecker>();
@@ -72,6 +74,10 @@ public partial class App : System.Windows.Application
 
             await _host.StartAsync();
             WriteStartupLog("Host started successfully.");
+
+            // Phase 4: gắn monitor TRƯỚC khi MainWindow (→ DashboardViewModel → reader) chạy, để không lỡ sự kiện
+            // logon đầu tiên của QUOTE session.
+            _host.Services.GetRequiredService<CTraderSessionMonitor>();
 
             var mainWindow = _host.Services.GetRequiredService<MainWindow>();
             MainWindow = mainWindow;

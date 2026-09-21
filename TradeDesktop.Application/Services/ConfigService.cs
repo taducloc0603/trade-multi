@@ -13,7 +13,8 @@ public interface IConfigService
         string platformA,
         string platformB,
         IReadOnlyList<ManualHwndColumnConfig>? manualHwndColumns = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        CTraderFixConfig? ctraderFix = null);
     Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default);
     Task SaveCurrentSlotsAsync(string currentSlotsJson, CancellationToken cancellationToken = default);
 }
@@ -22,10 +23,13 @@ public sealed class ConfigService(
     IConfigRepository configRepository,
     IMachineIdentityService machineIdentityService) : IConfigService
 {
+    // R7: có 5 bản sao giống hệt (đây, ConfigService cuối file, RuntimeConfigState, SupabaseConfigRepository,
+    // ConfigViewModel).
+    // Sửa một chỗ mà quên chỗ khác thì platform âm thầm về "mt5".
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" ? normalized : "mt5";
     }
 
     public async Task<ConfigLoadResult> LoadByMachineHostNameAsync(CancellationToken cancellationToken = default)
@@ -77,7 +81,7 @@ public sealed class ConfigService(
                 $"Cấu hình [NORMAL CLOSE GAP STABILITY] không hợp lệ: {closeGapError}");
         }
 
-        SansJsonHelper.TryParseSans(record.SansJson, out var mapName1, out var mapName2, out var manualHwndColumns);
+        SansJsonHelper.TryParseSans(record.SansJson, out var mapName1, out var mapName2, out var manualHwndColumns, out var ctraderFix);
         return ConfigLoadResult.Success(
             hostName,
             mapName1,
@@ -145,7 +149,7 @@ public sealed class ConfigService(
             scheduleSleepingJson: record.ScheduleSleepingJson,
             openGapStability: record.OpenGapStability,
             closeGapStability: record.CloseGapStability,
-            openMaxLastGapPts: record.OpenMaxLastGapPts);
+            openMaxLastGapPts: record.OpenMaxLastGapPts) with { CTraderFix = ctraderFix };
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -176,7 +180,8 @@ public sealed class ConfigService(
         string platformA,
         string platformB,
         IReadOnlyList<ManualHwndColumnConfig>? manualHwndColumns = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        CTraderFixConfig? ctraderFix = null)
     {
         var hostName = machineIdentityService.GetHostName();
         if (string.IsNullOrWhiteSpace(hostName))
@@ -187,7 +192,12 @@ public sealed class ConfigService(
         var normalizedPlatformA = NormalizePlatform(platformA);
         var normalizedPlatformB = NormalizePlatform(platformB);
 
-        var sansJson = SansJsonHelper.BuildSans(mapName1, mapName2, manualHwndColumns);
+        if (normalizedPlatformA == "ctrader")
+        {
+            return ConfigSaveResult.Failed("cTrader chỉ được dùng cho sàn B.");
+        }
+
+        var sansJson = SansJsonHelper.BuildSans(mapName1, mapName2, manualHwndColumns, ctraderFix);
 
         var updated = await configRepository.UpdateSansAndHostNameByHostNameAsync(
             hostName,
@@ -289,7 +299,14 @@ public sealed record ConfigLoadResult(
     int SignalCycleSize = 10,
     // Trần cho GAP CUỐI của Open Cycle (signed, đối xứng). null = tắt gate.
     // KHÔNG clamp về >= 0: 0 và số âm là giá trị hợp lệ, giống 4 cột ngưỡng gap thường.
-    int? OpenMaxLastGapPts = null)
+    int? OpenMaxLastGapPts = null,
+    // Khối ctraderFix trong sans_json; Empty khi máy chưa cấu hình cTrader (sans_json cũ).
+    CTraderFixConfig? CTraderFix = null,
+    // Task R8-B: ngưỡng latency riêng cho chân B khi B là cTrader (cột nullable `ctrader_confirm_latency_b`).
+    // null — hoặc platform_b là MT — thì dùng chung `ConfirmLatencyMs` (hành vi trước task này).
+    // KHÔNG clamp: 0 = tắt guard latency riêng cho chân B.
+    // Đặt CUỐI danh sách để không làm lệch các tham số positional mà Success(...) đang truyền.
+    int? CTraderConfirmLatencyB = null)
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -497,7 +514,7 @@ public sealed record ConfigLoadResult(
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" ? normalized : "mt5";
     }
 }
 

@@ -35,7 +35,8 @@ public interface IWindowProbe
 public interface IHwndHealthChecker
 {
     /// <summary>Duyệt mọi cột, mọi handle (Chart A/Trade A/Chart B/Trade B) → trả về các handle lỗi.</summary>
-    IReadOnlyList<HwndIssue> Check(IReadOnlyList<ManualHwndColumnConfig>? columns);
+    /// <param name="requiresExchangeBHwnd"><c>false</c> khi sàn B là cTrader: bỏ qua Chart B / Trade B.</param>
+    IReadOnlyList<HwndIssue> Check(IReadOnlyList<ManualHwndColumnConfig>? columns, bool requiresExchangeBHwnd = true);
 }
 
 public sealed class HwndHealthChecker : IHwndHealthChecker
@@ -47,7 +48,7 @@ public sealed class HwndHealthChecker : IHwndHealthChecker
         _probe = probe;
     }
 
-    public IReadOnlyList<HwndIssue> Check(IReadOnlyList<ManualHwndColumnConfig>? columns)
+    public IReadOnlyList<HwndIssue> Check(IReadOnlyList<ManualHwndColumnConfig>? columns, bool requiresExchangeBHwnd = true)
     {
         var issues = new List<HwndIssue>();
         if (columns is null || columns.Count == 0)
@@ -66,8 +67,7 @@ public sealed class HwndHealthChecker : IHwndHealthChecker
             // Cột trống hoàn toàn → bỏ qua (không coi là lỗi).
             if (!HasText(column.ChartHwndA)
                 && !HasText(column.TradeHwndA)
-                && !HasText(column.ChartHwndB)
-                && !HasText(column.TradeHwndB))
+                && (!requiresExchangeBHwnd || (!HasText(column.ChartHwndB) && !HasText(column.TradeHwndB))))
             {
                 continue;
             }
@@ -75,8 +75,11 @@ public sealed class HwndHealthChecker : IHwndHealthChecker
             var displayIndex = i + 1;
             Inspect(issues, $"Cột {displayIndex} - Chart A", column.ChartHwndA);
             Inspect(issues, $"Cột {displayIndex} - Trade A", column.TradeHwndA);
-            Inspect(issues, $"Cột {displayIndex} - Chart B", column.ChartHwndB);
-            Inspect(issues, $"Cột {displayIndex} - Trade B", column.TradeHwndB);
+            if (requiresExchangeBHwnd)
+            {
+                Inspect(issues, $"Cột {displayIndex} - Chart B", column.ChartHwndB);
+                Inspect(issues, $"Cột {displayIndex} - Trade B", column.TradeHwndB);
+            }
         }
 
         return issues;

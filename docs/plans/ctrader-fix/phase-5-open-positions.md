@@ -202,8 +202,8 @@ cả Phase 4/5/6). **Không chạy 2 instance app cùng lúc** (cùng login cTra
 
 | ID | Việc còn treo | Cách đóng | Chặn |
 |---|---|---|---|
-| P5-D1 | Soak ≥ 2 ngày liên tục qua cuối tuần, tài khoản trống: TRADE sống, AP `728=2` mỗi 60 s, không rò bộ nhớ/handle; không có external-partial-close sai | `-ctrader.log` (`[STATS][TRADE]`), Task Manager; bản build cuối cùng trước Phase 7 | Phase 7 |
-| P5-O1 | QUOTE bị server logout lặp khi chạy chung TRADE (xem Vấn đề mở) | Raw log bật suốt soak; tái diễn → phân tích chuỗi message; không tái diễn qua soak → ghi kết luận | Phase 7 |
+| P5-D1 | ~~Soak ≥ 2 ngày~~ **1 đêm xong (10,5 h)**: TRADE sống liên tục, `728=2` mỗi 60 s (624 lần), `version=0` và `history_version=0` suốt, `reads_available` = `reads` mỗi phút, không external-partial-close; 2 lần mất phiên (05:00 session reset, 07:00 seqnum) đều tự khỏi ≤ 3 s. Còn: chạy tiếp cho đủ 2 ngày + cuối tuần. | `[STATS][TRADE]` | Phase 7 |
+| P5-O1 | ~~QUOTE bị logout lặp~~ **KHÔNG tái diễn trong 10,5 h soak có raw log** (chỉ 1 lần logout do `Session reset` 05:00 của server, logon lại ngay). Vẫn để raw log bật; nếu hết soak vẫn sạch → kết luận là sự cố nhất thời phía server ngày 17/09. | `-ctrader.log` | Phase 7 |
 
 
 - [x] Toàn bộ checklist **Lớp 1** pass, đặc biệt cửa sổ chưa sync và `728=2` path (xem Nghiệm thu, 2026-09-17).
