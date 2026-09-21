@@ -159,6 +159,8 @@ public sealed class DashboardViewModel : ObservableObject
     private const long SignalCycleStatusRenderMinIntervalMs = 500;
     private long _lastSnapshotUiRenderTickMs;
     private long _lastSignalCycleStatusRenderTickMs;
+    private long _lastRandomLockRenderTickMs;
+    private string _lastAutoDispatchText = "Chưa có Auto dispatch";
     private string _lastSignalCycleStatusSignature = string.Empty;
 
     private sealed record PendingOpenRequest(
@@ -641,6 +643,14 @@ public sealed class DashboardViewModel : ObservableObject
     public ObservableCollection<TradePairRealtimeProfitRowViewModel> TradeRealtimeProfitRows { get; } = [];
     public ObservableCollection<HistoryPairProfitRowViewModel> HistoryRealtimeProfitRows { get; } = [];
     public ObservableCollection<SignalCycleStatus> SignalCycleStatuses { get; } = [];
+    // Khối "Random Locks" (Trading Signal): các giá trị random toàn hệ thống, chỉ để quan sát.
+    public ObservableCollection<RandomLockStatusRow> RandomLockRows { get; } = [];
+
+    public string LastAutoDispatchText
+    {
+        get => _lastAutoDispatchText;
+        private set => SetProperty(ref _lastAutoDispatchText, value);
+    }
     public string HistoryRealtimeProfitSummary
     {
         get => _historyRealtimeProfitSummary;
@@ -6045,12 +6055,22 @@ public sealed class DashboardViewModel : ObservableObject
         AccumulateTradeProfitRows(TradeTab.LeftPanel.TradeRows, sumByStt, pairIdByStt);
         AccumulateTradeProfitRows(TradeTab.RightPanel.TradeRows, sumByStt, pairIdByStt);
 
+        var nowUtc = DateTime.UtcNow;
         var rebuilt = sumByStt
             .OrderBy(x => x.Key)
-            .Select(x => new TradePairRealtimeProfitRowViewModel(
-                stt: x.Key.ToString(CultureInfo.InvariantCulture),
-                profitRealtime: x.Value.ToString("0.00", CultureInfo.InvariantCulture),
-                pairId: pairIdByStt.TryGetValue(x.Key, out var pid) ? pid : string.Empty))
+            .Select(x =>
+            {
+                var pairId = pairIdByStt.TryGetValue(x.Key, out var pid) ? pid : string.Empty;
+                // Chỉ đọc slot để hiển thị giá trị random theo cặp; không đổi trạng thái slot.
+                var slot = string.IsNullOrEmpty(pairId) ? null : _portfolioCoordinator.GetSlotByPairId(pairId);
+                return new TradePairRealtimeProfitRowViewModel(
+                    stt: x.Key.ToString(CultureInfo.InvariantCulture),
+                    profitRealtime: x.Value.ToString("0.00", CultureInfo.InvariantCulture),
+                    pairId: pairId,
+                    holdingText: SlotRandomTextFormatter.FormatHolding(slot, nowUtc),
+                    postOpenText: SlotRandomTextFormatter.FormatPostOpen(slot, nowUtc),
+                    hwndProfileText: SlotRandomTextFormatter.FormatHwndProfile(slot));
+            })
             .ToList();
 
         // Preserve existing row/button instances. Clearing this collection every UI refresh
@@ -6084,7 +6104,12 @@ public sealed class DashboardViewModel : ObservableObject
             }
 
             var existing = TradeRealtimeProfitRows[existingIndex];
-            existing.Update(desired.ProfitRealtime, desired.PairId);
+            existing.Update(
+                desired.ProfitRealtime,
+                desired.PairId,
+                desired.HoldingText,
+                desired.PostOpenText,
+                desired.HwndProfileText);
             if (existingIndex != targetIndex)
             {
                 TradeRealtimeProfitRows.Move(existingIndex, targetIndex);
@@ -7944,6 +7969,38 @@ public sealed class DashboardViewModel : ObservableObject
         GapBuy = FormatIntegerOrDash(metrics.GapBuy);
         GapSell = FormatIntegerOrDash(metrics.GapSell);
         RefreshSignalCycleStatuses();
+        RefreshRandomLockRows();
+    }
+
+    private void RefreshRandomLockRows()
+    {
+        // Thuần quan sát, throttle riêng như Signal Cycles. Countdown chỉ nhảy khi có tick giá
+        // (không có timer render riêng) — cùng cách các dòng trạng thái khác đang chạy.
+        var renderTickMs = Environment.TickCount64;
+        if ((renderTickMs - _lastRandomLockRenderTickMs) < SignalCycleStatusRenderMinIntervalMs)
+        {
+            return;
+        }
+
+        _lastRandomLockRenderTickMs = renderTickMs;
+
+        var inputs = RandomLockInputs.From(_portfolioCoordinator);
+        var rows = RandomLockStatusBuilder.Build(inputs, DateTime.UtcNow);
+        LastAutoDispatchText = RandomLockStatusBuilder.FormatLastAutoDispatch(inputs);
+
+        // Số dòng cố định theo Key: chỉ Add lần đầu, sau đó Replace ô đã đổi. KHÔNG Clear()
+        // (Clear phát Reset, làm ItemsControl dựng lại toàn bộ container).
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (i >= RandomLockRows.Count)
+            {
+                RandomLockRows.Add(rows[i]);
+            }
+            else if (RandomLockRows[i] != rows[i])
+            {
+                RandomLockRows[i] = rows[i];
+            }
+        }
     }
 
     private void RefreshSignalCycleStatuses()

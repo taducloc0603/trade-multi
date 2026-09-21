@@ -39,6 +39,11 @@ public interface IPortfolioCoordinator
     int CloseRdEndSameActionLockSeconds { get; }
     bool IsSameActionLockEnabled { get; }
     bool IsCloseSameActionLockEnabled { get; }
+    // Chỉ đọc, phục vụ hiển thị: Auto dispatch cuối cùng và giá trị same-action đã random tại đó.
+    AutoTradeActionType LastAutoDispatchType { get; }
+    TradingPositionSide LastAutoDispatchSide { get; }
+    DateTime? LastAutoDispatchAtUtc { get; }
+    int LastAutoRandomIntervalSeconds { get; }
     int GlobalCooldownMinSec { get; }
     int GlobalCooldownMaxSec { get; }
     RandomQuotaState RandomQuotaState { get; }

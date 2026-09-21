@@ -339,6 +339,8 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="4" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="4" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <TextBlock FontWeight="SemiBold" Foreground="#344054">
@@ -391,7 +393,82 @@
                                         Command="{Binding RandomQuotaCommand}" />
                             </StackPanel>
 
+                            <!-- Random Locks: các giá trị random toàn hệ thống, chỉ để quan sát. -->
                             <Border Grid.Row="18"
+                                    BorderBrush="#E4E7EC"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="8"
+                                    Background="White">
+                                <StackPanel>
+                                    <TextBlock Text="Random Locks"
+                                               FontWeight="SemiBold"
+                                               Foreground="#344054"
+                                               Margin="0,0,0,5" />
+                                    <Grid Margin="0,0,0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="80" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="55" />
+                                            <ColumnDefinition Width="45" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Lock" Foreground="#98A2B3" FontSize="10" />
+                                        <TextBlock Grid.Column="1" Text="Khoảng" Foreground="#98A2B3" FontSize="10" />
+                                        <TextBlock Grid.Column="2" Text="Đã chọn" Foreground="#98A2B3" FontSize="10" />
+                                        <TextBlock Grid.Column="3" Text="Còn" Foreground="#98A2B3" FontSize="10" />
+                                        <TextBlock Grid.Column="4" Text="Trạng thái" Foreground="#98A2B3" FontSize="10" />
+                                    </Grid>
+                                    <ItemsControl ItemsSource="{Binding RandomLockRows}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,1">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="80" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="55" />
+                                                        <ColumnDefinition Width="45" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding Name}" Foreground="#344054" />
+                                                    <TextBlock Grid.Column="1"
+                                                               Text="{Binding RangeText}"
+                                                               FontFamily="Consolas"
+                                                               Foreground="#101828"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Grid.Column="2"
+                                                               Text="{Binding SelectedText}"
+                                                               FontFamily="Consolas"
+                                                               Foreground="#101828" />
+                                                    <TextBlock Grid.Column="3"
+                                                               Text="{Binding RemainingText}"
+                                                               FontFamily="Consolas"
+                                                               Foreground="#101828" />
+                                                    <TextBlock Grid.Column="4" Text="{Binding StatusText}">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Setter Property="Foreground" Value="#667085" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsBlocking}" Value="True">
+                                                                        <Setter Property="Foreground" Value="#B42318" />
+                                                                        <Setter Property="FontWeight" Value="SemiBold" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <TextBlock Margin="0,4,0,0" Foreground="#98A2B3" FontSize="10">
+                                        <Run Text="Last Auto dispatch: " />
+                                        <Run Text="{Binding LastAutoDispatchText, Mode=OneWay}" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Grid.Row="20"
                                     BorderBrush="#E4E7EC"
                                     BorderThickness="1"
                                     CornerRadius="6"
@@ -458,7 +535,7 @@
                                 <ColumnDefinition Width="16" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="16" />
-                                <ColumnDefinition Width="0.4*" />
+                                <ColumnDefinition Width="0.8*" />
                                 <ColumnDefinition Width="16" />
                                 <ColumnDefinition Width="0.3*" />
                             </Grid.ColumnDefinitions>
@@ -529,6 +606,10 @@
                                                     <DataGrid.Columns>
                                                         <DataGridTextColumn Header="STT" Binding="{Binding Stt}" Width="55" />
                                                         <DataGridTextColumn Header="Profit realtime" Binding="{Binding ProfitRealtime}" Width="120" />
+                                                        <!-- Giá trị random theo cặp, chỉ để quan sát. ✓ = đã hết thời gian chờ. -->
+                                                        <DataGridTextColumn Header="Holding" Binding="{Binding HoldingText}" Width="110" />
+                                                        <DataGridTextColumn Header="Post-open" Binding="{Binding PostOpenText}" Width="120" />
+                                                        <DataGridTextColumn Header="HWND" Binding="{Binding HwndProfileText}" Width="50" />
                                                     </DataGrid.Columns>
                                                 </DataGrid>
                                             </ScrollViewer>

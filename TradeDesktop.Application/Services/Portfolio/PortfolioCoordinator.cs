@@ -147,6 +147,10 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     public int CloseRdEndSameActionLockSeconds => _state.CloseRdEndSameActionLockSeconds;
     public bool IsSameActionLockEnabled => _state.IsSameActionLockEnabled;
     public bool IsCloseSameActionLockEnabled => _state.IsCloseSameActionLockEnabled;
+    public AutoTradeActionType LastAutoDispatchType => _state.LastAutoDispatchType;
+    public TradingPositionSide LastAutoDispatchSide => _state.LastAutoDispatchSide;
+    public DateTime? LastAutoDispatchAtUtc => _state.LastAutoDispatchAtUtc;
+    public int LastAutoRandomIntervalSeconds => _state.LastAutoRandomIntervalSeconds;
     public int GlobalCooldownMinSec => _state.GlobalCooldownMinSec;
     public int GlobalCooldownMaxSec => _state.GlobalCooldownMaxSec;
     public RandomQuotaState RandomQuotaState => new(
@@ -615,6 +619,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             // Sinh đúng một lần tại mỗi Auto dispatch, khoảng random theo loại action:
             // dispatch Open lấy rd_* (dùng cho Open→Open cùng chiều và Open→Close);
             // dispatch Close lấy close_rd_* (dùng cho Close→Close).
+            // Nhóm bị tắt (start hoặc end null trong DB) thì không random, giá trị là 0.
             var randomSec = requestedType == AutoTradeActionType.Close
                 ? _state.IsCloseSameActionLockEnabled
                     ? NextSecondsInRange(
