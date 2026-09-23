@@ -192,7 +192,8 @@ public sealed class CTraderQuoteSessionTests
 
         transport.Logon(CTraderSessionRole.Quote);
         Assert.False(h.Read().IsConnected);
-        Assert.Equal(4, transport.Sent.Count);
+        // x, V (sau y), rồi x của lần logon lại — V chỉ gửi khi SecurityList mới về.
+        Assert.Equal(3, transport.Sent.Count);
     }
 
     [Fact]

@@ -14,6 +14,15 @@ internal static class FixTestSupport
 
     // Chuỗi raw dạng '|' như log Phase 0 → Message typed, parse group theo dictionary cServer.
     // Tự tính lại BodyLength/CheckSum nên có thể viết message tay mà không cần đếm byte.
+    // Chuỗi raw đã tính BodyLength/CheckSum, dùng cho test parse ở tầng QuickFIX/n.
+    public static string RawString(string pipeSeparatedBody)
+    {
+        var body = pipeSeparatedBody.Trim('|').Replace('|', '') + "";
+        var withoutTrailer = $"8=FIX.4.49={body.Length}{body}";
+        var checksum = withoutTrailer.Sum(c => (byte)c) % 256;
+        return $"{withoutTrailer}10={checksum:000}";
+    }
+
     public static Message Parse(string pipeSeparatedBody)
     {
         var body = pipeSeparatedBody.Trim('|').Replace('|', '\u0001') + "\u0001";

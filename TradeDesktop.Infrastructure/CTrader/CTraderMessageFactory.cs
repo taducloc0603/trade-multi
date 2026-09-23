@@ -14,8 +14,20 @@ public static class CTraderMessageFactory
     // 264 cTrader NGƯỢC FIX chuẩn: 1 = spot (top-of-book), 0 = full depth. Phase 0 câu 2 đo trên live.
     public const int SpotMarketDepth = 1;
 
-    public static QuickFix.FIX44.SecurityListRequest SecurityListRequest(string securityReqId)
-        => new(new SecurityReqID(securityReqId), new SecurityListRequestType(0));
+    // 559=0 (SYMBOL) — giá trị duy nhất cServer khai trong dictionary. KÈM `55=<symbolId>` để chỉ xin đúng một
+    // symbol: hỏi trắng trả về 316 symbol ≈ 9,4 KB, và trên socket QUOTE (đang stream W) message lớn đó làm bộ đọc
+    // của QuickFIX/n mất đồng bộ → `UnsupportedVersion: Incorrect BeginString` → tự logout, lặp vô hạn
+    // (sự cố live 2026-09-21 19:23). Bỏ symbolId = hỏi trắng như spike Phase 0.
+    public static QuickFix.FIX44.SecurityListRequest SecurityListRequest(string securityReqId, int? symbolId = null)
+    {
+        var message = new QuickFix.FIX44.SecurityListRequest(new SecurityReqID(securityReqId), new SecurityListRequestType(0));
+        if (symbolId is { } id)
+        {
+            message.Set(new Symbol(id.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        return message;
+    }
 
     public static QuickFix.FIX44.MarketDataRequest MarketDataRequest(int symbolId, bool subscribe)
     {

@@ -55,6 +55,11 @@ public sealed class CTraderQuoteSession : ICTraderQuoteSession, IDisposable
     private bool _anomalyLogged;
     private int _anomalyCount;
     private bool _crossCheckPending;
+    // Lớp B (chủ dự án duyệt 2026-09-21): CHỈ subscribe giá SAU khi SecurityList đã về. Hỏi symbol rồi stream ngay
+    // khiến message SecurityList và luồng W chen nhau trên cùng socket — bộ đọc QuickFIX/n mất đồng bộ (sự cố 19:23).
+    // Thêm một lợi ích: không nhận tick nào trước khi biết digits (R6 kiểm trước khi có giá).
+    private bool _subscriptionSent;
+    private long _securityListRequestedTick;
     private ICTraderFixTransport? _liveTransport;
     private long _lastInboundTick;
     private long _probeSentTick;
@@ -419,6 +424,8 @@ public sealed class CTraderQuoteSession : ICTraderQuoteSession, IDisposable
             _anomalyLogged = false;
             _anomalyCount = 0;
             _crossCheckPending = false;
+            _subscriptionSent = false;
+            _securityListRequestedTick = 0;
             _liveTransport = transport;
             _failedReconnects = 0;
             ResetLiveness(_tickCount());
@@ -529,9 +536,8 @@ public sealed class CTraderQuoteSession : ICTraderQuoteSession, IDisposable
         {
             // Re-issue mỗi lần logon (catalog vừa bị xoá). Kênh QUOTE theo Phase 0 câu 10.
             var securityReqId = "sec-" + _tickCount().ToString(CultureInfo.InvariantCulture);
-            var securitySent = transport.Send(CTraderSessionRole.Quote, CTraderMessageFactory.SecurityListRequest(securityReqId));
-            var subscribeSent = transport.Send(CTraderSessionRole.Quote, CTraderMessageFactory.MarketDataRequest(symbolId, subscribe: true));
-            Emit("INFO", $"QUOTE SecurityListRequest sent={securitySent}; MarketDataRequest subscribe symbolId={symbolId} depth=spot sent={subscribeSent}");
+            var securitySent = transport.Send(CTraderSessionRole.Quote, CTraderMessageFactory.SecurityListRequest(securityReqId, symbolId));
+            Emit("INFO", $"QUOTE SecurityListRequest symbolId={symbolId} sent={securitySent} — subscribe giá sau khi nhận SecurityList");
         }
         catch (Exception ex)
         {
@@ -689,6 +695,7 @@ public sealed class CTraderQuoteSession : ICTraderQuoteSession, IDisposable
 
                 Emit("INFO", $"symbolName={info.SymbolName} symbolId={info.SymbolId} digits={info.Digits} (SecurityList {count} symbol)");
                 Raise(CTraderQuoteEventKind.SymbolResolved, $"{info.SymbolName} digits={info.Digits}");
+                SendSubscriptionIfNeeded();
                 return;
 
             case "3":
@@ -702,6 +709,66 @@ public sealed class CTraderQuoteSession : ICTraderQuoteSession, IDisposable
             case "5":
                 Emit("INFO", $"QUOTE nhận 35=5 text={FixFieldReader.String(message, 58) ?? "(không có 58)"}");
                 return;
+        }
+    }
+
+    // Lớp B: subscribe đúng một lần, sau khi SecurityList về. Nếu SecurityList không về trong SecurityListTimeoutMs
+    // thì hỏi lại (không subscribe mò) — thiếu digits là fail-closed theo R6 nên không có giá vẫn an toàn.
+    public const long SecurityListTimeoutMs = 10_000;
+
+    private void SendSubscriptionIfNeeded()
+    {
+        ICTraderFixTransport? transport = null;
+        int symbolId;
+        lock (_stateLock)
+        {
+            if (_subscriptionSent || !_quoteLoggedOn || _liveTransport is null || !_catalog.TryGet(_symbolId, out _))
+            {
+                return;
+            }
+
+            _subscriptionSent = true;
+            transport = _liveTransport;
+            symbolId = _symbolId;
+        }
+
+        try
+        {
+            var sent = transport.Send(CTraderSessionRole.Quote, CTraderMessageFactory.MarketDataRequest(symbolId, subscribe: true));
+            Emit("INFO", $"QUOTE MarketDataRequest subscribe symbolId={symbolId} depth=spot sent={sent}");
+        }
+        catch (Exception ex)
+        {
+            Emit("ERROR", $"QUOTE gửi MarketDataRequest lỗi: {ex.Message}");
+        }
+    }
+
+    private void RetrySecurityListIfStuck(long now)
+    {
+        ICTraderFixTransport? transport = null;
+        int symbolId;
+        lock (_stateLock)
+        {
+            if (_subscriptionSent || !_quoteLoggedOn || _liveTransport is null
+                || _securityListRequestedTick == 0 || now - _securityListRequestedTick < SecurityListTimeoutMs)
+            {
+                return;
+            }
+
+            _securityListRequestedTick = now;
+            transport = _liveTransport;
+            symbolId = _symbolId;
+        }
+
+        try
+        {
+            var securityReqId = "sec-retry-" + now.ToString(CultureInfo.InvariantCulture);
+            var sent = transport.Send(CTraderSessionRole.Quote, CTraderMessageFactory.SecurityListRequest(securityReqId, symbolId));
+            Emit("WARN", $"Chưa nhận SecurityList sau {SecurityListTimeoutMs} ms — hỏi lại symbolId={symbolId} sent={sent} (chưa subscribe giá)");
+        }
+        catch (Exception ex)
+        {
+            Emit("ERROR", $"QUOTE hỏi lại SecurityList lỗi: {ex.Message}");
         }
     }
 

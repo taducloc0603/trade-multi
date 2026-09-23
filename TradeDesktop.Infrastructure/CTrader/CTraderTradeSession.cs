@@ -480,6 +480,7 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
 
         string posReqId;
         int failedBefore;
+        int symbolId;
         lock (_stateLock)
         {
             if (generation != _generation)
@@ -498,6 +499,7 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
             _lastPosReqId = posReqId;
             _windowPosReqs++;
             _notSyncedAlerted = false;
+            symbolId = _symbolId;
             failedBefore = _failedReconnects;
             _failedReconnects = 0;
             _status = "TRADE đã logon — chờ SecurityList + PositionReport";
@@ -510,7 +512,7 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
         try
         {
             var securityReqId = "sec-trade-" + _unixMs().ToString(CultureInfo.InvariantCulture);
-            var securitySent = transport.Send(CTraderSessionRole.Trade, CTraderMessageFactory.SecurityListRequest(securityReqId));
+            var securitySent = transport.Send(CTraderSessionRole.Trade, CTraderMessageFactory.SecurityListRequest(securityReqId, symbolId));
             Emit("INFO", $"TRADE SecurityListRequest sent={securitySent}");
         }
         catch (Exception ex)

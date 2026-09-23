@@ -14,8 +14,8 @@ namespace TradeDesktop.Infrastructure.CTrader;
 // Rule E — lớp này THUẦN BỊ ĐỘNG. Báo cáo trạng thái, gửi message được ra lệnh, hết. KHÔNG BAO GIỜ tự
 // flatten position, tự retry, tự reconcile bằng cách gửi lệnh — đó là đường open/close bỏ qua signal engine.
 //
-// Mật khẩu: KHÔNG bật FileLogPath (nó ghi Logon nguyên văn ra đĩa), không truyền ILogFactory; mọi log raw
-// của app đi qua CTraderFixLogMasker. Phase 2 chưa wire DI — Phase 3 là dead code.
+// Mật khẩu: KHÔNG bật FileLogPath (nó ghi Logon nguyên văn ra đĩa). Khi bật chẩn đoán thì dùng
+// MaskedFixLogFactory — che 554 trước khi ghi — để thấy cả message bị QuickFIX/n loại ở tầng parse/verify.
 public sealed class QuickFixCTraderTransport : ICTraderFixTransport, IDisposable
 {
     private readonly RoleApplication _quoteApp;
@@ -33,15 +33,41 @@ public sealed class QuickFixCTraderTransport : ICTraderFixTransport, IDisposable
         _quoteApp = new RoleApplication(this, CTraderSessionRole.Quote, fix.ResolveUsername(), fix.Password);
         _tradeApp = new RoleApplication(this, CTraderSessionRole.Trade, fix.ResolveUsername(), fix.Password);
 
-        _quoteInitiator = new SocketInitiator(
-            _quoteApp,
-            new MemoryStoreFactory(),
-            new SessionSettings(new StringReader(BuildSessionSettingsText(fix, CTraderSessionRole.Quote, dataDictionaryPath))));
-        _tradeInitiator = new SocketInitiator(
-            _tradeApp,
-            new MemoryStoreFactory(),
-            new SessionSettings(new StringReader(BuildSessionSettingsText(fix, CTraderSessionRole.Trade, dataDictionaryPath))));
+        // Chỉ gắn log factory khi chẩn đoán được bật; mặc định giữ nguyên hành vi cũ (không ILogFactory).
+        var logFactory = log is null ? null : new MaskedFixLogFactory(log);
+
+        _quoteInitiator = CreateInitiator(_quoteApp, fix, CTraderSessionRole.Quote, dataDictionaryPath, logFactory);
+        _tradeInitiator = CreateInitiator(_tradeApp, fix, CTraderSessionRole.Trade, dataDictionaryPath, logFactory);
     }
+
+    private static SocketInitiator CreateInitiator(
+        IApplication app,
+        CTraderFixConfig fix,
+        CTraderSessionRole role,
+        string dataDictionaryPath,
+        ILogFactory? logFactory)
+    {
+        var settings = new SessionSettings(new StringReader(BuildSessionSettingsText(fix, role, dataDictionaryPath)));
+        return new SocketInitiator(
+            app,
+            new MemoryStoreFactory(),
+            settings,
+            logFactory ?? new NullLogFactory(),
+            CreateMessageFactory());
+    }
+
+    // P5-A1 (nguyên nhân gốc của P5-O1, chẩn đoán 2026-09-23): KHÔNG để QuickFIX/n tự dựng bảng message
+    // factory. `DefaultMessageFactory()` không tham số QUÉT FILE DLL trong thư mục app (`LoadLocalDlls`) rồi
+    // gom các `IMessageFactory` tìm được; mỗi session dựng một bảng RIÊNG. Lần quét nào không bắt được
+    // `QuickFix.FIX44.dll` thì bảng thiếu khoá "FIX.4.4", và khi đó MỌI message có repeating group
+    // (`35=y` nhóm 146, `35=W` nhóm 268) ném `UnsupportedVersion: Incorrect BeginString (FIX.4.4)` ngay trong
+    // `Message.SetGroup` → thư viện tự gửi `Logout 58=Incorrect BeginString` → vòng lặp logout/logon.
+    // Đo trên live 2026-09-22 20:43:10: QUOTE dính 6 lần liên tiếp trong khi TRADE cùng tiến trình vẫn parse
+    // đúng cùng một message. Parse tự nó KHÔNG lỗi (80 000 lần, 1/2/8 luồng, 0 lần ném).
+    // Ở đây khai báo thẳng factory FIX 4.4 — hết phụ thuộc vào thư mục và thứ tự nạp assembly.
+    // Dùng thẳng factory FIX 4.4 (ctor DefaultMessageFactory nhận danh sách đã [Obsolete]); cả phiên chỉ nói
+    // FIX 4.4 nên đây là bảng đầy đủ: message admin, message nghiệp vụ và mọi repeating group.
+    private static IMessageFactory CreateMessageFactory() => new QuickFix.FIX44.MessageFactory();
 
     public event Action<CTraderSessionRole, Message>? MessageReceived;
     public event Action<CTraderSessionRole>? LoggedOn;
