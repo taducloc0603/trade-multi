@@ -107,6 +107,88 @@ Mỗi "vòng" = mở rồi đóng 1 oz. `Ký quỹ đỉnh` là lượng ký qu�
 - Thứ tự A → B → C là bắt buộc: nếu ca A2 cho thấy `721` **không** đóng được vị thế thì **dừng luôn**, không sang Bước C (executor sẽ không có đường đóng lệnh) — lúc đó chi phí đã tiêu chỉ ~$1.
 
 
+## P7-A1 — FxPro CHẶN đặt lệnh qua FIX (2026-09-23, Bước A DỪNG)
+
+Chạy Bước A câu 4 lúc 15:16 trên live 8220816. Lệnh gửi đúng chuẩn, sàn từ chối ở TẦNG KÊNH:
+
+```
+GỬI:  8=FIX.4.4|35=D|49=live.fxpro.8220816|50=TRADE|56=cServer|57=TRADE|11=spike-open-1|38=1|40=1|54=1|55=41|59=3
+NHẬN: 8=FIX.4.4|35=j|49=cServer|50=TRADE|58=CHANNEL_IS_BLOCKED:Operations through current channel is blocked by your Broker|379=spike-open-1|380=0
+```
+
+Đã loại trừ từng nguyên nhân:
+
+- **Không phải sai kênh**: `50=TRADE`, `57=TRADE`; chính kênh này vẫn đọc vị thế/lịch sử nhiều ngày.
+- **Không phải sai định dạng**: `35=j` (BusinessMessageReject) nghĩa là message chưa tới engine khớp.
+  Sai nội dung sẽ cho `35=8`/`39=8` kèm lý do cụ thể.
+- **Không phải khoá tài khoản**: giao dịch tay trên cTrader Web vẫn chạy (thống kê có 3 lệnh).
+- Dấu thời gian sàn (`52=…08:16:56.571`) SỚM HƠN `60=…15:16:57.141` của lệnh ⇒ từ chối tức thì.
+- Phiên FIX vẫn sống sau đó (47 heartbeat trong message store), sàn không ngắt kết nối.
+
+Tài liệu cTrader: FIX API bật mặc định trừ khi broker tắt. **Chi phí phát hiện: $0** — không vị thế nào mở.
+**Hệ quả: Bước C (viết `CTraderTradeExecutor`) BỊ CHẶN trên FxPro.** Phần đọc (Phase 4/5/6) không ảnh hưởng.
+
+## P7-A2 — Deriv 1551176: kênh đặt lệnh CÓ VẺ MỞ (chưa kết luận)
+
+Thử cùng phép thử trên tài khoản `live.deriv.1551176` (cùng host `live.cfixapi.com`, TRADE 5212 SSL).
+Logon thành công. Lệnh thăm dò gõ nhầm chuỗi giữ chỗ, và **chính lỗi đó lại là thông tin quý**:
+
+```
+NHẬN: 35=j | 45=2 | 58=Symbol(55) must be numeric. But it is <symbolId> | 379=deriv-probe-1 | 380=0
+```
+
+Deriv **đọc và kiểm tra nội dung** lệnh rồi mới báo lỗi định dạng; FxPro chặn trước khi nhìn nội dung.
+Dấu hiệu mạnh là kênh Deriv không bị khoá, nhưng **chưa kết luận** — validate có thể chạy trước khi kiểm quyền.
+Cần thử lại với symbolId hợp lệ.
+
+**SecurityList Deriv (`8|sec-deriv|0`, 348 symbol, `9=10938`):** XAUUSD = **`55=41`, `1008=2`** — trùng
+khít FxPro. Ghi chú kỹ thuật: spike parse trọn message 10,9 KB này KHÔNG lỗi, trong khi app chính từng
+ném `UnsupportedVersion` với message 9,4 KB ⇒ củng cố kết luận P5-A1 (lỗi phụ thuộc thứ tự nạp assembly,
+không phụ thuộc kích thước message).
+
+## P7-A3 — BƯỚC A **GO** trên Deriv 1551176 (2026-09-23 16:27–16:30)
+
+Gửi lệnh thật 1 oz XAUUSD (`38=1`, `55=41`) rồi đóng bằng `721`. Nguyên văn:
+
+```
+MỞ  35=8|39=0|150=0|37=26913373|38=1|54=1|55=41|151=1|721=623507120          ← nhan lenh
+MỞ  35=8|39=2|150=F|6=4319.85|14=1|32=1|151=0|721=623507120                  ← KHOP sau 284 ms
+AP  35=AP|727=1|728=0|721=623507120|730=4319.85|702=1|704=1|705=0            ← 1 vi the LONG 1 oz
+ĐÓNG 35=8|39=0|150=0|37=26913435|38=1|54=2|55=41|151=1|721=623507120         ← nhan lenh dong
+ĐÓNG 35=8|39=2|150=F|6=4316.30|14=1|32=1|151=0|721=623507120                 ← KHOP sau 101 ms
+AP  35=AP|710=pos-final|727=0|728=2                                          ← so sach
+```
+
+**Kết luận GO/NO-GO R1: GO.** Đóng vị thế bằng tag `721` hoạt động — lệnh sell mang đúng
+`721=623507120` khớp và `728=2` xác nhận không còn vị thế. **Không cần** chuyển chiều đóng sang Open API
+(`ProtoOAClosePositionReq`). Thiết kế `CTraderTradeExecutor` giữ nguyên.
+
+Xác nhận thêm từ chính phép thử: `721` CÓ trong ExecutionReport; `38=1` cho ra đúng 1 oz; `35=AP` trả đủ
+`727/728/730/702/704`; tốc độ khớp 101–284 ms.
+
+**Chi phí thật: −$3,55** (mua 4 319,85 → bán 4 316,30). Trong đó spread chỉ ~$0,3; phần lớn là do giá vàng
+rơi ~3,2 USD trong **2 phút 30 giây** giữa hai lệnh — Claude bị chặn gửi lệnh đóng và phải chờ chủ dự án
+cho phép. **Bài học bắt buộc áp dụng cho Bước C:** đường đóng lệnh phải chạy được ngay lập tức, không xen
+bước xin phép giữa chừng; mỗi giây giữ vị thế thừa là rủi ro thật, không phải lý thuyết.
+
+## Hệ quả: đổi sàn B sang Deriv
+
+FxPro không dùng được cho Phase 7 (P7-A1). Deriv dùng được. Việc phải làm trước khi chạy Bước B/C:
+
+- Cập nhật `sans_json.ctraderFix`: `senderCompId=live.deriv.1551176`, `username=1551176`, mật khẩu mới,
+  `symbolId=41` (trùng), kiểm lại `contractSizeB` và `volumeBUnits` trên Deriv.
+- **Nghiệm thu lại Phase 4/5/6 trên Deriv**: digits, contract size, tần suất tick, spread, hành vi `728`
+  đều có thể khác FxPro. Code KHÔNG phải sửa (cùng giao thức FIX), nhưng số liệu soak của FxPro không
+  chuyển sang được.
+- Quyết định số dư: tiền $50,01 đang nằm ở FxPro, tài khoản Deriv có sẵn tiền (đủ ký quỹ 1 oz).
+
+
+**Nếu Deriv cho đặt lệnh** thì việc chuyển sàn B sang Deriv KHÔNG phải việc nhỏ: phải cập nhật
+`sans_json.ctraderFix`, nạp tiền vào 1551176, và nghiệm thu lại Phase 4/5/6 trên broker mới
+(digits, contract size, hành vi `728`, tần suất tick đều có thể khác).
+
+---
+
 ## Bước A — Spike 721 bằng ConsoleSample (trước khi bật executor)
 
 Dùng `C:\tmp\ctrader-spike\ConsoleSample` với `Config-dev.LIVE-TRADE.cfg` (chủ dự án điền mật khẩu).
