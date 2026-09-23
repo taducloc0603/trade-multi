@@ -10,7 +10,9 @@ public enum CTraderQuoteEventKind
     SymbolResolved = 3,
     DigitsMismatch = 4,
     Stopped = 5,
-    Error = 6
+    Error = 6,
+    // Ngắt mạch: quá nhiều lần mất phiên trong một phút → dừng hẳn, KHÔNG tự nối lại.
+    ReconnectStorm = 7
 }
 
 public sealed record CTraderQuoteSessionEvent(CTraderQuoteEventKind Kind, string Message);

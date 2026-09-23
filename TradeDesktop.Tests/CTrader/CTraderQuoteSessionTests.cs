@@ -382,8 +382,9 @@ public sealed class CTraderQuoteSessionTests
         var h = new Harness();
         var transport = await h.StreamingAsync();
 
+        // Giữ DƯỚI ngưỡng ngắt mạch (StormThreshold) — vượt ngưỡng là ca riêng ở CTraderReconnectStormTests.
         transport.Logout(CTraderSessionRole.Quote);
-        for (var i = 0; i < 5; i++)
+        for (var i = 0; i < 3; i++)
         {
             transport.Logout(CTraderSessionRole.Quote);
         }

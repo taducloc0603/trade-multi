@@ -28,6 +28,25 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
     private readonly Func<long> _unixMs;
     private readonly Timer? _timer;
 
+    // Ngắt mạch chống bão reconnect (sự cố 2026-09-21 19:23: 29 lần logon/phút suốt 18 phút lên broker).
+    // Quá StormThreshold lần mất phiên trong StormWindowMs → dừng hẳn transport, KHÔNG tự nối lại; chỉ
+    // EnsureState với trạng thái/cấu hình KHÁC (đổi platform, sửa config, mở lại app) mới gỡ.
+    public const long StormWindowMs = 60_000;
+    public const int StormThreshold = 5;
+
+    // Tự thử lại sau ngắt mạch (chủ dự án duyệt 2026-09-23) — xem CTraderQuoteSession cùng hằng số.
+    // Sự cố live 23/09 05:36 xảy ra ĐÚNG ở session này: sàn reset phiên, 5 lần thử logon không ai trả lời
+    // bị tính thành bão, TRADE dừng hẳn và nằm chết 3 h 17 m.
+    public const long StormRetryCooldownMs = 5 * 60_000;
+    public const int StormMaxRetries = 3;
+    public const long DeadAlertIntervalMs = 15 * 60_000;
+
+    private readonly Queue<long> _logoutTimes = new();
+    private bool _stormTripped;
+    private long _stormTrippedAtTick;
+    private long _lastDeadAlertTick;
+    private int _stormRetries;
+
     private readonly object _desiredLock = new();
     private bool _desiredActive;
     private CTraderFixConfig? _desiredConfig;
@@ -158,6 +177,7 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
 
                 _desiredActive = want;
                 _desiredConfig = target;
+                ResetStorm();
                 _lifecycle = _lifecycle.ContinueWith(_ => Reconcile(), CancellationToken.None,
                     TaskContinuationOptions.None, TaskScheduler.Default);
             }
@@ -259,6 +279,7 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
         try
         {
             var now = _tickCount();
+            CheckStormRecovery(now);
             ICTraderFixTransport? transport = null;
             string? posReqId = null;
             string? notSyncedMessage = null;
@@ -557,6 +578,12 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
         {
             Emit("INFO", "TRADE reconnect chưa logon được — QuickFIX/n thử lại mỗi 2 s");
         }
+
+        // CHỈ đếm lần mất phiên THẬT: lần thử logon hỏng không phải "bão" (sự cố 2026-09-23 05:36).
+        if (wasLoggedOn)
+        {
+            TrackLogoutForStorm("TRADE");
+        }
     }
 
     private void OnMessage(int generation, CTraderSessionRole role, Message message)
@@ -741,6 +768,140 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
     {
         var id = "pos-" + _unixMs().ToString(CultureInfo.InvariantCulture);
         return string.Equals(id, _lastPosReqId, StringComparison.Ordinal) ? id + "-" + _generation : id;
+    }
+
+    // Đếm số lần mất phiên trong cửa sổ trượt; vượt ngưỡng thì dừng hẳn để không dồn logon lên broker.
+    // Gọi từ thread của QuickFIX/n (OnLogout), kể cả các lần reconnect hỏng trước khi logon.
+    private void TrackLogoutForStorm(string role)
+    {
+        var now = _tickCount();
+        int count;
+        int retriesLeft;
+        lock (_stateLock)
+        {
+            if (_stormTripped)
+            {
+                return;
+            }
+
+            _logoutTimes.Enqueue(now);
+            while (_logoutTimes.Count > 0 && now - _logoutTimes.Peek() > StormWindowMs)
+            {
+                _logoutTimes.Dequeue();
+            }
+
+            count = _logoutTimes.Count;
+            if (count <= StormThreshold)
+            {
+                return;
+            }
+
+            _stormTripped = true;
+            _stormTrippedAtTick = now;
+            _lastDeadAlertTick = now;
+            retriesLeft = Math.Max(0, StormMaxRetries - _stormRetries);
+            _status = $"NGẮT MẠCH: {role} mất phiên {count} lần trong {StormWindowMs / 1000} s — đã dừng, "
+                + (retriesLeft > 0 ? $"tự thử lại sau {StormRetryCooldownMs / 60_000} phút" : "cần bật lại tay");
+        }
+
+        var message = $"{role} mất phiên {count} lần trong {StormWindowMs / 1000} s — NGẮT MẠCH: dừng session. "
+            + (retriesLeft > 0
+                ? $"Sàn B fail-closed, tự thử lại sau {StormRetryCooldownMs / 60_000} phút (còn {retriesLeft} lần)."
+                : "KHÔNG tự nối lại nữa. Sàn B fail-closed. Đổi platform_b (hoặc sửa config / mở lại app) để bật lại.");
+        Emit("ERROR", message);
+        Raise(CTraderTradeEventKind.ReconnectStorm, message);
+
+        lock (_desiredLock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _lifecycle = _lifecycle.ContinueWith(
+                _ =>
+                {
+                    if (_transport is not null)
+                    {
+                        StopTransport("ngắt mạch: quá nhiều lần mất phiên trong một phút");
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+        }
+    }
+
+    // Gọi dưới _desiredLock khi trạng thái mong muốn đổi (can thiệp của người dùng).
+    // Gọi mỗi giây từ Tick: hết cooldown thì mở lại session bị ngắt mạch; hết lượt thử thì nhắc định kỳ.
+    private void CheckStormRecovery(long now)
+    {
+        bool retry = false;
+        bool remind = false;
+        int attempt = 0;
+        lock (_stateLock)
+        {
+            if (!_stormTripped)
+            {
+                // Chỉ coi là đã khỏi khi session ĐỨNG VỮNG đủ lâu. Logon lại rồi rớt ngay (đúng dạng bão)
+                // không được xoá số lượt thử, nếu không "3 lần rồi dừng" sẽ không bao giờ tới.
+                if (_tradeLoggedOn && now - _loggedOnTick >= StormRetryCooldownMs)
+                {
+                    _stormRetries = 0;
+                }
+
+                return;
+            }
+
+            if (_stormRetries < StormMaxRetries && now - _stormTrippedAtTick >= StormRetryCooldownMs)
+            {
+                _stormTripped = false;
+                _logoutTimes.Clear();
+                _stormRetries++;
+                attempt = _stormRetries;
+                _lastDeadAlertTick = now;
+                retry = true;
+            }
+            else if (now - _lastDeadAlertTick >= DeadAlertIntervalMs)
+            {
+                _lastDeadAlertTick = now;
+                remind = true;
+            }
+        }
+
+        if (retry)
+        {
+            Emit("WARN", $"TRADE thử nối lại sau ngắt mạch (lần {attempt}/{StormMaxRetries})");
+            lock (_desiredLock)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _lifecycle = _lifecycle.ContinueWith(_ => Reconcile(), CancellationToken.None,
+                    TaskContinuationOptions.None, TaskScheduler.Default);
+            }
+
+            return;
+        }
+
+        if (remind)
+        {
+            var message = $"TRADE vẫn đang NGẮT MẠCH sau {StormMaxRetries} lần thử — sàn B fail-closed, cần can thiệp tay.";
+            Emit("ERROR", message);
+            Raise(CTraderTradeEventKind.ReconnectStorm, message);
+        }
+    }
+
+    private void ResetStorm()
+    {
+        lock (_stateLock)
+        {
+            _stormTripped = false;
+            _logoutTimes.Clear();
+            _stormRetries = 0;
+        }
     }
 
     private void SetStatus(string status)

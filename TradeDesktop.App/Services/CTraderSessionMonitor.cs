@@ -98,6 +98,10 @@ public sealed class CTraderSessionMonitor : IDisposable
             case CTraderQuoteEventKind.DigitsMismatch:
                 Notify("CTRADER_DIGITS_MISMATCH", "ERROR", $"Fail-closed sàn B: {evt.Message}");
                 break;
+            case CTraderQuoteEventKind.ReconnectStorm:
+                _quoteAlert.Cancel();
+                Notify("CTRADER_RECONNECT_STORM", "ERROR", evt.Message);
+                break;
         }
     }
 
@@ -116,6 +120,10 @@ public sealed class CTraderSessionMonitor : IDisposable
                 break;
             case CTraderTradeEventKind.PositionsNotSynced:
                 Notify("CTRADER_POSITIONS_NOT_SYNCED", "WARN", evt.Message);
+                break;
+            case CTraderTradeEventKind.ReconnectStorm:
+                _tradeAlert.Cancel();
+                Notify("CTRADER_RECONNECT_STORM", "ERROR", evt.Message);
                 break;
         }
     }
