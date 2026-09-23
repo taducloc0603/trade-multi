@@ -104,6 +104,8 @@ public sealed class CTraderQuoteSession : ICTraderQuoteSession, IDisposable
     private decimal _latSum;
     private long _latCount;
     private decimal _latMax;
+    private long _prevQuoteTick;
+    private decimal? _lastInterval;
     private (int Point, int Digits)? _mismatchReported;
     private readonly List<long> _windowAges = [];
     private long _windowStartMs = -1;
@@ -344,11 +346,28 @@ public sealed class CTraderQuoteSession : ICTraderQuoteSession, IDisposable
 
             var age = Math.Max(0, now - lastTick);
             var tps = UpdateTps(now, newTicks);
-            _latSum += age;
-            _latCount++;
-            if (_latCount == 1 || age > _latMax)
+            // LatencyMs của chân B là TUỔI TICK (now − lúc nhận báo giá cuối), nên nó TĂNG DẦN giữa hai tick
+            // rồi về ~0 khi có tick mới — khác chân A (MMF) vốn là ĐỘ TRỄ TRUYỀN và giữ nguyên số cũ giữa hai
+            // tick. Đây là ngữ nghĩa R8 đã quyết và là đầu vào của guard; đừng "sửa" cho giống chân A.
+            //
+            // Nhưng Avg/Max thì phải lấy mẫu THEO TICK, không theo mỗi lần đọc 50 ms: đọc 20 lần/giây mà lần nào
+            // cũng cộng `age` thì Avg bị kéo theo nhịp poll chứ không phản ánh dữ liệu, và không so được với chân A.
+            // Mẫu dùng ở đây là khoảng cách giữa hai tick — cũng chính là mức "ôi" nhất mà dữ liệu đạt tới.
+            if (newTicks > 0)
             {
-                _latMax = age;
+                if (_prevQuoteTick > 0)
+                {
+                    var interval = Math.Max(0, lastTick - _prevQuoteTick);
+                    _lastInterval = interval;
+                    _latSum += interval;
+                    _latCount++;
+                    if (_latCount == 1 || interval > _latMax)
+                    {
+                        _latMax = interval;
+                    }
+                }
+
+                _prevQuoteTick = lastTick;
             }
 
             if (crossCheck && exchangeA.Bid is > 0m)
@@ -366,10 +385,11 @@ public sealed class CTraderQuoteSession : ICTraderQuoteSession, IDisposable
                 LatencyMs: age,
                 Tps: tps,
                 Time: FormatSendingTime(sendingMs),
-                MaxLatMs: _latMax,
-                AvgLatMs: _latSum / _latCount,
+                MaxLatMs: _latCount > 0 ? _latMax : null,
+                AvgLatMs: _latCount > 0 ? _latSum / _latCount : null,
                 IsConnected: true,
-                Error: null);
+                Error: null,
+                TickIntervalMs: _lastInterval);
         }
         catch (Exception ex)
         {
@@ -422,7 +442,13 @@ public sealed class CTraderQuoteSession : ICTraderQuoteSession, IDisposable
                 StopTransport(want ? "cấu hình FIX đổi → khởi động lại session" : "sàn B không còn là cTrader / app dừng");
             }
 
-            if (want && config is not null && _transport is null)
+            bool tripped;
+            lock (_stateLock)
+            {
+                tripped = _stormTripped;
+            }
+
+            if (want && config is not null && _transport is null && !tripped)
             {
                 StartTransport(config);
             }
@@ -920,6 +946,8 @@ public sealed class CTraderQuoteSession : ICTraderQuoteSession, IDisposable
         _latSum = 0;
         _latCount = 0;
         _latMax = 0;
+        _prevQuoteTick = 0;
+        _lastInterval = null;
     }
 
     // Cùng ngữ nghĩa TpsAccumulator của reader MMF: trong giây hiện tại trả số tick đang đếm, sang giây mới trả số của giây trước.

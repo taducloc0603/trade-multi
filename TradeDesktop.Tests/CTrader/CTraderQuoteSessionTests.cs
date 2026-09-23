@@ -16,6 +16,13 @@ public sealed class CTraderQuoteSessionTests
     private const string SpotW =
         "35=W|34=3|49=cServer|50=QUOTE|52=20260916-14:57:52.978|56=live.fxpro.8220816|57=QUOTE|55=41|262=MARKETDATAID|268=2|269=0|270=4350.77|269=1|270=4350.93";
 
+    // Cùng book, khác MsgSeqNum → được tính là tick mới.
+    private const string SpotW2 =
+        "35=W|34=4|49=cServer|50=QUOTE|52=20260916-14:57:53.978|56=live.fxpro.8220816|57=QUOTE|55=41|262=MARKETDATAID|268=2|269=0|270=4350.80|269=1|270=4350.96";
+
+    private const string SpotW3 =
+        "35=W|34=5|49=cServer|50=QUOTE|52=20260916-14:57:54.978|56=live.fxpro.8220816|57=QUOTE|55=41|262=MARKETDATAID|268=2|269=0|270=4350.85|269=1|270=4351.01";
+
     private static readonly ExchangeMetrics ExchangeA = new("XAUUSD", 4350.10m, 4350.20m, 0.10m, 1, 5, "t", 1, 1, true, null);
 
     internal static CTraderFixConfig ValidConfig() => CTraderFixConfig.Empty with
@@ -112,18 +119,136 @@ public sealed class CTraderQuoteSessionTests
         Assert.Contains("Password", metrics.Error);
     }
 
+    // Lớp B (sự cố P5-O1): subscribe giá CHỈ được gửi sau khi SecurityList (35=y) về. Gửi cả hai ngay lúc logon
+    // khiến luồng W chen vào giữa message SecurityList dài → bộ đọc QuickFIX/n mất đồng bộ, logout lặp.
     [Fact]
-    public async Task Logon_SendsSecurityListThenSpotSubscribe_OnQuote()
+    public async Task Logon_SendsSecurityListOnly_SubscribeWaitsForSecurityList()
     {
         var h = new Harness();
         await h.EnsureAsync("ctrader", ValidConfig());
 
         h.Current.Logon(CTraderSessionRole.Quote);
 
+        Assert.Equal(["send:Quote:x"], h.Current.Calls.Where(c => c.StartsWith("send", StringComparison.Ordinal)));
+        var securityList = Assert.IsType<QuickFix.FIX44.SecurityListRequest>(h.Current.Sent[0].Message);
+        Assert.Equal("41", securityList.GetString(55));
+
+        h.Current.Receive(CTraderSessionRole.Quote, FixTestSupport.Parse(SecurityList));
+
         Assert.Equal(["send:Quote:x", "send:Quote:V"], h.Current.Calls.Where(c => c.StartsWith("send", StringComparison.Ordinal)));
         var subscribe = Assert.IsType<QuickFix.FIX44.MarketDataRequest>(h.Current.Sent[1].Message);
         Assert.Equal('1', subscribe.SubscriptionRequestType.getValue());
         Assert.Equal(1, subscribe.MarketDepth.getValue());
+
+        // SecurityList thứ hai (vd. sau khi hỏi lại) không được subscribe lần nữa.
+        h.Current.Receive(CTraderSessionRole.Quote, FixTestSupport.Parse(SecurityList));
+        Assert.Equal(2, h.Current.Sent.Count);
+    }
+
+    // Không có SecurityList thì hỏi lại chứ KHÔNG subscribe mò: thiếu digits là fail-closed (R6) nên không giá vẫn an toàn.
+    [Fact]
+    public async Task NoSecurityList_RetriesRequest_AndStillDoesNotSubscribe()
+    {
+        var h = new Harness();
+        await h.EnsureAsync("ctrader", ValidConfig());
+        h.Current.Logon(CTraderSessionRole.Quote);
+
+        // Lọc riêng 35=x: vòng poll còn gửi TestRequest liveness (35=1) trong khoảng chờ này.
+        h.Clock += CTraderQuoteSession.SecurityListTimeoutMs - 1;
+        h.Read();
+        Assert.Single(h.Current.Sent, m => m.Message.Header.GetString(35) == "x");
+
+        h.Clock += 2;
+        h.Read();
+
+        Assert.Equal(2, h.Current.Sent.Count(m => m.Message.Header.GetString(35) == "x"));
+        Assert.DoesNotContain(h.Current.Calls, c => c == "send:Quote:V");
+        Assert.Contains(h.Logs, l => l.StartsWith("[CTRADER][WARN]", StringComparison.Ordinal) && l.Contains("Chưa nhận SecurityList", StringComparison.Ordinal));
+    }
+
+    // Chủ dự án quan sát trên UI: latency sàn B "cộng dồn" 2→3→5→6→8 rồi tụt. Đó là ĐÚNG bản chất — LatencyMs
+    // của chân B là TUỔI TICK, khác chân A (MMF) vốn là độ trễ truyền và giữ nguyên số cũ giữa hai tick.
+    // Test này khoá hành vi để không ai "sửa cho giống chân A" — guard latency B dựa đúng vào đại lượng này.
+    [Fact]
+    public async Task LatencyMs_IsTickAge_GrowsBetweenTicks()
+    {
+        var h = new Harness();
+        await h.StreamingAsync();
+
+        h.Clock += 100;
+        var first = h.Read().LatencyMs;
+        h.Clock += 250;
+        var second = h.Read().LatencyMs;
+
+        Assert.Equal(100m, first);
+        Assert.Equal(350m, second);
+
+        // Tick mới → tuổi tick về 0.
+        h.Current.Receive(CTraderSessionRole.Quote, FixTestSupport.Parse(SpotW2));
+        Assert.Equal(0m, h.Read().LatencyMs);
+    }
+
+    // Avg/Max phải lấy mẫu THEO TICK (khoảng cách giữa hai tick), không theo nhịp đọc 50 ms — đọc 20 lần/giây
+    // mà lần nào cũng cộng thì hai số này chạy theo nhịp poll chứ không phản ánh dữ liệu.
+    // UI hiển thị TickIntervalMs (đứng yên giữa hai tick, giống chân A) còn guard vẫn dùng LatencyMs (tuổi tick).
+    // Test khoá đúng sự tách bạch đó — gộp hai thứ làm một là đổi hành vi guard.
+    [Fact]
+    public async Task TickIntervalMs_StaysConstantBetweenTicks_WhileLatencyGrows()
+    {
+        var h = new Harness();
+        await h.StreamingAsync();
+
+        // Mới một tick → chưa đo được khoảng cách.
+        Assert.Null(h.Read().TickIntervalMs);
+
+        h.Clock += 300;
+        h.Current.Receive(CTraderSessionRole.Quote, FixTestSupport.Parse(SpotW2));
+        Assert.Equal(300m, h.Read().TickIntervalMs);
+
+        for (var i = 0; i < 5; i++)
+        {
+            h.Clock += 50;
+            var mid = h.Read();
+            Assert.Equal(300m, mid.TickIntervalMs);
+            Assert.Equal((i + 1) * 50m, mid.LatencyMs);
+        }
+
+        h.Clock += 150;
+        h.Current.Receive(CTraderSessionRole.Quote, FixTestSupport.Parse(SpotW3));
+        Assert.Equal(400m, h.Read().TickIntervalMs);
+    }
+
+    [Fact]
+    public async Task AvgMaxLat_SampledPerTick_NotPerRead()
+    {
+        var h = new Harness();
+        await h.StreamingAsync();
+
+        // Chưa có tick thứ hai → chưa có mẫu nào.
+        Assert.Null(h.Read().AvgLatMs);
+        Assert.Null(h.Read().MaxLatMs);
+
+        h.Clock += 400;
+        h.Current.Receive(CTraderSessionRole.Quote, FixTestSupport.Parse(SpotW2));
+        var afterTick = h.Read();
+        Assert.Equal(400m, afterTick.MaxLatMs);
+        Assert.Equal(400m, afterTick.AvgLatMs);
+
+        // 10 lần đọc không có tick mới: Avg/Max ĐỨNG YÊN dù tuổi tick vẫn tăng.
+        for (var i = 0; i < 10; i++)
+        {
+            h.Clock += 50;
+            var mid = h.Read();
+            Assert.Equal(400m, mid.MaxLatMs);
+            Assert.Equal(400m, mid.AvgLatMs);
+        }
+
+        // Tick thứ ba: 10 lần đọc (500 ms) + 100 ms nữa = cách tick trước 600 ms → Max lên 600, Avg = (400+600)/2.
+        h.Clock += 100;
+        h.Current.Receive(CTraderSessionRole.Quote, FixTestSupport.Parse(SpotW3));
+        var afterThird = h.Read();
+        Assert.Equal(600m, afterThird.MaxLatMs);
+        Assert.Equal(500m, afterThird.AvgLatMs);
     }
 
     [Fact]
@@ -394,7 +519,7 @@ public sealed class CTraderQuoteSessionTests
         Assert.Single(h.Logs, l => l.Contains("reconnect chưa logon", StringComparison.Ordinal));
 
         transport.Logon(CTraderSessionRole.Quote);
-        Assert.Contains(h.Logs, l => l.Contains("sau 5 lần reconnect hỏng", StringComparison.Ordinal));
+        Assert.Contains(h.Logs, l => l.Contains("sau 3 lần reconnect hỏng", StringComparison.Ordinal));
     }
 
     [Fact]

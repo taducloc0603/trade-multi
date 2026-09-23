@@ -7973,7 +7973,11 @@ public sealed class DashboardViewModel : ObservableObject
         ExchangeBBid = FormatTrimmedNumberOrDash(metrics.ExchangeB.Bid);
         ExchangeBAsk = FormatTrimmedNumberOrDash(metrics.ExchangeB.Ask);
         ExchangeBSpread = FormatTrimmedNumberOrDash(metrics.ExchangeB.Spread);
-        ExchangeBLatencyMs = FormatNumberOrDash(metrics.ExchangeB.LatencyMs, 0);
+        // Hien thi KHOANG CACH GIUA HAI TICK (dung yen giua hai tick, giong chan A) thay vi tuoi tick dang
+        // tang dan. Chan A khong set TickIntervalMs nen roi ve LatencyMs y nhu cu.
+        // LUU Y: guard va router VAN so `LatencyMs` (tuoi tick) voi ctrader_confirm_latency_b, nen o nay co the
+        // hien 150 ms trong khi tin hieu dang bi chan vi du lieu that su da oi 3,5 s. Xem Max Lat va [STATS].
+        ExchangeBLatencyMs = FormatNumberOrDash(metrics.ExchangeB.TickIntervalMs ?? metrics.ExchangeB.LatencyMs, 0);
         ExchangeBTps = FormatOneDecimalOrDash(metrics.ExchangeB.Tps);
         ExchangeBTime = FormatTextOrDash(metrics.ExchangeB.Time);
         ExchangeBMaxLatMs = FormatNumberOrDash(metrics.ExchangeB.MaxLatMs, 0);

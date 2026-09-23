@@ -651,6 +651,10 @@ public sealed class ConfigViewModel : ObservableObject
                 minProfitToClose: loadResult.MinProfitToClose,
                 maxLifeTimeBySecond: loadResult.MaxLifeTimeBySecond,
                 openMaxLastGapPts: loadResult.OpenMaxLastGapPts,
+                // Task R8-B: cung lop loi tren. Thieu tham so nay thi sua ctrader_confirm_latency_b trong DB
+                // roi mo cua so Config se KHONG an, phai Reconnect/khoi dong lai app moi thay. `null` tu DB di
+                // nguyen (null != -1) va co nghia la chan B dung chung nguong cua A.
+                ctraderConfirmLatencyB: loadResult.CTraderConfirmLatencyB,
                 closeRdStartSameActionLockSeconds: loadResult.CloseRdStartSameActionLockSeconds ?? -1,
                 closeRdEndSameActionLockSeconds: loadResult.CloseRdEndSameActionLockSeconds ?? -1,
                 // start HOẶC end null trong DB → tắt nhóm đó (không chờ same-action).

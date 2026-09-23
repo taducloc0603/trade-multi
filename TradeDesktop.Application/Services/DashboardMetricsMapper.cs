@@ -42,7 +42,8 @@ public sealed class DashboardMetricsMapper(IGapCalculator gapCalculator) : IDash
             MaxLatMs: source.MaxLatMs,
             AvgLatMs: source.AvgLatMs,
             IsConnected: source.IsConnected,
-            Error: source.Error);
+            Error: source.Error,
+            TickIntervalMs: source.TickIntervalMs);
     }
 
     private static decimal? CalculateSpread(decimal? bid, decimal? ask)

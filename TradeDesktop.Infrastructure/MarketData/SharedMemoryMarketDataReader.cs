@@ -121,8 +121,12 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
                 && string.Equals(platformB, CTraderPlatformName, StringComparison.OrdinalIgnoreCase);
 
             var sanA = ReadExchangeMetrics(mapName1, "SanA");
+            // Tham số latency ở đây CHỈ nuôi dòng [STATS] của session (`confirm_latency_ms=` và
+            // `would_skip_latency_b`) — nó không đụng tới IsConnected hay bất kỳ quyết định nào; guard thật nằm ở
+            // SignalEntryGuard/TradeExecutionRouter. Vẫn phải là ngưỡng CỦA CHÂN B: trước 2026-09-23 chỗ này truyền
+            // ngưỡng chung của A nên mọi số liệu R8 đo được đều tính sai ngưỡng.
             var sanB = isCTraderB
-                ? _ctraderQuoteSession!.Read(sanA, _runtimeConfigProvider.CurrentPoint, _runtimeConfigProvider.CurrentConfirmLatencyMs)
+                ? _ctraderQuoteSession!.Read(sanA, _runtimeConfigProvider.CurrentPoint, _runtimeConfigProvider.CurrentConfirmLatencyMsBEffective)
                 : ReadExchangeMetrics(mapName2, "SanB");
 
             SnapshotReceived?.Invoke(this, new SharedMemorySnapshot(sanA, sanB, DateTime.UtcNow));

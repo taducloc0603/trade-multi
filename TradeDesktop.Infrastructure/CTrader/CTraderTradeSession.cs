@@ -396,7 +396,13 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
                 StopTransport(want ? "cấu hình FIX đổi → khởi động lại session" : "sàn B không còn là cTrader / app dừng");
             }
 
-            if (want && config is not null && _transport is null)
+            bool tripped;
+            lock (_stateLock)
+            {
+                tripped = _stormTripped;
+            }
+
+            if (want && config is not null && _transport is null && !tripped)
             {
                 StartTransport(config);
             }
