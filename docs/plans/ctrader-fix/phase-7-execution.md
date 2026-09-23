@@ -171,6 +171,59 @@ rơi ~3,2 USD trong **2 phút 30 giây** giữa hai lệnh — Claude bị chặ
 cho phép. **Bài học bắt buộc áp dụng cho Bước C:** đường đóng lệnh phải chạy được ngay lập tức, không xen
 bước xin phép giữa chừng; mỗi giây giữ vị thế thừa là rủi ro thật, không phải lý thuyết.
 
+## P7-B1 — Bước B (rút gọn) trên Deriv: luồng ĐỌC vị thế + history ĐẠT (2026-09-23 17:08–17:33)
+
+Hai vị thế thật mở tay trên cTrader Web (Buy `623650688` @4316.90; Sell `623725107` @4316.40), app chỉ
+quan sát (`NullCTraderTradeExecutor` nguyên tại chỗ, KHÔNG bấm Start).
+
+| Mục | Bằng chứng |
+|---|---|
+| Nhận vị thế qua `35=8` | 17:08:51 `721=623650688 54=1 32=1` → `count=0→1 version=0→1`; 17:29:06 `721=623725107 54=2` → `count=2 version=2` |
+| **Khởi động lại khi đang có vị thế** | 17:25:28–30: `MapNotFound(sync=false, cache=none)` → `PositionsSynced=true 727=1 728=0 count=1` → `AVAILABLE count=1`. Tổng **1,76 s**, `count=1` ngay từ lần sync đầu, không có giai đoạn 0 |
+| Thứ tự R2 | Không có khoảnh khắc nào map AVAILABLE với cache rỗng |
+| Nhóm `702/704/705/730` | `727=1` lần đầu xuất hiện (trước đó 5 272 lần đều `727=0`); có cả Buy lẫn Sell nên chạy cả `704` và `705` |
+| Không nhân bản | Mỗi vị thế làm `count`/`version` tăng ĐÚNG một lần |
+| **History sinh bản ghi thật** | 17:31:28.675 `positionId=623650688 side=Buy open=4316.9 close=4316.84 move=-0.06`; 17:33:19.966 `positionId=623725107 side=Sell open=4316.4 close=4317.61 move=-1.21`. Sinh **cùng mili-giây** với ExecutionReport đóng, không đợi đối soát 60 s |
+| Giá mở khớp broker | Bản ghi `open=4316.9` = Entry price 4316.90 trên cTrader Web |
+| Dấu lãi/lỗ | Sell giá tăng → `move` âm; Buy giá giảm → `move` âm. Đúng chiều cho cả hai |
+| `history_version` độc lập | `history_version=1` khi `version` của trades đã là 3 |
+
+### KHÔNG kiểm được bằng cách mở tay — sửa lại checklist gốc
+
+- **R4 (ticket mã hoá bit 62):** `DashboardViewModel.cs:6035` lọc `IsAppGeneratedTicket` — tab Trade **cố ý
+  chỉ hiện vị thế do chính app mở**, tra bảng `_pairIdByTicket`. Vị thế mở tay không bao giờ lên UI, nên
+  checklist gốc *"mở tay → app tab Trade hiện ticket mã hoá"* là **SAI về nguyên tắc**, không phải lỗi code.
+  R4 chỉ kiểm được ở Bước C khi executor tự mở lệnh.
+- **external-partial-close, watchdog, rollback chân A:** chỉ chạy sau khi bấm Start (logic giao dịch).
+  Không bấm Start nên chúng vô hại, nhưng **chưa được chứng minh** là hành xử đúng. Phải kiểm ở Bước C.
+
+**Ghi chú quan trọng về số liệu:** log tự nói *"Profit/Commission là số TÍNH LẠI, không phải số broker"* —
+tab History của app tính lãi/lỗ từ chênh lệch giá, KHÔNG gồm commission/swap thật. Đối chiếu tiền thật phải
+xem History trên cTrader Web.
+
+## P7-B2 — CHẶN Bước C: gap trên Deriv chỉ bằng ~một nửa FxPro
+
+Gom toàn bộ dòng `[STATS]` ngày 2026-09-23 (mỗi phút một mẫu, là tick cuối cửa sổ):
+
+| | FxPro (918 phút) | Deriv (51 phút) |
+|---|---|---|
+| Gap Buy trung vị | −23 | **−17** |
+| Phân vị 25–75 | −32 … −17 | −21 … −15 |
+| Biên độ | −401 … +9 | −32 … −3 |
+| **\|gap\| trung bình** | **37,1 pts** | **17,7 pts** |
+| Spread B trung bình | 25,2 | **16,0** |
+
+Tỉ lệ phút đạt ngưỡng trên Deriv: `|gap|>=8` 98 %, `>=10` 96 %, `>=12` 92 %, `>=15` 82 %, `>=20` 29 %,
+`>=25` 8 %, `>=30` 2 %.
+
+**Hệ quả:** ngưỡng `open_pts` / `confirm_gap_pts` / `close_pts` / `close_confirm_gap_pts` đang đặt theo gap
+FxPro. Giữ nguyên trên Deriv thì hoặc gần như không bao giờ có tín hiệu (nếu ngưỡng quanh 25–30), hoặc tín
+hiệu tràn lan (nếu quanh 8–10). **Phải đo và chỉnh lại TRƯỚC khi bật `CTraderTradeExecutor`** — đây là rủi
+ro tiền thật, không phải việc dọn dẹp.
+
+Giới hạn của số liệu: mỗi phút một mẫu, Deriv mới có 51 phút trong khung giờ chiều. Cần thêm phiên Mỹ và
+phiên Á để chắc. Nhưng chênh lệch ~2 lần thì đã vượt xa sai số đo.
+
 ## Hệ quả: đổi sàn B sang Deriv
 
 FxPro không dùng được cho Phase 7 (P7-A1). Deriv dùng được. Việc phải làm trước khi chạy Bước B/C:
