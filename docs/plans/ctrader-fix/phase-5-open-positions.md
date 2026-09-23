@@ -168,10 +168,49 @@ Chạy 2026-09-17 trên Windows 11, live 8220816 (trống), **không bấm Start
 
 ### Vấn đề mở
 
-- **P5-O1 — QUOTE bị server logout lặp khi chạy chung TRADE (17:19:12–17:19:39, 13 lần, `35=5` không có 58, ~0.45 s sau logon,
-  không có 35=3/j).** Không tái hiện ở 3 lần chạy sau (17:22:53, 17:23:31 kéo dài; relogon TRADE 17:28:49). Loại trừ trùng
-  `SessionID` QuickFIX/n (probe: `…/QUOTE->cServer/QUOTE` ≠ `…/TRADE->cServer/TRADE`). Raw log để bật suốt soak để bắt
-  chuỗi message thật nếu tái diễn. **Bắt buộc có kết luận trước Phase 7.**
+- **P5-O1 — CHẨN ĐOÁN 2026-09-21 (CHƯA đủ): lỗi PARSE ở CLIENT, không phải phía sàn.**
+  Tái hiện nặng lúc 19:23 (QUOTE logout ~29 lần/phút, ~500 lần logon trong 18 phút). Raw log `MaskedFixLogFactory`
+  (bật bằng `CTRADER_FIX_RAW_LOG=1`) cho thấy chính QuickFIX/n **tự** gửi `Logout 58=Incorrect BeginString (FIX.4.4)`
+  sau khi ném `QuickFix.UnsupportedVersion` từ
+  `DefaultMessageFactory.Create(beginString, msgType, groupCounterTag)` ← `Message.SetGroup` ← `Message.FromString`.
+  Tức là lỗi **tra factory cho repeating group**, KHÔNG phải BeginString thật sự lệch — message kích hoạt là
+  SecurityList `35=y` trả về **toàn bộ 316 symbol, 9 369 byte** (nhóm 146). 14 lần ném đều nằm trong các lần chạy
+  trước bản sửa; sau bản sửa: 0.
+  **Cách sửa (chủ dự án duyệt 2026-09-21):**
+  - **A — hỏi SecurityList có lọc symbol:** `CTraderMessageFactory.SecurityListRequest(reqId, symbolId)` set thêm
+    `55=<symbolId>`; cả QUOTE lẫn TRADE dùng. Live 19:59:58: response còn `9=168` / `146=1`, hai session đều
+    `symbolName=XAUUSD symbolId=41 digits=2`, `728=2`, map trades/history AVAILABLE, cross-check 1.0000.
+  - **B — chỉ subscribe giá SAU khi nhận `35=y`:** logon chỉ gửi SecurityListRequest; `MarketDataRequest` gửi khi
+    SecurityList đã xử lý xong (lớp chống chen W vào giữa message dài, đồng thời không có tick nào trước khi kiểm
+    digits theo R6). Nếu 10 s không có SecurityList thì **hỏi lại**, tuyệt đối không subscribe mò.
+  - **Ngắt mạch kèm theo:** > 5 lần mất phiên trong 60 s → dừng hẳn session, KHÔNG tự nối lại, bắn
+    `CTRADER_RECONNECT_STORM`. Đã nghiệm thu trên live (6 lần logout thay vì ~500) và bằng
+    `CTraderReconnectStormTests`.
+  Bằng chứng live sau sửa: 19:59:53 → 20:05:59 **0 lần QUOTE logged out**, `stale_events=0`, `x_anomalies=0`,
+  ~322–435 tick/phút, `reads_disconnected=0`.
+
+- **P5-A1 — NGUYÊN NHÂN GỐC, ĐÓNG 2026-09-23.** Sửa A (lọc SecurityList) chỉ làm lỗi thưa đi chứ không hết:
+  22/09 20:43:10 QUOTE nhận `35=y` **đã lọc 1 symbol (9=168, 146=1)** vẫn ném `UnsupportedVersion`, trong khi
+  TRADE cùng tiến trình parse đúng **cùng một message**. Message hỏng và message chạy tốt lúc 20:46 giống nhau
+  từng tag ⇒ không phải do nội dung.
+  Chẩn đoán bằng reflection trên QuickFIX/n 1.10.0: `new DefaultMessageFactory()` **quét file DLL trong thư mục
+  app** (`LoadLocalDlls` + `GetAppDomainAssemblies` + `IsMessageFactory`) để dựng bảng factory, và **mỗi session
+  dựng một bảng RIÊNG**. Lần quét nào không bắt được `QuickFix.FIX44.dll` thì bảng thiếu khoá `"FIX.4.4"`, và
+  khi đó MỌI message có repeating group (`35=y` nhóm 146, `35=W` nhóm 268) ném `UnsupportedVersion` ngay trong
+  `Message.SetGroup` → thư viện tự gửi `Logout 58=Incorrect BeginString` → vòng lặp logout/logon.
+  Parse tự nó KHÔNG lỗi: 80 000 lần, 1/2/8 luồng, dictionary + factory dùng chung → **0 lần ném**.
+  **Sửa:** `QuickFixCTraderTransport.CreateMessageFactory()` khai báo thẳng
+  `new DefaultMessageFactory(new IMessageFactory[] { new QuickFix.FIX44.MessageFactory() })` và truyền qua
+  overload `SocketInitiator(app, store, settings, logFactory, messageFactory)` — hết phụ thuộc thư mục và thứ
+  tự nạp assembly. Test khoá: `CTraderMessageFactoryWiringTests`.
+
+- **P5-O2 — ngắt mạch bắn nhầm, ĐÓNG 2026-09-23.** Live 23/09 05:36:03 sàn reset phiên hằng ngày; QUOTE lên lại
+  sau 2 s, TRADE gửi Logon 5 lần (05:36:05/07/09/11/13) **không được trả lời**. Mỗi lần thử hỏng vẫn bị
+  `TrackLogoutForStorm` đếm là "mất phiên" → đủ 6/60 s → dừng hẳn; TRADE **nằm chết 3 h 17 m**, chỉ 1 Telegram
+  lúc đầu rồi im. **Sửa:** (1) chỉ đếm khi `wasLoggedOn == true`; (2) sau ngắt mạch **tự thử lại sau 5 phút,
+  tối đa 3 lần**, số lượt chỉ được xoá khi session đứng vững ≥ 5 phút; (3) hết lượt thì nhắc Telegram **mỗi
+  15 phút** thay vì im lặng. Test khoá: `FailedLogonAttempts_DoNotTripBreaker`,
+  `Quote_BreakerAutoRetriesAfterCooldown_ThenStopsForGood`, `Trade_BreakerAutoRetriesAfterCooldown`.
 
 ### Gate chung
 
@@ -195,6 +234,25 @@ recovery discard như snapshot stale — hành vi đã có sẵn, an toàn.
 
 ### Hoãn có điều kiện (chủ dự án quyết 2026-09-17)
 
+> **Tiêu chí soak theo PHIÊN (chủ dự án quyết 2026-09-21).** Máy phải tắt mỗi ngày khi đi làm về và không có
+> VPS, nên "2 ngày liên tục" là không khả thi. Thay bằng bộ điều kiện dưới đây — **không phải nới lỏng**, mà
+> đổi cách gom thời gian, vì 4 thứ soak cần chứng minh (rò rỉ, tự khỏi sau đứt phiên, P5-O1, R2) không đòi
+> 48 giờ liền một mạch. Áp trên **bản build cuối** (`b8b0bbf`), dùng chung cho P4-D1, P5-D1 và gate Phase 6:
+>
+> | # | Điều kiện | Cách đo |
+> |---|---|---|
+> | S1 | Tổng **≥ 24 giờ chạy tích luỹ**, tối đa 4 phiên | cộng thời gian các phiên trong `-ctrader.log` |
+> | S2 | **≥ 2 đêm** qua trọn giờ nghỉ 03:59:45 → 05:00 **và** mốc 00:00 UTC (07:00 giờ ta) | log hai mốc: logout → tự logon lại ≤ 30 s |
+> | S3 | **≥ 1 phiên liên tục ≥ 10 giờ** | RAM/handle đầu–cuối phiên đó lệch < 20 % |
+> | S4 | **0 lần** P5-O1 (QUOTE logout lặp > 3 lần trong 5 phút) | grep `QUOTE logged out` |
+> | S5 | **0 lần** map B available khi chưa sync; 0 external-partial-close sai | `trades map AVAILABLE` luôn đứng sau `PositionsSynced=true` |
+> | S6 | Mỗi phiên kết thúc bằng **đóng app bằng nút X** | log có `unsubscribe` + `QUOTE/TRADE stopped` |
+>
+> Một phiên cuối tuần **≥ 40 giờ** (thứ Bảy → Chủ Nhật ở nhà) coi như đạt luôn S1 + S3.
+> Cách chạy: bấm đúp `Desktop\start-soak-ctrader.cmd` sau mỗi lần bật máy (tự bật raw log, chặn mở 2 instance),
+> **không bấm Start**; trước khi shutdown thì đóng app bằng nút X.
+> Cái chấp nhận mất: không bắt được rò rỉ rất chậm (> 24 h) — bù lại Phase 7 chỉ chạy ~3 giờ.
+
 Phase 5 **tạm đóng để sang Phase 6** (chỉ đọc, tài khoản trống). Mục dưới đây **bắt buộc xong trước Phase 7**.
 Ràng buộc để soak không bị reset: Phase 6 code + unit test **offline**, build ra thư mục tạm, **không restart app đang soak**;
 nghiệm thu live Phase 6 dồn vào **một lần restart có chủ đích** sau ≥ 1 đêm soak; sau đó soak tiếp bằng bản Phase 6 (tính cho
@@ -203,7 +261,7 @@ cả Phase 4/5/6). **Không chạy 2 instance app cùng lúc** (cùng login cTra
 | ID | Việc còn treo | Cách đóng | Chặn |
 |---|---|---|---|
 | P5-D1 | ~~Soak ≥ 2 ngày~~ **1 đêm xong (10,5 h)**: TRADE sống liên tục, `728=2` mỗi 60 s (624 lần), `version=0` và `history_version=0` suốt, `reads_available` = `reads` mỗi phút, không external-partial-close; 2 lần mất phiên (05:00 session reset, 07:00 seqnum) đều tự khỏi ≤ 3 s. Còn: chạy tiếp cho đủ 2 ngày + cuối tuần. | `[STATS][TRADE]` | Phase 7 |
-| P5-O1 | ~~QUOTE bị logout lặp~~ **KHÔNG tái diễn trong 10,5 h soak có raw log** (chỉ 1 lần logout do `Session reset` 05:00 của server, logon lại ngay). Vẫn để raw log bật; nếu hết soak vẫn sạch → kết luận là sự cố nhất thời phía server ngày 17/09. | `-ctrader.log` | Phase 7 |
+| P5-O1 | **ĐÓNG 2026-09-21** — nguyên nhân: QuickFIX/n ném `UnsupportedVersion` khi dựng repeating group của SecurityList 316 symbol rồi tự gửi Logout. Sửa A (hỏi SecurityList lọc `55=<symbolId>`) + B (subscribe sau `35=y`, hỏi lại sau 10 s) + ngắt mạch bão reconnect. | `-ctrader.log`, `CTraderReconnectStormTests`, `CTraderQuoteSessionTests` | — (đã đóng) |
 
 
 - [x] Toàn bộ checklist **Lớp 1** pass, đặc biệt cửa sổ chưa sync và `728=2` path (xem Nghiệm thu, 2026-09-17).

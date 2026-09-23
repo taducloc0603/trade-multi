@@ -72,6 +72,10 @@ Cấu hình QuickFIX/n (xem [README §4.6](README.md)):
   mở **cả** TRADE initiator, **chỉ** để gửi `SecurityListRequest` — không `RequestForPositions`, không
   order (những thứ đó là Phase 5). Ghi rõ trong log `[CTRADER][INFO] TRADE session opened for
   SecurityList only`.
+- **Thứ tự bắt buộc (sửa P5-O1, 2026-09-21):** logon → `SecurityListRequest` **có lọc `55=<symbolId>`** →
+  chờ `35=y` → mới `MarketDataRequest`. Hỏi SecurityList không lọc trả về 316 symbol / 9 369 byte làm
+  QuickFIX/n ném `UnsupportedVersion` lúc dựng repeating group rồi tự gửi `Logout 58=Incorrect BeginString`
+  → bão logout. Không có `35=y` trong 10 s thì **hỏi lại**, không subscribe mò (thiếu digits là fail-closed R6).
 - `MarketDataRequest`: `262 MDReqID` cố định một chuỗi (SDK dùng `"MARKETDATAID"`); **unsubscribe
   phải dùng lại đúng chuỗi đó** với `263=2`. Khi đổi `platform_b` khỏi `ctrader` giữa phiên (G4): gửi
   unsubscribe trước khi logout.
@@ -284,6 +288,25 @@ dòng trong lúc tách thì revert không còn là thao tác an toàn.
 
 ### Hoãn có điều kiện (chủ dự án quyết 2026-09-17)
 
+> **Tiêu chí soak theo PHIÊN (chủ dự án quyết 2026-09-21).** Máy phải tắt mỗi ngày khi đi làm về và không có
+> VPS, nên "2 ngày liên tục" là không khả thi. Thay bằng bộ điều kiện dưới đây — **không phải nới lỏng**, mà
+> đổi cách gom thời gian, vì 4 thứ soak cần chứng minh (rò rỉ, tự khỏi sau đứt phiên, P5-O1, R2) không đòi
+> 48 giờ liền một mạch. Áp trên **bản build cuối** (`b8b0bbf`), dùng chung cho P4-D1, P5-D1 và gate Phase 6:
+>
+> | # | Điều kiện | Cách đo |
+> |---|---|---|
+> | S1 | Tổng **≥ 24 giờ chạy tích luỹ**, tối đa 4 phiên | cộng thời gian các phiên trong `-ctrader.log` |
+> | S2 | **≥ 2 đêm** qua trọn giờ nghỉ 03:59:45 → 05:00 **và** mốc 00:00 UTC (07:00 giờ ta) | log hai mốc: logout → tự logon lại ≤ 30 s |
+> | S3 | **≥ 1 phiên liên tục ≥ 10 giờ** | RAM/handle đầu–cuối phiên đó lệch < 20 % |
+> | S4 | **0 lần** P5-O1 (QUOTE logout lặp > 3 lần trong 5 phút) | grep `QUOTE logged out` |
+> | S5 | **0 lần** map B available khi chưa sync; 0 external-partial-close sai | `trades map AVAILABLE` luôn đứng sau `PositionsSynced=true` |
+> | S6 | Mỗi phiên kết thúc bằng **đóng app bằng nút X** | log có `unsubscribe` + `QUOTE/TRADE stopped` |
+>
+> Một phiên cuối tuần **≥ 40 giờ** (thứ Bảy → Chủ Nhật ở nhà) coi như đạt luôn S1 + S3.
+> Cách chạy: bấm đúp `Desktop\start-soak-ctrader.cmd` sau mỗi lần bật máy (tự bật raw log, chặn mở 2 instance),
+> **không bấm Start**; trước khi shutdown thì đóng app bằng nút X.
+> Cái chấp nhận mất: không bắt được rò rỉ rất chậm (> 24 h) — bù lại Phase 7 chỉ chạy ~3 giờ.
+
 > **Phát hiện thêm khi soak (2026-09-21 07:00:00 = 00:00 UTC):** QuickFIX/n tự reset sequence number theo mốc ngày
 > (`StartTime=EndTime=00:00:00`) nên gửi tiếp với `34=1` trong khi server vẫn đếm tiếp → server trả
 > `35=5 text="MsgSeqNum too low, expecting 275 but received 1"`, app logout + fail-closed và tự logon lại sau **3 s**
@@ -301,6 +324,56 @@ Phase 4 **tạm đóng để sang Phase 5/6** (hai phase đó chạy tài khoả
 | P4-D3 | ~~Kill mạng im lặng với kiểm tra sống 5 s/5 s~~ **ĐÃ ĐO (2026-09-21 08:55, giờ giao dịch):** Wi-Fi tắt 08:55:44.9 → QUOTE fail-closed **9,2 s** (08:55:54.1, im lặng 10 s + TestRequest không phản hồi 5 s); QuickFIX mới logout ở 26,5 s. **TRADE không có kiểm tra sống → 46 s** (08:56:30.9) mới về MapNotFound (đúng như ghi nhận Phase 5 #7). Bật lại mạng 08:56:48.7 → TRADE logon 0,7 s, QUOTE logon 2,2 s, Telegram logout/logon đúng debounce 30 s. Chuỗi: 46,8 s (không có) → 4,2 s (3 s/2 s, báo oan) → **9,2 s (5 s/5 s, không báo oan)**. **Mục tiêu < 1 s không đạt với mất mạng im lặng — cần chủ dự án chấp nhận 9,2 s** (hoặc thêm kiểm tra sống cho TRADE ở Phase 8). | log + netwatch 08:55–08:56 | chờ duyệt |
 | P4-D4 | ~~cServer có trả lời TestRequest không~~ **CÓ (2026-09-20/21):** trả lời trong ~330 ms; giờ giao dịch 20/20 probe được trả lời, `stale_events=0`. Cuối tuần (thị trường đóng) có **4 lần** server trả lời chậm > 5 s → app fail-closed 0,7–7 s rồi tự phục hồi bằng `35=0`. → **GIỮ kiểm tra sống 5 s/5 s**; cân nhắc nới timeout nếu muốn hết false-stale cuối tuần. | `[STATS] probes_*` | ✅ đóng (còn theo dõi) |
 | P4-D5 | ~~Tổng hợp R8~~ **ĐÃ CÓ (2026-09-21, 141 phút sau khi mở cửa):** 155 tick/phút; tuổi tick p50 **317 ms**, p95 **2 043 ms**, max 27 s (phút đầu mở cửa); với `confirm_latency_ms=100` thì **76 %** số lần đọc sẽ bị skip `LATENCY`. → đề xuất `confirm_latency_ms_b` ≈ **3 000 ms** (trên p95, dưới ngưỡng fail-closed 10 s của kiểm tra sống). | Gom `[STATS]` | Task R8-B → Phase 7 |
+| P4-D6 | **ĐÓNG 2026-09-23 — nhưng phải đọc kèm đính chính.** Tham số latency truyền vào `ICTraderQuoteSession.Read` CHỈ nuôi dòng `[STATS]` (`confirm_latency_ms=`, `would_skip_latency_b`), không đụng `IsConnected` hay quyết định nào. `SharedMemoryMarketDataReader.cs:125` từng truyền **ngưỡng chung của A** nên **mọi số liệu R8 trước 23/09 11:00 (kể cả 76 % và 46–68 % ở trên) đều tính theo 100 ms, KHÔNG phải ngưỡng B** — không dùng để kết luận. Đã sửa sang `CurrentConfirmLatencyMsBEffective`. | `[STATS]` | — |
+
+**Vì sao latency sàn B luôn cao hơn sàn A (đo 2026-09-23, KHÔNG phải lỗi app):**
+
+| Nguyên nhân | Số đo |
+|---|---|
+| Máy chủ broker ở xa | TCP tới `145.241.197.73:5211` 5 lần: 222 / 222 / 311 / 279 / 240 ms khứ hồi ⇒ một chiều ~120–155 ms |
+| Hai chân đo hai đại lượng | A = terminal MT **cùng máy** ghi shared memory (0–50 ms); B = báo giá qua Internet từ châu Âu |
+| cTrader spot chỉ gửi khi top-of-book đổi | XAUUSD ~3–4 báo giá/giây (175 tick/phút lúc 14:41) ⇒ khoảng cách 200–300 ms là bình thường, thị trường lặng thì 1–2 s |
+
+Phân phối sau khi tắt raw log (14:41): `p50 = 219 ms`, `p95 = 1 422 ms`, `max = 1 969 ms`.
+
+**Chênh ~750 ms giữa tag 52 và giờ máy KHÔNG phải độ trễ** — chủ yếu là đồng hồ máy chạy nhanh, vì đường
+truyền một chiều chỉ ~150 ms. Không ảnh hưởng guard: tuổi tick dùng `TickCount64` đơn điệu, không dùng giờ
+tường. Đừng diễn giải con số này thành độ trễ mạng.
+
+**Quyết định 2026-09-23: siết `ctrader_confirm_latency_b` 3000 → 1000 ms.** Lý do: gap được tính giữa giá A
+(tại chỗ, tươi) và giá B (trung bình cũ ~220 ms, 5 % số lần cũ hơn 1,4 s). Trần 3 s cho phép vào lệnh bằng
+giá vàng cũ tới 3 giây — quá dài cho phiên tiền thật. Đánh đổi: chặn thêm vài phần trăm tín hiệu.
+
+**Ngữ nghĩa latency KHÁC NHAU giữa hai chân (làm rõ 2026-09-23, không đổi quyết định):**
+
+| | Chân A (MT qua MMF) | Chân B (cTrader qua FIX) |
+|---|---|---|
+| `LatencyMs` | Độ trễ truyền tick `now − tick.TimestampMs`, chỉ tính khi có tick mới; giữa hai tick giữ số cũ | **Tuổi tick** `now − lúc nhận báo giá cuối`, tính lại mỗi 50 ms → **tăng dần rồi về ~0** |
+| `Avg/Max Lat` | Theo mỗi tick | Theo mỗi tick (khoảng cách giữa hai tick) — **sửa 2026-09-23**, trước đó cộng theo mỗi lần đọc 50 ms nên bị kéo theo nhịp poll |
+
+Guard latency B so với **tuổi tick** — đúng như R8 đã quyết ("bao lâu rồi broker chưa gửi tick"), giữ nguyên.
+Đã cân nhắc và LOẠI phương án đổi B sang đo độ trễ truyền bằng tag 52 SendingTime: đổi ngữ nghĩa guard thì
+phải đo lại ngưỡng từ đầu và còn phụ thuộc lệch đồng hồ máy so với broker.
+Ba dòng latency trên UI đã có ToolTip giải thích. Test khoá: `LatencyMs_IsTickAge_GrowsBetweenTicks`,
+`AvgMaxLat_SampledPerTick_NotPerRead`.
+
+**Số đo độ nhạy ngưỡng B (live 23/09, đo bằng cách đổi giá trị DB ngay lúc chạy):**
+
+| `ctrader_confirm_latency_b` | `would_skip_latency_b` |
+|---|---|
+| 3 000 ms | **0 – 1,6 %** |
+| 2 500 ms | **3,2 – 9,5 %** |
+| 100 ms (ngưỡng chung của A) | 40 – 76 % |
+
+Chênh 500 ms mà tỉ lệ chặn nhảy từ ~1 % lên ~10 % ⇒ có cụm tuổi tick dày quanh 2,5–3 s (p50 266 ms,
+p95 1 406 ms, max 2 906 ms). **3 000 ms là giá trị đúng**; hạ xuống 2 500 sẽ mất ~1/10 số tick sàn B
+trước khi vào signal engine. Giá trị production đang đặt: **3000**.
+
+**Đường nạp config (R8-B) đã kiểm chứng end-to-end 2026-09-23 11:05–11:07:** đổi DB 3000 → 2500 → mở/đóng
+cửa sổ Config → `[STATS]` phút kế tiếp in 2500; đổi về 3000 → in lại 3000. **Không** cần Reconnect hay khởi
+động lại app. Trước bản sửa, `ConfigViewModel.cs:603` thiếu tham số `ctraderConfirmLatencyB` nên rơi vào
+sentinel `-1` và giá trị mới từ DB bị bỏ qua — đúng lớp lỗi `min_profit_to_close` mà CLAUDE.md cảnh báo.
+
 | P4-D6 | Logout khi đóng app bằng nút X (đã sửa monitor giữ handler log, chưa kiểm lại) | Đóng app bằng X, log phải có `unsubscribe` + `QUOTE stopped` | Phase 7 |
 | P4-D7 | `CheckPriceFreeze` khi dừng EA chân A + so log phiên mt5/mt5 với trước Phase 4 — cần Start | Làm trong Phase 7 Bước B (lúc đó đã chấp nhận Start) | Phase 7 |
 | P4-D8 | Ma trận có MT4 (4 ô) — máy không có terminal MT4 | Cài MT4 hoặc chủ dự án chấp nhận chỉ unit test | Phase 8 |

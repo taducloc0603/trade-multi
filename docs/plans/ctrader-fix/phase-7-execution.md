@@ -27,6 +27,7 @@
 ## Phụ thuộc phase trước
 
 - Phase 4, 5, 6 đã pass **Lớp 1** và đã soak trên tài khoản trống. Toàn bộ chiều đọc đã đúng.
+- **Cổng soak dùng tiêu chí theo phiên S1–S6** ([Phase 4](phase-4-quote-feed.md)), không đòi 2 ngày liên tục.
 - **Đã đóng P5-D1 và P5-O1** ([Phase 5 "Cổng sang Phase 6"](phase-5-open-positions.md)): soak ≥ 2 ngày liên tục qua cuối tuần trên bản build cuối, kết luận QUOTE logout lặp.
 - **Đã đóng các mục Phase 4 hoãn P4-D1…D7** ([bảng](phase-4-quote-feed.md)): soak + giờ nghỉ, kill mạng với kiểm tra sống,
   cServer trả lời TestRequest, tổng hợp R8, logout khi đóng app. P4-D7 (price-freeze + so log, cần Start) làm ở Bước B.

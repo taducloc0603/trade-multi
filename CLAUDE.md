@@ -465,6 +465,18 @@ TradeDesktop.Tests/            # xUnit tests
   `CLOSE_MAX_TP_EXCEEDED` / `CLOSE_MAX_TIMES_TICK_EXCEEDED` lặp MỖI TICK cho MỖI slot →
   bắt buộc đi qua `LogVerbose`, không dùng `Log`.
 
+### Latency hai chân KHÔNG cùng ngữ nghĩa
+
+- Chân A (MMF): `LatencyMs` là ĐỘ TRỄ TRUYỀN tick, chỉ đổi khi có tick mới.
+- Chân B (cTrader FIX): `LatencyMs` là **TUỔI TICK**, tính lại mỗi 50 ms nên **tăng dần giữa hai tick**
+  rồi về ~0. Nhìn trên UI giống "cộng dồn" nhưng đúng bản chất — đây là đại lượng guard so với
+  `ctrader_confirm_latency_b`. ĐỪNG sửa cho giống chân A.
+- `Avg/Max Lat` của B lấy mẫu theo TICK (khoảng cách giữa hai tick), không theo nhịp đọc 50 ms.
+- UI hiển thị `TickIntervalMs` (khoảng cách giữa hai tick, đứng yên) còn **guard vẫn so `LatencyMs`**
+  (tuổi tick) với `ctrader_confirm_latency_b` — ô trên màn hình có thể nhỏ trong khi tín hiệu đang bị chặn.
+- Chênh lệch giữa tag 52 (SendingTime của broker) và giờ máy chủ yếu là **lệch đồng hồ**, không phải độ trễ
+  mạng: đo 2026-09-23 thấy RTT tới broker chỉ ~230–310 ms. Đừng diễn giải nhầm con số đó.
+
 ### Cooldown
 - Auto action thường dùng transition matrix, không dùng global post-action cooldown. Same-action và
   post-close duration được chọn tại dispatch; per-slot post-open được chọn tại Open confirm.

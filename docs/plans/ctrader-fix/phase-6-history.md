@@ -147,8 +147,10 @@ Một `ExecutionReport` khớp lệnh là order **đóng** khi nó mang `721 Pos
 
 - [x] Test suite: **964 total / 953 pass / 11 fail**, 11 tên trùng baseline memo §2.2b (+13 test Phase 6
       `CTraderHistoryTests`). Build App `--no-incremental`: 0 error, 3 warning `CA1416` baseline.
-- [ ] Soak ít nhất **2 ngày** — **CHƯA KIỂM — cần soak 2 ngày** (đang chạy: 2026-09-20 20:53 → nay, PID 21580, ~12 h,
-      RAM 282 → 203 MB, handle 1773 → 1317; gộp với P5-D1/P4-D1).
+- [ ] Soak — **CHƯA KIỂM**. Dùng **tiêu chí theo phiên S1–S6** (chủ dự án quyết 2026-09-21, xem
+      [Phase 4 "Hoãn có điều kiện"](phase-4-quote-feed.md)): tổng ≥ 24 h tích luỹ, ≥ 2 đêm qua giờ nghỉ và
+      mốc 00:00 UTC, ≥ 1 phiên ≥ 10 h. Đã có trên bản cũ: phiên 10,5 h (RAM 282 → 191 MB, handle 1773 → 1263,
+      không rò rỉ). Gộp chung với P4-D1/P5-D1 trên bản build cuối `b8b0bbf`.
 
 ---
 
