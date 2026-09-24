@@ -34,6 +34,9 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
     public const long StormWindowMs = 60_000;
     public const int StormThreshold = 5;
 
+    // Phải NHỎ HƠN HẲN open_pending_time_ms (30 000) để router còn kịp đi đường rollback partial-open.
+    public const int OrderReportTimeoutMs = 5_000;
+
     // Tự thử lại sau ngắt mạch (chủ dự án duyệt 2026-09-23) — xem CTraderQuoteSession cùng hằng số.
     // Sự cố live 23/09 05:36 xảy ra ĐÚNG ở session này: sàn reset phiên, 5 lần thử logon không ai trả lời
     // bị tính thành bão, TRADE dừng hẳn và nằm chết 3 h 17 m.
@@ -61,6 +64,8 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
     private readonly object _stateLock = new();
     private readonly CTraderSecurityCatalog _catalog = new();
     private ICTraderFixTransport? _liveTransport;
+    // Phase 7 Bước C: các lệnh đang chờ terminal report, khoá theo tag 11 ClOrdID.
+    private readonly Dictionary<string, TaskCompletionSource<CTraderOrderOutcome>> _pendingOrders = new(StringComparer.Ordinal);
     private int _generation;
     private bool _tradeLoggedOn;
     private CTraderPositionCache? _cache;
@@ -592,6 +597,108 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
         }
     }
 
+    // Phase 7 Bước C — ĐƯỜNG DUY NHẤT gửi lệnh ra sàn B. Chỉ CTraderTradeExecutor gọi, khi router ra lệnh.
+    // Rule E: không nhánh nào bên trong session tự gọi hàm này. Không flatten, không retry, không reconcile bằng lệnh.
+    public async Task<CTraderOrderOutcome> SendMarketOrderAsync(CTraderOrderRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        ICTraderFixTransport? transport;
+        int symbolId;
+        var tcs = new TaskCompletionSource<CTraderOrderOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_stateLock)
+        {
+            if (!_tradeLoggedOn || _liveTransport is null)
+            {
+                return new CTraderOrderOutcome(false, "TRADE session chưa logon");
+            }
+
+            if (_pendingOrders.ContainsKey(request.ClOrdId))
+            {
+                return new CTraderOrderOutcome(false, $"ClOrdID trùng đang chờ: {request.ClOrdId}");
+            }
+
+            transport = _liveTransport;
+            symbolId = _symbolId;
+            _pendingOrders[request.ClOrdId] = tcs;
+        }
+
+        try
+        {
+            var message = CTraderMessageFactory.MarketOrder(
+                request.ClOrdId, symbolId, request.IsBuy, request.QuantityUnits, request.PositionId, DateTime.UtcNow);
+
+            if (!transport.Send(CTraderSessionRole.Trade, message))
+                {
+                return Forget(request.ClOrdId, new CTraderOrderOutcome(false, "Gửi NewOrderSingle thất bại"));
+            }
+
+            Emit("INFO", $"NewOrderSingle gửi clOrdId={request.ClOrdId} side={(request.IsBuy ? "buy" : "sell")} " +
+                $"qty={request.QuantityUnits} 721={request.PositionId?.ToString(CultureInfo.InvariantCulture) ?? "-"}");
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(OrderReportTimeoutMs);
+            using (timeout.Token.Register(() => tcs.TrySetResult(
+                new CTraderOrderOutcome(false, $"Không có terminal report sau {OrderReportTimeoutMs} ms"))))
+            {
+                var outcome = await tcs.Task.ConfigureAwait(false);
+                return Forget(request.ClOrdId, outcome);
+            }
+        }
+        catch (Exception ex)
+        {
+            return Forget(request.ClOrdId, new CTraderOrderOutcome(false, $"Lỗi gửi lệnh: {ex.Message}"));
+        }
+    }
+
+    // Volume + chiều của position đang mở, để executor dựng lệnh đóng. null = không có trong cache → fail closed.
+    public (bool IsBuy, decimal QuantityUnits)? TryGetOpenPosition(long positionId)
+    {
+        lock (_stateLock)
+        {
+            var position = _cache?.Positions.FirstOrDefault(x => x.PositionId == positionId);
+            return position is null ? null : (position.IsBuy, position.VolumeUnits);
+        }
+    }
+
+    private CTraderOrderOutcome Forget(string clOrdId, CTraderOrderOutcome outcome)
+    {
+        lock (_stateLock)
+        {
+            _pendingOrders.Remove(clOrdId);
+        }
+
+        return outcome;
+    }
+
+    // R11: market order sinh HAI report — `150=0/39=0` (đã nhận) rồi `150=F/39=2` (khớp). Chỉ cái thứ hai là
+    // terminal. Đọc CẢ 150 lẫn 39 vì spec không cam kết hai tag luôn đồng bộ; chỉ tin một tag là tự mở cửa cho
+    // sai lệch. Gọi dưới _stateLock.
+    private void CompletePendingOrderIfTerminal(Message message)
+    {
+        var clOrdId = FixFieldReader.String(message, 11);
+        if (clOrdId is null || !_pendingOrders.TryGetValue(clOrdId, out var tcs))
+        {
+            return;
+        }
+
+        var execType = FixFieldReader.String(message, 150);
+        var ordStatus = FixFieldReader.String(message, 39);
+
+        if (execType == "8" || ordStatus == "8")
+        {
+            var text = FixFieldReader.String(message, 58);
+            tcs.TrySetResult(new CTraderOrderOutcome(false,
+                string.IsNullOrWhiteSpace(text) ? "Sàn từ chối lệnh (không có 58)" : text));
+            return;
+        }
+
+        if (execType == "F" && ordStatus == "2")
+        {
+            tcs.TrySetResult(new CTraderOrderOutcome(true, "Khớp", FixFieldReader.Long(message, 721)));
+        }
+    }
+
     private void OnMessage(int generation, CTraderSessionRole role, Message message)
     {
         if (role != CTraderSessionRole.Trade)
@@ -729,6 +836,8 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
             {
                 return;
             }
+
+            CompletePendingOrderIfTerminal(message);
 
             changed = _cache.ApplyExecutionReport(message);
             version = (long)_cache.Version;

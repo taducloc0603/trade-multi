@@ -17,6 +17,14 @@ public enum CTraderTradeEventKind
 
 public sealed record CTraderTradeSessionEvent(CTraderTradeEventKind Kind, string Message);
 
+// Phase 7 Bước C — lệnh market gửi qua FIX. `PositionId` null = mở position mới; có giá trị = tác động vào
+// position đó (đóng = side ngược + đủ volume, R1 đã chứng minh live 2026-09-23).
+public sealed record CTraderOrderRequest(string ClOrdId, bool IsBuy, decimal QuantityUnits, long? PositionId);
+
+// `Success` chỉ đúng khi sàn trả `150=F` VÀ `39=2`. Reject mang nguyên văn tag 58 (tag 103 luôn 0 — R11).
+// Timeout cũng là `Success=false`: executor phải để router đi đường partial-open/rollback sẵn có.
+public sealed record CTraderOrderOutcome(bool Success, string Detail, long? PositionId = null);
+
 // Phase 5 — luồng LỆNH ĐANG MỞ sàn B qua FIX TRADE session. CHỈ nhận: SecurityList, RequestForPositions/PositionReport,
 // ExecutionReport. KHÔNG có đường gửi order (Rule E) — NullCTraderTradeExecutor vẫn giữ chỗ tới Phase 7.
 public interface ICTraderTradeSession
@@ -38,4 +46,14 @@ public interface ICTraderTradeSession
     // Phase 6: history B. R2 cùng điều kiện với trades; Timestamp = version RIÊNG của history (R3); Profit tính lại từ
     // (Close−Open)×point, Commission = 0 (R10). Record chỉ sinh khi position đóng hẳn qua fill.
     SharedMapReadResult<HistorySharedRecord> ReadHistory(string mapName, bool quoteLoggedOn, int point);
+
+    // Phase 7 Bước C: ĐƯỜNG DUY NHẤT gửi lệnh ra sàn B, chỉ được gọi từ CTraderTradeExecutor khi router ra lệnh.
+    // Rule E: session KHÔNG tự gọi hàm này ở bất kỳ nhánh nào — không flatten, không retry, không reconcile bằng lệnh.
+    // Mặc định trả Success=false để fake/test cũ không vô tình "đặt lệnh được".
+    Task<CTraderOrderOutcome> SendMarketOrderAsync(CTraderOrderRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new CTraderOrderOutcome(false, "SendMarketOrderAsync chưa được cài đặt"));
+
+    // Volume của position đang mở (đơn vị cơ sở) + chiều, để executor dựng lệnh đóng ngược chiều đúng khối lượng.
+    // null = không có position đó trong cache → executor PHẢI fail closed, không đoán.
+    (bool IsBuy, decimal QuantityUnits)? TryGetOpenPosition(long positionId) => null;
 }
