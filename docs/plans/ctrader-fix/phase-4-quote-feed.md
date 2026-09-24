@@ -1,5 +1,12 @@
 # Phase 4 — Chỉ luồng GIÁ, live, read-only
 
+> **⚠️ ĐỌC TRƯỚC — nguồn gốc số liệu (ghi 2026-09-24):** mọi con số đo đạc trong tài liệu này (soak, phân
+> phối tick, độ trễ, spread, gap, tỉ lệ skip) là của **FxPro 8220816**. Từ **2026-09-23 16:42** sàn B
+> production là **Deriv `live.deriv.1551176`** vì FxPro chặn đặt lệnh qua FIX (`CHANNEL_IS_BLOCKED`, xem
+> [Phase 7 P7-A1](phase-7-execution.md)). Phần nghiệm thu **CHỨC NĂNG** vẫn còn giá trị — cùng giao thức FIX,
+> code không đổi. Phần **SỐ LIỆU** thì KHÔNG chuyển sang được: các mục soak phải đo lại trên Deriv.
+
+
 > **Phase đầu tiên chạm vào đường live.** Chỉ mở **QUOTE session**. TRADE session chưa kết nối, app
 > **không có khả năng đặt lệnh** ở chân B (`NullCTraderTradeExecutor` từ Phase 1 vẫn nguyên chỗ).
 

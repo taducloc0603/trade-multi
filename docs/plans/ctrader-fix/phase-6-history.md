@@ -1,5 +1,12 @@
 # Phase 6 — Luồng LỊCH SỬ, live, read-only
 
+> **⚠️ ĐỌC TRƯỚC — nguồn gốc số liệu (ghi 2026-09-24):** mọi con số đo đạc trong tài liệu này (soak, phân
+> phối tick, độ trễ, spread, gap, tỉ lệ skip) là của **FxPro 8220816**. Từ **2026-09-23 16:42** sàn B
+> production là **Deriv `live.deriv.1551176`** vì FxPro chặn đặt lệnh qua FIX (`CHANNEL_IS_BLOCKED`, xem
+> [Phase 7 P7-A1](phase-7-execution.md)). Phần nghiệm thu **CHỨC NĂNG** vẫn còn giá trị — cùng giao thức FIX,
+> code không đổi. Phần **SỐ LIỆU** thì KHÔNG chuyển sang được: các mục soak phải đo lại trên Deriv.
+
+
 > Vẫn **chưa gửi order nào**. `NullCTraderTradeExecutor` vẫn nguyên chỗ.
 
 [← Phase 5](phase-5-open-positions.md) · [Index](README.md) · Phase sau: [Phase 7](phase-7-execution.md)
@@ -166,7 +173,7 @@ Phase 7 là phase **duy nhất** app được đặt lệnh cTrader. Cổng này
 
 - [ ] Toàn bộ checklist **Lớp 1** của Phase 4, 5, 6 đã pass và đã soak đủ trên tài khoản trống.
 - [ ] Danh sách Lớp 2 của Phase 5 và 6 đã nằm trong checklist Phase 7 Bước B.
-- [ ] Tài khoản live 8220816 đã nạp đủ (≥ $30–50) và chọn được ngày chạy trọn A → B → C trong giờ
+- [x] ~~Tài khoản live 8220816~~ → **Deriv 1551176** (FxPro chặn đặt lệnh qua FIX, P7-A1). Tài khoản Deriv có tiền, chân A là MT5 demo.
       XAUUSD mở. **Câu 1/4/5/6 (spike 721) chạy ở Phase 7 Bước A**, không phải điều kiện vào Phase 7.
 - [ ] Đã chốt giá trị `volumeBUnits` thật sẽ dùng, và `contractSizeB` đã được Phase 0 xác minh.
 - [ ] `max_total_opens` đã được đặt về **1** cho toàn bộ giai đoạn nghiệm thu Phase 7.

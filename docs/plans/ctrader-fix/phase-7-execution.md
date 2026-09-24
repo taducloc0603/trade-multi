@@ -33,7 +33,9 @@
   cServer trả lời TestRequest, tổng hợp R8, logout khi đóng app. P4-D7 (price-freeze + so log, cần Start) làm ở Bước B.
 - **Task R8-B (`confirm_latency_ms_b`) đã merge** và giá trị B đã đặt theo số liệu soak Phase 4 ([README R8](README.md)). Thiếu task này thì chân B bị skip/chặn `LATENCY` khi đặt lệnh thật.
 - Phase 0 **GO-READ** (câu 2/3/7/8/9/10) đã có log raw; `C:\tmp\ctrader-spike` còn build được.
-- **Tiền:** live 8220816 đã nạp **$50** (tính chi tiết ở mục "Vốn tối thiểu và bảng chi phí" bên dưới:
+- **Tiền:** ~~live 8220816 đã nạp $50~~ — **LỖI THỜI**. Từ 2026-09-23 sàn B là **Deriv 1551176**;
+  $50,01 ở FxPro không dùng tới. Chân A là MT5 **demo** nên không tốn tiền; chi phí Bước C ước tính
+  **$2–4** (chỉ spread chân B).
   ký quỹ đỉnh $17,42 + chi phí ~$3,4 + đệm $20). Số dư ngày 2026-09-21 là **$0,01** → cần nạp.
   Đòn bẩy xác nhận trên web: **1:500**, tài khoản **Hedging**.
 - **Giờ:** trong giờ XAUUSD mở (05:00 → 03:59:45 UTC+7). Toàn bộ A+B+C nên nằm trong **một ngày**.
@@ -405,7 +407,7 @@ thay vì âm thầm sai.
 
 ## Nghiệm thu
 
-**Nghiệm thu Bước C — live 8220816, `max_total_opens = 1`, tối thiểu một phiên đầy đủ.** Tiền đề: Bước A
+**Nghiệm thu Bước C — live **Deriv 1551176** (KHÔNG phải FxPro 8220816 — sàn đó chặn đặt lệnh qua FIX, xem P7-A1), `max_total_opens = 1`, tối thiểu một phiên đầy đủ.** Tiền đề: Bước A
 GO và Bước B pass trong cùng phiên. Chạy trong giờ giao dịch XAUUSD (05:00 → 03:59 UTC+7); máy dev hiện
 có **2 terminal MT5** nên đủ 6 ô ma trận có thể nghiệm thu tại chỗ. Chân A trên MT cũng là tiền thật
 nếu terminal A là live — chủ dự án xác nhận terminal A dùng cho nghiệm thu là demo hay live trước khi bắt đầu.
