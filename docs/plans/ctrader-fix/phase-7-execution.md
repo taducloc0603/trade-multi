@@ -203,7 +203,10 @@ quan sát (`NullCTraderTradeExecutor` nguyên tại chỗ, KHÔNG bấm Start).
 tab History của app tính lãi/lỗ từ chênh lệch giá, KHÔNG gồm commission/swap thật. Đối chiếu tiền thật phải
 xem History trên cTrader Web.
 
-## P7-B2 — CHẶN Bước C: gap trên Deriv chỉ bằng ~một nửa FxPro
+## P7-B2 — (ĐÃ BỊ THAY THẾ bởi P7-B3) Nghi ngờ gap Deriv thấp hơn FxPro
+
+> **Kết luận "CHẶN Bước C" của mục này đã bị bác bằng dữ liệu dài hơn — xem P7-B3 ngay dưới.**
+> Số liệu 51 phút dưới đây vẫn đúng với cửa sổ đo của nó; cái sai là suy rộng thành kết luận chặn.
 
 Gom toàn bộ dòng `[STATS]` ngày 2026-09-23 (mỗi phút một mẫu, là tick cuối cửa sổ):
 
@@ -225,6 +228,34 @@ ro tiền thật, không phải việc dọn dẹp.
 
 Giới hạn của số liệu: mỗi phút một mẫu, Deriv mới có 51 phút trong khung giờ chiều. Cần thêm phiên Mỹ và
 phiên Á để chắc. Nhưng chênh lệch ~2 lần thì đã vượt xa sai số đo.
+
+## P7-B3 — Đo lại gap: P7-B2 KHÔNG tái lập, Bước C không bị chặn (2026-09-24)
+
+Gom `gap_buy_pts=` từ toàn bộ `[STATS]` hiện có, thay vì 51 phút của một buổi chiều:
+
+| | FxPro 21–22/09 (2 070 phút) | Deriv 23/09 16:27 → 24/09 10:19 (859 phút) |
+|---|---|---|
+| Gap Buy trung vị | −18 | **−21** |
+| Phân vị 25–75 | −23 … −14 | −27 … −15 |
+| **\|gap\| trung bình** | 19,6 | **24,2** |
+| Spread B trung bình | 20,3 | 21,5 |
+| \|gap\| ≥ 15 | 71 % | 77 % |
+| \|gap\| ≥ 20 | 41 % | 54 % |
+
+Gap Deriv **lớn hơn** FxPro một chút, không phải bằng một nửa. **Ngưỡng `open_pts` / `confirm_gap_pts` /
+`close_pts` / `close_confirm_gap_pts` đang đặt theo FxPro vẫn dùng được — không cần chỉnh lại trước khi bật
+executor.** Rủi ro mà P7-B2 nêu không có thật.
+
+Hai giới hạn phải giữ trong đầu khi đọc bảng này:
+
+- Hai cửa sổ đo **không cùng phân bố giờ trong ngày** (Deriv ~14 h liên tục qua đêm và sáng; FxPro 34,5 h
+  trải hai ngày). Với vàng thì giờ phiên có ảnh hưởng, nên đây là *"không thấy chênh lệch đáng kể"*, không
+  phải *"đã chứng minh hai sàn như nhau"*.
+- `would_skip_latency_b` (65,5 % FxPro vs 14,6 % Deriv) **không so sánh được**: giai đoạn FxPro chạy
+  `confirm_latency_ms=100`, Deriv chạy `1000`. Đừng đọc nó như cải thiện của sàn.
+
+Bài học chung: 51 phút trong một khung giờ duy nhất không đủ để kết luận về một sàn, kể cả khi chênh lệch
+quan sát được lên tới hai lần.
 
 ## Hệ quả: đổi sàn B sang Deriv
 
@@ -284,6 +315,38 @@ Thứ tự và tiêu chí **y hệt** [phase-0-spike.md](phase-0-spike.md) câu 
 - [ ] **(từ Phase 2, câu 4 — luật đã có unit test `PlatformBSwitchGuardTests`; ở đây chỉ kiểm hiển thị UI)** Có 1 slot mở: đổi `platform_b` `mt5 → ctrader` trong Config → Save **bị từ chối** với
       "Đang có N slot mở — đóng hết trước khi đổi nền tảng sàn B." (N đúng); đổi `mt4 ↔ mt5` → Save **OK như trước**.
 - [ ] Web tab Positions = 0 trước khi sang Bước C.
+
+## P7-C0 — Môi trường VPS `win-hfa1234` ĐẠT (2026-09-24)
+
+Kiểm bằng `docs/tools/vps-setup.ps1`. Quy trình dựng môi trường nằm ở
+[phase-7-vps-run.md](phase-7-vps-run.md) mục 0.
+
+| Mục | Kết quả |
+|---|---|
+| hostname | `win-hfa1234` — **khoá tạo row config trong DB**, khác laptop nên phải tạo row riêng |
+| Timezone / sleep | UTC+7 sẵn có; `standby-timeout-ac` và `monitor-timeout-ac` đặt về 0 |
+| FIX ra sàn | QUOTE ~333 ms, TRADE ~232 ms — **ngang laptop** (222–311 ms) |
+| EA chân A | Cài lại từ `DataExporter/MQ5/`; cả ba map `_Tick` / `_Trades` / `_History` đọc được |
+| App tại `C:\TradeMultiCtrader` | **chưa cài** — còn phải tải portable zip |
+
+**VPS mua uptime, không mua latency.** Số đo FIX ngang laptop, nên đừng kỳ vọng `would_skip_latency_b`
+giảm khi đổi máy. Cái được là máy không ngủ và không mất session — laptop đã bị Modern Standby cắt log
+hai lần trong lúc soak.
+
+**Sự cố EA và cách nhận ra** (ghi lại để lần sau khỏi truy lại): lần kiểm đầu thấy `MT_A_Tick` đọc được
+nhưng `MT_A_Trades` và `MT_A_History` không tồn tại. Tổ hợp đó **bất khả thi với bản EA trong repo**:
+`OnInit` tạo map theo thứ tự **Trades → History → Tick** và mỗi bước hỏng đều `return INIT_FAILED` trước
+khi tới bước sau (`DataExporter.mq5:22-50`), nên Trades hỏng thì Tick không bao giờ được tạo. Suy ra chắc
+chắn có một EA **khác** đang giữ `MT_A_Tick` — VPS chạy 3 tiến trình `terminal64`. Cài lại EA theo mục C
+của runbook là hết. Hai chỗ hay hỏng: chưa bật **Allow DLL imports** (EA gọi `kernel32.dll` ở
+`SharedMemoryBase.mqh:5-11`), và sót EA cũ chưa gỡ ở terminal khác.
+
+### Còn lại trước khi bấm Start
+
+1. Tải portable zip từ GitHub Actions (commit `50a444e` trở lên) → `C:\TradeMultiCtrader`, chạy lại script.
+2. Tạo row config DB cho `win-hfa1234` (copy từ `laptop-eoj2n95d`), đặt `max_total_opens = 1`.
+3. Chụp lại `manualHwndColumns` trên VPS, giữ đúng cặp `cN → tN` (Rule G).
+4. Tắt app ở laptop (hai phiên cùng `SenderCompID` sẽ đá nhau), rồi kiểm mục G của runbook.
 
 ## Bước C — Executor thật
 
