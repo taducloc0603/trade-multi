@@ -2,7 +2,7 @@ name: Build and Release Windows App
 
 on:
   push:
-    branches: [ dev, dev-5-gap-am-holding-ms ]
+    branches: [ dev, dev-5-gap-am-holding-ms, dev-5-release-111-ctrader ]
   workflow_dispatch:
 
 permissions:
@@ -54,9 +54,10 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          # Pipeline release dang chay on va repo co san 19 test fail (no ky thuat da biet), nen
-          # buoc nay KHONG chan release. Muc dich la co mot con so de doi chieu: neu so fail vuot
-          # 19 thi thay doi vua day len da gay regression -> dung lai, dung lay artifact.
+          # Pipeline release dang chay on va repo co san test fail (no ky thuat da biet), nen buoc nay
+          # KHONG chan release. Muc dich la co mot con so de doi chieu: neu so fail VUOT BASELINE thi thay
+          # doi vua day len da gay regression -> dung lai, dung lay artifact.
+          # BASELINE hien tai (2026-09-24): 11 fail / 1009 test. Con so 19 truoc day da loi thoi.
           # Truoc buoc nay CI khong chay test, va `dotnet publish` cung khong bien dich project Test.
           dotnet test TradeDesktop.Tests/TradeDesktop.Tests.csproj `
             -c Release `
@@ -86,6 +87,7 @@ jobs:
             --self-contained true `
             /p:PublishSingleFile=true `
             /p:IncludeNativeLibrariesForSelfExtract=true `
+            /p:IncludeAllContentForSelfExtract=true `
             /p:Version=${{ env.VERSION }} `
             /p:AssemblyVersion=${{ env.VERSION }} `
             /p:FileVersion=${{ env.VERSION }} `
@@ -113,6 +115,15 @@ jobs:
 
           if (!(Test-Path "publish-portable/${{ env.APP_NAME }}.exe")) {
             throw "Portable exe not found: publish-portable/${{ env.APP_NAME }}.exe"
+          }
+
+      - name: Validate cTrader FIX dictionary shipped
+        shell: pwsh
+        run: |
+          # San B doc/dat lenh qua FIX can FIX44-CSERVER.xml, resolve bang AppContext.BaseDirectory
+          # (CTraderQuoteSession.cs:130). Thieu file nay thi san B chet han trong khi phan con lai van chay.
+          if (!(Test-Path "publish-portable/FIX44-CSERVER.xml")) {
+            throw "Thieu FIX44-CSERVER.xml trong ban portable - san B cTrader se khong khoi dong duoc"
           }
 
       - name: Bundle native DLL into publish outputs
@@ -156,6 +167,9 @@ jobs:
             2) Try portable zip asset
             3) Check `%LOCALAPPDATA%\TradeDesktop\logs\startup.log`
             4) Ensure `mt5engine_capi.dll` is in the same folder as exe
+
+            San B cTrader (platform_b=ctrader) can `FIX44-CSERVER.xml`: ban single-file da nhung san,
+            ban portable co san trong zip.
           files: |
             publish/${{ env.VERSIONED_EXE }}
             publish/${{ env.LATEST_EXE }}
