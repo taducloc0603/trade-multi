@@ -465,6 +465,15 @@ TradeDesktop.Tests/            # xUnit tests
   `CLOSE_MAX_TP_EXCEEDED` / `CLOSE_MAX_TIMES_TICK_EXCEEDED` lặp MỖI TICK cho MỖI slot →
   bắt buộc đi qua `LogVerbose`, không dùng `Log`.
 
+### Profit KHÔNG bám lot size (R5)
+
+- `CalculateTradeProfit` = `(Bid − openPrice) × point`, **bỏ qua lot size**. Nếu notional hai chân lệch nhau
+  thì `slot.LastProfitSnapshot` chỉ là tổng hai delta điểm giá, và `min_profit_to_close` (Rule D) cùng
+  priority-close ra quyết định trên con số không còn bám tiền thật.
+- Thứ duy nhất khiến điều đó nhìn thấy được là cảnh báo `[HEDGE_VOLUME]` ghi lúc bấm Start
+  (`HedgeVolumeConsistencyChecker`): lệch > 5 % là WARN, > 20 % là ERROR + Telegram. **Đừng sửa công thức
+  profit để "cho khớp"** — đó là đổi hành vi Rule D.
+
 ### Latency hai chân KHÔNG cùng ngữ nghĩa
 
 - Chân A (MMF): `LatencyMs` là ĐỘ TRỄ TRUYỀN tick, chỉ đổi khi có tick mới.
@@ -604,6 +613,10 @@ New code MUST NOT introduce new failures.
 - **Shared memory (MMF)**: tick prices + open trades + history.
 - **MT4/MT5 native click**: via `NativeMethodsMt4/Mt5.cs` (P/Invoke, Windows-only).
 - **Telegram notifier**: critical event alerts.
+- **cTrader FIX API** (QuickFIX/n 1.10.0): nguồn dữ liệu VÀ đường đặt lệnh của sàn B khi `platform_b = ctrader`.
+  Sàn B production là Deriv `live.deriv.1551176` — FxPro chặn đặt lệnh qua FIX (`CHANNEL_IS_BLOCKED`).
+  Chỉ `QuickFixCTraderTransport` chạm kiểu QuickFIX; `CTraderTradeSession.SendMarketOrderAsync` là đường DUY
+  NHẤT gửi lệnh. Tắt nhanh = đổi `platform_b` sang `mt5`, hoặc DI về `NullCTraderTradeExecutor`.
 - **xUnit**: test framework, `[Fact]` + `[Theory]`.
 
 ---

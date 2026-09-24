@@ -17,6 +17,7 @@ using TradeDesktop.Application.Helpers;
 using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
 using TradeDesktop.Application.Services.Portfolio;
+using TradeDesktop.Application.Services.CTrader;
 using TradeDesktop.Domain.Models;
 
 namespace TradeDesktop.App.ViewModels;
@@ -1069,6 +1070,10 @@ public sealed class DashboardViewModel : ObservableObject
         GapCycleDiagnostics.ResetSummaries();
         _tradeSessionFileLogger.StartSession(DateTimeOffset.Now, _normalizedHostName);
         _tradeSessionFileLogger.Log("Trading logic start confirmed by user");
+        // Phase 8: log tự định danh bản build. Không có dòng này thì log gửi từ máy khác (VPS) về không
+        // biết sinh ra từ commit nào — không đối chiếu được "lỗi này đã sửa chưa".
+        _tradeSessionFileLogger.Log($"[BUILD] version={GetAssemblyVersion()} platform_b={_runtimeConfigState.CurrentPlatformB}");
+        LogHedgeVolumeConsistency();
 
         ResetTradingLogicState();
         // Wipe display state on Start only — Stop giữ nguyên để xem P&L cuối session
@@ -9639,6 +9644,36 @@ public sealed class DashboardViewModel : ObservableObject
                 // swallow by design
             }
         });
+    }
+
+    // Phase 8 — R5: `CalculateTradeProfit` = (Bid − openPrice) × point, BỎ QUA lot size. Nếu notional hai chân
+    // lệch nhau thì `slot.LastProfitSnapshot` vẫn chỉ là tổng hai delta điểm giá, và `min_profit_to_close`
+    // (Rule D) cùng priority-close ra quyết định trên con số KHÔNG còn bám tiền thật. Cảnh báo này là thứ duy
+    // nhất khiến điều đó nhìn thấy được — công thức profit KHÔNG được sửa ở đây.
+    private void LogHedgeVolumeConsistency()
+    {
+        if (!CTraderRoutingRules.IsCTraderPlatform(_runtimeConfigState.CurrentPlatformB))
+        {
+            return;
+        }
+
+        var fix = _runtimeConfigState.CurrentCTraderFixConfig;
+        var check = HedgeVolumeConsistencyChecker.Check(
+            (double)fix.VolumeALots, (double)fix.VolumeBUnits, (double)fix.ContractSizeB);
+
+        var level = check.Level switch
+        {
+            HedgeVolumeLevel.Ok => "INFO",
+            HedgeVolumeLevel.Warn => "WARN",
+            _ => "ERROR",
+        };
+
+        _tradeSessionFileLogger.Log($"[HEDGE_VOLUME][{level}] {check.Message}");
+
+        if (check.Level == HedgeVolumeLevel.Alert)
+        {
+            _ = _telegramNotifier.NotifyAsync("CTRADER_HEDGE_VOLUME_MISMATCH", "ERROR", check.Message);
+        }
     }
 
     private static string GetAssemblyVersion()

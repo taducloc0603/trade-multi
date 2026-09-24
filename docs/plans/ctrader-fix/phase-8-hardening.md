@@ -7,6 +7,26 @@
 
 ---
 
+## Tiến độ (cập nhật 2026-09-24)
+
+**Làm trước một lát mỏng trong lúc chờ log Phase 7 từ VPS**, vì cả ba việc đều phục vụ chính lần chạy đó:
+
+| Việc | Trạng thái |
+|---|---|
+| `CTRADER_DIGITS_MISMATCH` | ✅ đã có từ Phase 4 |
+| `CTRADER_POSITIONS_NOT_SYNCED` | ✅ đã có từ Phase 5 |
+| `CTRADER_QUOTE_LOGOUT` / `CTRADER_TRADE_LOGOUT` (debounce 30 s) | ✅ đã có từ Phase 4/5 |
+| `CTRADER_RECONNECT_STORM` | ✅ thêm 2026-09-23 (P5-O2) |
+| **Wire `HedgeVolumeConsistencyChecker`** (R5) | ✅ 2026-09-24 — `[HEDGE_VOLUME]` ghi lúc bấm Start; lệch > 20 % bắn `CTRADER_HEDGE_VOLUME_MISMATCH` |
+| **Log `[BUILD] version=…`** | ✅ 2026-09-24 — log tự định danh bản build; thiếu nó thì log gửi từ VPS về không biết sinh từ commit nào |
+| `README.md` gốc | ✅ §8 nay giải thích chân B cTrader lấy dữ liệu qua FIX, ba khác biệt (ticket namespace, latency = tuổi tick, profit tính lại) |
+| `CLAUDE.md` | ✅ §9 thêm cTrader FIX; §5 thêm pitfall R5 (profit không bám lot size) |
+
+**Còn lại, đợi Phase 7 nghiệm thu xong:** 4 mục nghiệm thu cảnh báo (đặt lệch cố ý để xem WARN/Telegram có
+bắn đúng không, và kiểm không cảnh báo nào bắn sai trong phiên bình thường) — cần chạy thật mới kiểm được.
+
+---
+
 ## Mục tiêu
 
 Ba việc:

@@ -429,6 +429,23 @@ File: `TradeDesktop.App/Services/TradeExecutionRouter.cs`
 
 ## 8) Data source shared memory
 
+> **Sàn B có thể KHÔNG phải shared memory.** Khi `platform_b = ctrader`, chân B lấy dữ liệu qua **FIX API**
+> của cTrader chứ không qua MMF: `CTraderQuoteSession` (giá, kênh QUOTE) và `CTraderTradeSession` (vị thế +
+> lịch sử, kênh TRADE). Hai decorator `CTraderAwareTradesReader` / `CTraderAwareHistoryReader` chặn đúng hai
+> map ảo `CTRADER_B_Trades` / `CTRADER_B_History` và trả dữ liệu FIX vào đúng chỗ mà code MMF vẫn đọc — nên
+> phần còn lại của app không biết có gì khác. Map khác hoặc `platform_b != ctrader` thì rơi thẳng về reader
+> MMF, không đổi gì. Tắt nhanh = đổi `platform_b` sang `mt5`. Chi tiết: `docs/plans/ctrader-fix/`.
+>
+> Ba khác biệt phải nhớ khi đọc dữ liệu chân B cTrader:
+>
+> - **Ticket** là `positionId` của cTrader đã gắn bit 62 làm namespace (`CTraderTicketCodec`) để không đụng
+>   ticket MT — hai sàn đánh số độc lập nên trùng là đóng nhầm lệnh.
+> - **Latency** chân B là **tuổi tick** (bao lâu rồi chưa nhận báo giá), khác chân A là độ trễ truyền.
+>   Ngưỡng riêng: `ctrader_confirm_latency_b`.
+> - **Profit/Commission trong history là số TÍNH LẠI** từ `(Close − Open) × point`, KHÔNG phải số broker —
+>   không gồm commission và swap thật. Muốn số tiền thật phải xem trên cTrader Web.
+
+
 Files chính:
 
 - `TradeDesktop.Infrastructure/MarketData/SharedMemoryMarketDataReader.cs`
