@@ -58,7 +58,9 @@ public partial class App : System.Windows.Application
                     services.AddSingleton<IMt5ManualTradeService, Mt5ManualTradeService>();
                     services.AddSingleton<ITradePlatformExecutor, Mt5TradeExecutor>();
                     services.AddSingleton<ITradePlatformExecutor, Mt4TradeExecutor>();
-                    services.AddSingleton<ITradePlatformExecutor, NullCTraderTradeExecutor>();
+                    // Phase 7 Bước C (2026-09-24): executor THẬT — app có thể đặt lệnh trên sàn B qua FIX.
+                    // Quay lại NullCTraderTradeExecutor là cách tắt nhanh nhất nếu cần dừng khẩn cấp.
+                    services.AddSingleton<ITradePlatformExecutor, CTraderTradeExecutor>();
                     services.AddSingleton<CTraderSessionMonitor>();
                     services.AddSingleton<ITradeExecutionRouter, TradeExecutionRouter>();
                     services.AddSingleton<IWindowProbe, NativeWindowProbe>();

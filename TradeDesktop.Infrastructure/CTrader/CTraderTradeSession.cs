@@ -633,8 +633,10 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
                 return Forget(request.ClOrdId, new CTraderOrderOutcome(false, "Gửi NewOrderSingle thất bại"));
             }
 
-            Emit("INFO", $"NewOrderSingle gửi clOrdId={request.ClOrdId} side={(request.IsBuy ? "buy" : "sell")} " +
-                $"qty={request.QuantityUnits} 721={request.PositionId?.ToString(CultureInfo.InvariantCulture) ?? "-"}");
+            var sentAt = _tickCount();
+            Emit("INFO", $"[ORDER][SENT] clOrdId={request.ClOrdId} side={(request.IsBuy ? "buy" : "sell")} " +
+                $"qty={request.QuantityUnits} 721={request.PositionId?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
+                $"kind={(request.PositionId is null ? "open" : "close")}");
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(OrderReportTimeoutMs);
@@ -642,6 +644,14 @@ public sealed class CTraderTradeSession : ICTraderTradeSession, IDisposable
                 new CTraderOrderOutcome(false, $"Không có terminal report sau {OrderReportTimeoutMs} ms"))))
             {
                 var outcome = await tcs.Task.ConfigureAwait(false);
+
+                // Nghiệm thu Phase 7 đọc đúng cặp [ORDER][SENT] / [ORDER][RESULT] này để đối chiếu từng lệnh:
+                // khớp hay từ chối, mất bao lâu, position nào được tạo/đóng.
+                Emit(outcome.Success ? "INFO" : "WARN",
+                    $"[ORDER][RESULT] clOrdId={request.ClOrdId} success={outcome.Success} " +
+                    $"elapsed_ms={_tickCount() - sentAt} 721={outcome.PositionId?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
+                    $"detail={outcome.Detail}");
+
                 return Forget(request.ClOrdId, outcome);
             }
         }
