@@ -3,6 +3,92 @@
 Chủ dự án chạy trên VPS (máy không ngủ, mạng ổn định hơn laptop), Claude đối chiếu bằng log.
 Tài liệu này là thứ duy nhất cần đọc trước khi bấm Start.
 
+## 0. Dựng môi trường trên VPS
+
+Phần này là chỗ dễ hỏng nhất vì đổi máy. Bốn khẳng định dưới đây đều đã kiểm trong code, không phải phỏng đoán.
+
+### A. Lấy bản build
+
+Dùng **portable zip** từ GitHub Actions (`TradeMulti-<ver>-portable-win-x64.zip`), đừng dùng single-file exe:
+mọi thứ nằm rời nên kiểm được bằng mắt, không phụ thuộc cơ chế tự giải nén.
+
+Giải nén xong **phải thấy đủ ba file**:
+
+| File | Thiếu thì sao |
+|---|---|
+| `TradeMulti.exe` | — |
+| `FIX44-CSERVER.xml` | Sàn B chết câm: dictionary được resolve bằng `Path.Combine(AppContext.BaseDirectory, …)` (`CTraderQuoteSession.cs:130`) |
+| `mt5engine_capi.dll` | Chân A không click được lệnh nào |
+
+Build phải từ commit **`6551fb3`** trở lên — bản đầu tiên có executor thật và dòng `[BUILD]` trong log.
+
+### B. Cấu hình Windows
+
+- **Đặt timezone = UTC+7.** Mọi mốc giờ trong hệ thống là **giờ local**: `start_time_hold`/`end_time_hold`,
+  giờ nghỉ sàn 03:59:45–05:00, timestamp log. VPS mặc định thường là UTC ⇒ lệch 7 tiếng, cấu hình giờ sai
+  hoàn toàn và log đọc không khớp với những gì đã ghi nhận từ trước.
+- Tắt ngủ: `powercfg /change standby-timeout-ac 0` và `powercfg /change monitor-timeout-ac 0`.
+- **Ngắt RDP thì được, ĐĂNG XUẤT thì không.** Engine click của MT dùng `PostMessage`/`SendMessage` với
+  `WM_LBUTTON` gửi thẳng tới handle cửa sổ (`native/mt5engine-capi`), **không** dùng `SetCursorPos` hay
+  `SendInput`, nên không cần desktop ở foreground. Nhưng sign out là huỷ session ⇒ mất hết cửa sổ.
+  Thoát bằng nút **X** của cửa sổ Remote Desktop.
+- Mở đường ra: `live.cfixapi.com:5211` và `:5212` (FIX), HTTPS tới Supabase, Telegram nếu dùng.
+
+### C. MT5 chân A
+
+- Cài MT5, đăng nhập tài khoản **demo**, bật **AutoTrading**.
+- Gắn EA `DataExporter` — bản VPS nằm ở `DataExporter/VPS/MQ5/` (thư mục này cố ý không theo git).
+- Map name khớp config: `Local\MT_A_Tick`; app tự suy ra `_Trades` và `_History` từ đó.
+- Panel one-click đặt lot **0,01** để cân với `volumeBUnits = 1` (1 oz). Lệch là hai chân không đối xứng,
+  và `[HEDGE_VOLUME]` sẽ cảnh báo ngay khi bấm Start.
+
+### D. Config trong DB
+
+App nạp config **theo hostname máy** (`Environment.MachineName`, viết thường —
+`MachineIdentityService.cs`). VPS có hostname khác laptop nên **phải tạo row riêng**, nếu không app báo
+`"Không có config cho host name: …"` và không chạy được.
+
+Cách làm: copy row của `laptop-eoj2n95d`, đổi `hostname` thành hostname VPS, rồi sửa ngay trong row mới:
+
+- `max_total_opens = 1` (đang là 3 — với 3 thì lần đầu executor chạy có thể mở 3 pair tiền thật cùng lúc)
+- giữ `platform_b = ctrader`, `senderCompId = live.deriv.1551176`, `volumeBUnits = 1`, `contractSizeB = 100`
+
+### E. Chụp lại HWND trên VPS
+
+`manualHwndColumns` trong config đang chứa handle cửa sổ **của laptop** (`0x00010CCE`…). Handle là số định
+danh cửa sổ của một tiến trình cụ thể — vô nghĩa trên máy khác, và đổi cả khi mở lại terminal trên cùng máy.
+Phải lấy lại toàn bộ trên VPS, giữ đúng cặp `cN → tN` (Rule G cấm ghép chéo chart của cột này với trade panel
+của cột kia).
+
+### F. Chỉ MỘT máy được chạy tại một thời điểm
+
+Tắt app ở laptop trước khi bật trên VPS. Hai tiến trình cùng `SenderCompID = live.deriv.1551176` tạo hai phiên
+FIX trùng danh tính; sàn có thể đá phiên này để nhận phiên kia, gây logout lặp — đúng triệu chứng đã mất nhiều
+thời gian truy ở P5-O1 nhưng lần này do mình tự gây ra.
+
+### G. Kiểm trước khi bấm Start
+
+Mở `Desktop\trade-log\{yyyyMMdd}-ctrader.log`, phải thấy đúng thứ tự này:
+
+```
+connecting ... sender=live.deriv.1551176
+QUOTE logged on  +  TRADE logged on
+symbolName=XAUUSD symbolId=41 digits=2        (CẢ HAI session)
+PositionsSynced=true 727=0 728=2
+trades map AVAILABLE  /  history map AVAILABLE
+Cross-check độ lớn giá: ... ratio=1.0000
+```
+
+Sai bất kỳ bước nào thì **dừng, đừng bấm Start** — sai ở đây nghĩa là sàn B chưa sẵn sàng.
+
+Sau khi bấm Start, log phiên phải có hai dòng:
+
+- `[BUILD] version=…` — xác nhận đang chạy đúng bản build nào (để sau này đối chiếu log với commit)
+- `[HEDGE_VOLUME][INFO] …` — xác nhận khối lượng hai chân cân. Nếu là `WARN` hoặc `ERROR` thì **dừng lại**:
+  profit tính ra sẽ không bám tiền thật và Rule D sẽ quyết định sai.
+
+---
+
 ## 1. Kiểm tra TRƯỚC khi bấm Start
 
 | # | Việc | Vì sao bắt buộc |
