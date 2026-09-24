@@ -9,11 +9,11 @@
     Chay duoc nhieu lan, ket qua nhu nhau.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File vps-setup.ps1 -AppDir "C:\TradeMulti"
+    powershell -ExecutionPolicy Bypass -File vps-setup.ps1 -AppDir "C:\TradeMultiCtrader"
 #>
 [CmdletBinding()]
 param(
-    [string]$AppDir = "C:\TradeMulti",
+    [string]$AppDir = "C:\TradeMultiCtrader",
     [string]$TickMapName = "Local\MT_A_Tick",
     [switch]$SkipConfigure
 )
@@ -124,6 +124,21 @@ foreach ($map in $maps) {
         Set-Result $map $false "khong ton tai - MT5 chua chay hoac EA chua gan"
     }
 }
+
+# EA trong repo tao map theo thu tu Trades -> History -> Tick, moi buoc hong deu
+# return INIT_FAILED truoc khi toi buoc sau (DataExporter.mq5:22-50). Nen "co _Tick
+# ma khong co _Trades" la bat kha thi voi ban dung => dang chay EA khac.
+$tickOk = $results[$maps[0]].Ok
+$tradesOk = $results[$maps[1]].Ok
+$historyOk = $results[$maps[2]].Ok
+if ($tickOk -and -not ($tradesOk -and $historyOk)) {
+    Write-Host ""
+    Write-Host "  >> EA SAI BAN - xem muc C cua docs/plans/ctrader-fix/phase-7-vps-run.md" -ForegroundColor Red
+    Write-Host "     Co _Tick ma thieu _Trades/_History chi co dung mot nguyen nhan: EA dang chay"
+    Write-Host "     khong phai ban trong DataExporter/VPS/MQ5/ (ban do tao Trades TRUOC Tick)."
+    Write-Host "     Thieu _Trades thi app khong doc duoc vi the chan A => khong chay Phase 7 duoc."
+}
+
 $mt = Get-Process terminal64, terminal -ErrorAction SilentlyContinue
 Write-Host ("  Tien trinh MT dang chay: {0}" -f $(if ($mt) { ($mt | ForEach-Object { "$($_.ProcessName)($($_.Id))" }) -join ', ' } else { 'khong co' }))
 

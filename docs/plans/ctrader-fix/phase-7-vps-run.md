@@ -12,6 +12,10 @@ Phần này là chỗ dễ hỏng nhất vì đổi máy. Bốn khẳng định 
 Dùng **portable zip** từ GitHub Actions (`TradeMulti-<ver>-portable-win-x64.zip`), đừng dùng single-file exe:
 mọi thứ nằm rời nên kiểm được bằng mắt, không phụ thuộc cơ chế tự giải nén.
 
+Giải nén vào **`C:\TradeMultiCtrader`** — thư mục riêng cho bản cTrader, tách khỏi bản MT thuần nếu
+máy có sẵn. Đường dẫn cài KHÔNG ảnh hưởng gì khác: log vẫn ghi ra `Desktop\trade-log`, config vẫn nạp
+theo hostname.
+
 Giải nén xong **phải thấy đủ ba file**:
 
 | File | Thiếu thì sao |
@@ -33,12 +37,58 @@ Build phải từ commit **`6551fb3`** trở lên — bản đầu tiên có exe
   `SendInput`, nên không cần desktop ở foreground. Nhưng sign out là huỷ session ⇒ mất hết cửa sổ.
   Thoát bằng nút **X** của cửa sổ Remote Desktop.
 - Mở đường ra: `live.cfixapi.com:5211` và `:5212` (FIX), HTTPS tới Supabase, Telegram nếu dùng.
+- **VPS mua uptime, không mua latency.** Đo thực tế trên `win-hfa1234`: bắt tay TCP tới
+  `live.cfixapi.com` mất ~333 ms (QUOTE 5211) và ~232 ms (TRADE 5212) — ngang laptop (222–311 ms).
+  Đừng kỳ vọng `would_skip_latency_b` giảm khi đổi máy; cái được là máy không ngủ và không mất session
+  (laptop đã bị Modern Standby cắt log hai lần).
 
-### C. MT5 chân A
+### C. MT5 chân A — cài EA DataExporter
 
-- Cài MT5, đăng nhập tài khoản **demo**, bật **AutoTrading**.
-- Gắn EA `DataExporter` — bản VPS nằm ở `DataExporter/VPS/MQ5/` (thư mục này cố ý không theo git).
-- Map name khớp config: `Local\MT_A_Tick`; app tự suy ra `_Trades` và `_History` từ đó.
+Cài MT5, đăng nhập tài khoản **demo**, rồi làm đúng sáu bước dưới. Map name khớp config là
+`Local\MT_A_Tick`; app tự suy ra `_Trades` và `_History` từ đó.
+
+**C1. Dọn EA cũ trước.** Mở lần lượt **mọi** terminal đang chạy (VPS hiện có 3 tiến trình `terminal64`).
+Ở từng terminal: chuột phải lên chart → Expert list → gỡ mọi EA đang dùng channel `A`.
+Map chỉ sống khi còn EA giữ handle, và `CreateFileMappingW` trả handle của vùng **đã có** nếu trùng tên —
+một EA cũ còn sống ở terminal khác sẽ che mất lỗi của bản mới. Xong bước này chạy `vps-setup.ps1`,
+**cả ba map phải THIẾU**; còn map nào đọc được nghĩa là vẫn sót EA chưa gỡ.
+
+**C2. Chép mã nguồn.** File → Open Data Folder → `MQL5\Experts\`, tạo thư mục `DataExporter`, chép vào đó
+**đủ 7 file** từ `DataExporter/MQ5/` (hoặc `VPS/MQ5/` — hai thư mục giống hệt nhau, diff cho kết quả
+identical): `DataExporter.mq5`, `Configs.mqh`, `SharedMemoryBase.mqh`, `BinaryHelper.mqh`,
+`TickMemory.mqh`, `TradesMemory.mqh`, `HistoryMemory.mqh`.
+Các `#include` là đường dẫn **tương đối** nên 6 file `.mqh` phải nằm **cùng thư mục** với `.mq5`;
+để riêng vào `MQL5\Include\` sẽ không compile được.
+
+**C3. Bật quyền DLL.** Tools → Options → Expert Advisors → tick **Allow DLL imports**, và bật
+**AutoTrading** trên thanh công cụ. EA gọi `kernel32.dll` để tạo shared memory
+(`SharedMemoryBase.mqh:5-11`: `CreateFileMappingW` / `MapViewOfFile` / `RtlMoveMemory`); thiếu quyền này
+thì `CreateFileMappingW` trả 0, `Init()` false và EA dừng ngay ở map đầu tiên.
+
+**C4. Compile.** Navigator → chuột phải `DataExporter.mq5` → Modify → MetaEditor → F7. Phải **0 error**.
+Còn error thì gần như chắc là thiếu file `.mqh` ở C2.
+
+**C5. Gắn vào chart.** Kéo EA vào chart **XAUUSD** (đúng symbol chân A). Trong hộp thoại: tab Common tick
+**Allow DLL imports** nếu bản MT5 có ô đó; tab Inputs giữ `EA_CHANNEL_ID = A` và `UPDATE_INTERVAL_MS = 50`.
+Chỉ gắn ở **một** terminal duy nhất.
+
+**C6. Kiểm bằng bằng chứng.** Hai chỗ, phải đạt cả hai:
+
+- Tab **Experts** của MT5 (không phải giao diện app): `[OK] Khởi động thành công. Channel ID: A`.
+  Thấy `[X] Tạo Trade memory thất bại` ⇒ gần như chắc là chưa bật Allow DLL imports (C3).
+- Chạy lại `docs/tools/vps-setup.ps1`: phải ĐẠT **cả ba** map `_Tick`, `_Trades`, `_History`.
+  Thiếu một map = dừng, đừng đi tiếp.
+
+> **Chỉ thấy `_Tick` mà không thấy `_Trades` nghĩa là EA sai bản.** `OnInit` tạo map theo thứ tự
+> **Trades → History → Tick** và mỗi bước hỏng đều `return INIT_FAILED` trước khi tới bước sau
+> (`DataExporter.mq5:22-50`, bản MQ4 cũng vậy) — Trades hỏng thì Tick không bao giờ được tạo. Tổ hợp
+> này chỉ có đúng một nguyên nhân: thứ đang ghi `MT_A_Tick` là một EA khác, nhiều khả năng bản cũ chỉ
+> xuất tick. Không phải chuyện quyền hay session namespace: cả ba map cùng nằm trong `Local\`, sai
+> session thì `_Tick` cũng phải hỏng theo.
+>
+> Hệ quả: thiếu `MT_A_Trades` thì app không đọc được vị thế chân A ⇒ không xác minh được pair nào ⇒
+> Phase 7 không chạy được. Đây là điều kiện chặn, không phải cảnh báo.
+
 - Panel one-click đặt lot **0,01** để cân với `volumeBUnits = 1` (1 oz). Lệch là hai chân không đối xứng,
   và `[HEDGE_VOLUME]` sẽ cảnh báo ngay khi bấm Start.
 
