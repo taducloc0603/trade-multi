@@ -5,7 +5,9 @@ namespace TradeDesktop.Infrastructure.CTrader;
 
 // Position đóng hẳn → HistorySharedRecord. Nguồn sự thật "đã đóng" là position BIẾN MẤT khỏi cache
 // (CTraderPositionCache.PositionClosed), không suy theo chiều lệnh.
-// R10: FIX không trả P&L/commission → Commission = 0, Profit là số TÍNH LẠI theo điểm giá, không phải số broker.
+// R10: FIX không trả P&L/commission → Commission = 0, Profit là số TÍNH LẠI, không phải số broker.
+// Profit tính bằng TIỀN (move × units) để cùng đơn vị với record.Profit của MT4/MT5 (USD do broker tính):
+// cột "$" ở History cộng thẳng hai chân. Chỉ đúng khi quote currency của symbol = tiền tài khoản (XAUUSD/USD).
 public sealed class CTraderHistoryProjector
 {
     // Tương đương MMF history map: HISTORY_MEMORY_SIZE 65536 / HISTORY_RECORD_SIZE 124 ≈ 528 record, FIFO.
@@ -50,7 +52,7 @@ public sealed class CTraderHistoryProjector
                     Sl: 0,
                     Tp: 0,
                     Commission: 0,
-                    Profit: (double)(move * Math.Max(1, point)),
+                    Profit: (double)(move * p.VolumeUnits),
                     OpenTimeMsc: p.OpenTimeMsc,
                     CloseTimeMsc: c.CloseTimeMsc,
                     CloseEaTimeLocal: c.CloseEaTimeLocal,

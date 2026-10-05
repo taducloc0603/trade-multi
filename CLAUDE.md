@@ -473,6 +473,12 @@ TradeDesktop.Tests/            # xUnit tests
 - Thứ duy nhất khiến điều đó nhìn thấy được là cảnh báo `[HEDGE_VOLUME]` ghi lúc bấm Start
   (`HedgeVolumeConsistencyChecker`): lệch > 5 % là WARN, > 20 % là ERROR + Telegram. **Đừng sửa công thức
   profit để "cho khớp"** — đó là đổi hành vi Rule D.
+- Ngoại lệ ở **History tab (chỉ hiển thị)**: cột "$" cộng A+B nên mọi chân phải cùng đơn vị TIỀN.
+  Tổng theo cặp = `HistoryProfitCalculator.CalculateMoney` = `Profit + Commission` (cộng trong
+  `AccumulateHistoryProfitRows`); cột "Profit ($)" từng chân giữ Profit thô vì đứng cạnh cột Commission.
+  MT4/MT5 lấy số broker,
+  `CTraderHistoryProjector` tính `move × VolumeUnits` (USD với XAUUSD). Đừng đổi projector về
+  `move × point`: đó chính là lỗi đã khiến bảng hiện `-31 pt | +513 $`. Swap không có trong MMF.
 
 ### Latency hai chân KHÔNG cùng ngữ nghĩa
 

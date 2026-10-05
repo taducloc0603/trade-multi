@@ -6254,10 +6254,16 @@ public sealed class DashboardViewModel : ObservableObject
                 continue;
             }
 
-            if (!double.TryParse(row.FeeSpread, NumberStyles.Float, CultureInfo.InvariantCulture, out var profitDollar))
+            if (!double.TryParse(row.FeeSpread, NumberStyles.Float, CultureInfo.InvariantCulture, out var rawProfitDollar))
             {
                 continue;
             }
+
+            // Tổng cặp là tiền NET (HistoryProfitCalculator.CalculateMoney); cột từng chân giữ Profit thô của broker.
+            var commission = double.TryParse(row.Commission, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedCommission)
+                ? parsedCommission
+                : 0d;
+            var profitDollar = rawProfitDollar + commission;
 
             if (sumByStt.TryGetValue(stt, out var existing))
             {
@@ -6698,7 +6704,7 @@ public sealed class DashboardViewModel : ObservableObject
                 closePrice: FormatRawDouble(record.ClosePrice),
                 openSlippage: FormatOptionalProfit(CalculateHistoryOpenSlippage(record, point)),
                 closeSlippage: FormatHistoryCloseSlippageDebug(record, closeRequest, point, historyCloseSlippage),
-                profit: FormatRawDouble(CalculateHistoryProfit(record)),
+                profit: FormatRawDouble(CalculateHistoryProfit(record, point)),
                 feeSpread: FormatRawDouble(record.Profit),
                 commission: FormatRawDouble(record.Commission),
                 sl: FormatRawDouble(record.Sl),
@@ -7032,10 +7038,8 @@ public sealed class DashboardViewModel : ObservableObject
         return (double)((openPrice - exchange.Ask.Value) * pointValue);
     }
 
-    private static double CalculateHistoryProfit(HistorySharedRecord record)
-        => record.TradeType == 0
-            ? (record.ClosePrice - record.OpenPrice) * 100d
-            : (record.OpenPrice - record.ClosePrice) * 100d;
+    private static double CalculateHistoryProfit(HistorySharedRecord record, int point)
+        => HistoryProfitCalculator.CalculatePoints(record, point);
 
     private static string FormatTradeType(int tradeType)
         => tradeType == 0 ? "BUY" : "SELL";
