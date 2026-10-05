@@ -398,6 +398,26 @@ public sealed class GapStableCloseIntegrationTests
     }
 
     [Fact]
+    public void CloseMaxTimesTick_ResetsStableNormalCycle_EvenWhenLastGapBelowCloseTarget()
+    {
+        // Guard nằm TRƯỚC gate close_pts: Cycle Stable chưa đạt ngưỡng mà vượt 3 mẫu vẫn bị cắt.
+        var engine = new CloseSignalEngine();
+        var config = Config(confirm: 50, close: 100, holdMs: 0, closeMaxTimesTick: 3);
+
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: -60));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: -70));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: -80));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 3, gapSell: -90));
+
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 4, gapSell: -100));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 5, gapSell: -110));
+        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 6, gapSell: -120);
+
+        Assert.NotNull(trigger);
+        Assert.Equal([-100, -110, -120], trigger!.SellGaps);
+    }
+
+    [Fact]
     public void CloseMaxTimesTickZero_DoesNotLimitNormalCloseCycle()
     {
         var engine = new CloseSignalEngine();
@@ -500,6 +520,26 @@ public sealed class GapStableCloseIntegrationTests
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: 5));
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: 4));
         Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: 3));
+    }
+
+    [Fact]
+    public void CloseMaxTimesTick_ResetsStableSosCycle_EvenWhenLastGapAboveSosTarget()
+    {
+        var engine = new CloseSignalEngine();
+        var config = SosConfig(confirm: 5, close: 3, cycleSize: 3, holdMs: 0, closeMaxTimesTick: 3);
+
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 0, gapSell: 5));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 1, gapSell: 5));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 2, gapSell: 4));
+        // Mẫu thứ 4 > giới hạn 3 → reset dù chưa đạt sos_close_gap_pts.
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 3, gapSell: 4));
+
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 4, gapSell: 5));
+        Assert.Null(Process(engine, config, TradingOpenMode.GapBuy, 5, gapSell: 4));
+        var trigger = Process(engine, config, TradingOpenMode.GapBuy, 6, gapSell: 3);
+
+        Assert.NotNull(trigger);
+        Assert.Equal([5, 4, 3], trigger!.SellGaps);
     }
 
     [Fact]

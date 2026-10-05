@@ -302,10 +302,11 @@ TradeDesktop.Tests/            # xUnit tests
   chưa đạt `open_pts`/`close_pts` thì cố ý KHÔNG reset, nên ở nhịp 50ms danh sách tăng 20 mẫu/giây
   và không bao giờ dừng. Chi phí mỗi tick là `O(số_slot × n log n)` với `n` tăng vô hạn — bùng nổ
   theo CẢ số slot LẪN thời gian chạy. Nhánh TICK cũ bị `FixedSizeSignalCycle` chặn nên chỉ O(1).
-- **Van an toàn `*_max_times_tick` là CODE CHẾT trong đúng kịch bản này.** Guard nằm SAU gate ngưỡng,
-  mà nhánh "chưa đạt ngưỡng" đã `return null` trước đó — ở cả Close (`CloseSignalEngine`) lẫn Open
-  (`GapSignalConfirmationEngine`). Muốn nó có tác dụng phải đưa lên TRƯỚC gate, nhưng đó là ĐỔI HÀNH
-  VI SIGNAL, phải hỏi user.
+- **Van an toàn `*_max_times_tick` nay nằm TRƯỚC gate ngưỡng** (Open + Normal/SOS Close, user duyệt
+  2026-10-05): Cycle Stable vượt N mẫu bị `state.Reset` kể cả khi mẫu cuối chưa đạt `open_pts`/`close_pts`.
+  Trước đó guard nằm sau gate nên là code chết trong kịch bản phình. Đặt `*_max_times_tick = 0` thì
+  KHÔNG có trần — cycle vẫn phình như cũ. Đặt N nhỏ hơn số mẫu sinh ra trong `*_hold_confirm_ms`
+  (~20 mẫu/giây) sẽ làm cycle reset ngay khi vừa Stable → không bao giờ trigger. TP không đổi.
 - Điều kiện kích hoạt là tổ hợp: ngưỡng gap âm (commit `626cefb`) làm `confirmSatisfied` gần như luôn
   đúng nên confirm gate không còn reset Cycle, cộng với việc chuyển sang TIME mode (`4165a45`) bỏ mất
   trần `signal_cycle_size`. Dấu hiệu trong log: `[GAP_STABILITY][WARN] long_cycle` với `sample_count`
@@ -407,10 +408,11 @@ TradeDesktop.Tests/            # xUnit tests
   **KHÔNG chạy `docs/DROP-DEPRECATED-SIGNAL-COLUMNS.sql` trên nhánh này.**
 - `signal_cycle_size` vẫn được load, validate (`>= 1`) và ghi kèm log/`-signal-outcome.log` để đối
   chiếu với nhánh TICK, nhưng **không tham gia quyết định signal**. Đừng nối nó lại vào engine.
-- `*_max_times_tick > 0` chặn Cycle dài quá giới hạn: kiểm tra SAU khi Cycle đã Stable và mẫu cuối
-  đã đạt ngưỡng, vượt thì `state.Reset(...)`. `0` = tắt.
+- `*_max_times_tick > 0` chặn Cycle dài quá giới hạn: kiểm tra ngay SAU khi Cycle đã Stable và
+  TRƯỚC gate ngưỡng `open_pts`/`close_pts`, vượt thì `state.Reset(...)`. `0` = tắt. (TP vẫn kiểm
+  tra sau gate profit.)
 - `open_max_last_gap_pts` (`int?`, cột DB nullable) là **trần cho GAP CUỐI** của Open Cycle, kiểm
-  tra ngay SAU gate `open_pts` và TRƯỚC `open_max_times_tick` trong `TryCreateStableOpenResult`.
+  tra ngay SAU gate `open_pts` (và sau `open_max_times_tick`) trong `TryCreateStableOpenResult`.
   So sánh **giữ nguyên dấu, đối xứng, strict**: Buy `lastGap < C`, Sell `lastGap > -C`. Vi phạm thì
   `state.Reset(...)` ngay — **KHÁC** gate `open_pts` ở ngay trên (gate đó chỉ chờ tiếp, không reset).
   `null` = tắt; `0` và số âm **vẫn hiệu lực** và KHÔNG bị clamp ở bất kỳ tầng nào

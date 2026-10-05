@@ -315,20 +315,23 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             return null;
         }
 
-        var lastGap = cycle.Gaps[^1];
-        if (!closeSatisfied(lastGap))
-        {
-            // Chế độ TIME: Cycle vẫn ổn định, chỉ là mẫu cuối chưa đạt ngưỡng close.
-            // KHÔNG reset — Cycle tiếp tục thu mẫu cho tới khi Tolerance/Dispersion/Drift phá vỡ nó.
-            return null;
-        }
-
+        // Trần cứng số mẫu của Cycle: kiểm tra TRƯỚC gate close để Cycle Stable nhưng mẫu cuối
+        // chưa đạt ngưỡng cũng bị cắt, thay vì phình vô hạn. 0 = tắt.
         var normalizedMaxTimesTick = Math.Max(0, config.CloseMaxTimesTick);
         if (normalizedMaxTimesTick > 0 && cycle.Gaps.Count > normalizedMaxTimesTick)
         {
             state.Reset(usesSos
                 ? "SOS Close Cycle vượt close_max_times_tick."
                 : "Normal Close Cycle vượt close_max_times_tick.");
+            return null;
+        }
+
+        var lastGap = cycle.Gaps[^1];
+        if (!closeSatisfied(lastGap))
+        {
+            // Chế độ TIME: Cycle vẫn ổn định, chỉ là mẫu cuối chưa đạt ngưỡng close.
+            // KHÔNG reset — Cycle tiếp tục thu mẫu cho tới khi Tolerance/Dispersion/Drift phá vỡ nó
+            // hoặc vượt close_max_times_tick ở trên.
             return null;
         }
 

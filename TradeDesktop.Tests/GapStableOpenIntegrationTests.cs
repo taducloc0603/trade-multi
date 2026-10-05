@@ -254,6 +254,29 @@ public sealed class GapStableOpenIntegrationTests
     }
 
     [Fact]
+    public void OpenMaxTimesTick_ResetsStableCycle_EvenWhenLastGapBelowOpenTarget()
+    {
+        // Guard nằm TRƯỚC gate open_pts: Cycle Stable chưa đạt ngưỡng mà vượt 3 mẫu vẫn bị cắt,
+        // nên trigger sau đó chỉ chứa mẫu của Cycle mới.
+        var engine = new GapSignalConfirmationEngine();
+        var config = Config(confirm: 50, open: 100, holdMs: 0, openMaxTimesTick: 3);
+
+        Assert.Empty(Process(engine, config, 0, gapBuy: 60));
+        Assert.Empty(Process(engine, config, 1, gapBuy: 70));
+        Assert.Empty(Process(engine, config, 2, gapBuy: 80));
+        Assert.Empty(Process(engine, config, 3, gapBuy: 90));
+
+        var afterReset = Assert.Single(engine.GetCycleStatuses(), status =>
+            status.Kind == SignalCycleKind.OpenBuy);
+        Assert.Equal(0, afterReset.CurrentCount);
+
+        Assert.Empty(Process(engine, config, 4, gapBuy: 100));
+        Assert.Empty(Process(engine, config, 5, gapBuy: 110));
+        var trigger = Assert.Single(Process(engine, config, 6, gapBuy: 120));
+        Assert.Equal([100, 110, 120], trigger.BuyGaps);
+    }
+
+    [Fact]
     public void OpenMaxTimesTickZero_DoesNotLimitCycleLength()
     {
         var engine = new GapSignalConfirmationEngine();

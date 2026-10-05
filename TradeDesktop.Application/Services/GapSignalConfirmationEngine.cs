@@ -215,11 +215,21 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             return null;
         }
 
+        // Trần cứng số mẫu của Cycle: kiểm tra TRƯỚC gate open_pts để Cycle Stable nhưng mẫu cuối
+        // chưa đạt ngưỡng cũng bị cắt, thay vì phình vô hạn. 0 = tắt.
+        var normalizedMaxTimesTick = Math.Max(0, config.OpenMaxTimesTick);
+        if (normalizedMaxTimesTick > 0 && cycle.Gaps.Count > normalizedMaxTimesTick)
+        {
+            state.Reset("Open Cycle vượt open_max_times_tick.");
+            return null;
+        }
+
         var lastGap = cycle.Gaps[^1];
         if (!isOpenSatisfied(lastGap))
         {
             // Chế độ TIME: Cycle vẫn ổn định, chỉ là mẫu cuối chưa đạt open_pts.
-            // KHÔNG reset — Cycle tiếp tục thu mẫu cho tới khi Tolerance/Dispersion/Drift phá vỡ nó.
+            // KHÔNG reset — Cycle tiếp tục thu mẫu cho tới khi Tolerance/Dispersion/Drift phá vỡ nó
+            // hoặc vượt open_max_times_tick ở trên.
             return null;
         }
 
@@ -235,13 +245,6 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
                 state.Reset("Gap cuối vượt open_max_last_gap_pts; mở Cycle mới.");
                 return null;
             }
-        }
-
-        var normalizedMaxTimesTick = Math.Max(0, config.OpenMaxTimesTick);
-        if (normalizedMaxTimesTick > 0 && cycle.Gaps.Count > normalizedMaxTimesTick)
-        {
-            state.Reset("Open Cycle vượt open_max_times_tick.");
-            return null;
         }
 
         var isBuy = side == GapSignalSide.Buy;

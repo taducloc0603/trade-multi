@@ -237,7 +237,7 @@ public static class GapCycleDiagnostics
 
     /// <summary>
     /// Một Cycle đã Stable nhưng mẫu cuối không đạt ngưỡng thì KHÔNG bị reset (đúng logic gốc của
-    /// nhánh TIME), và guard <c>*_max_times_tick</c> nằm sau gate ngưỡng nên cũng không chặn được.
+    /// nhánh TIME). Chỉ guard <c>*_max_times_tick</c> (nằm TRƯỚC gate ngưỡng) mới cắt được Cycle; khi nó = 0 thì không có trần.
     /// Cycle vì vậy có thể phình dài, mà mỗi tick <c>GapStabilityCalculator.Calculate</c> phải sort
     /// lại toàn bộ danh sách — chi phí nhân theo số slot, trên UI thread.
     ///
