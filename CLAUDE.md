@@ -479,6 +479,15 @@ TradeDesktop.Tests/            # xUnit tests
   MT4/MT5 lấy số broker,
   `CTraderHistoryProjector` tính `move × VolumeUnits` (USD với XAUUSD). Đừng đổi projector về
   `move × point`: đó chính là lỗi đã khiến bảng hiện `-31 pt | +513 $`. Swap không có trong MMF.
+- **Kiểm tra lot cặp đầu tiên (chế độ cTrader)** — `CheckFirstPairLotOnce` trong `MarkOpenPairLegConfirmed`
+  chỉ LÊN LỊCH; `TryRunPendingFirstPairLotCheck` (cuối vòng polling) sau 3 s mới so lot HIỆN TẠI theo ticket
+  bằng `HedgeLotMatchChecker`. Đừng so ngay bằng `state.VolumeA/B`: nó là lot lúc thấy ticket lần đầu, mà
+  `CTraderPositionCache` tạo position từ `150=F` đầu tiên rồi cộng dồn partial fill → báo lệch giả, Stop sai.
+  Đúng MỘT lần mỗi phiên Start, chỉ cặp Auto MỚI (slot resync không đi qua đây). Lệch/Unknown → `_lotMismatchStopRequested` chặn Open trong
+  `AutoBuyAsync`/`AutoSellAsync`, rồi `TryCompleteLotMismatchStop` (cuối vòng polling) Stop khi không còn
+  open/close dở, trần chờ 60 s. `_lotMismatchPair` cố ý KHÔNG reset trong `ResetTradingLogicState` (chạy cả
+  lúc Stop): `EnsureLotMismatchPairClosedBeforeStart` dựa vào nó để từ chối Start khi cặp còn mở.
+  Chỉ chặn/Stop, không tạo open/close → không vi phạm Rule E. Không tắt switch Open Buy/Sell (user chốt).
 
 ### Unobserved task exception từ socket FIX
 

@@ -442,8 +442,16 @@ File: `TradeDesktop.App/Services/TradeExecutionRouter.cs`
 >   ticket MT — hai sàn đánh số độc lập nên trùng là đóng nhầm lệnh.
 > - **Latency** chân B là **tuổi tick** (bao lâu rồi chưa nhận báo giá), khác chân A là độ trễ truyền.
 >   Ngưỡng riêng: `ctrader_confirm_latency_b`.
-> - **Profit/Commission trong history là số TÍNH LẠI** từ `(Close − Open) × point`, KHÔNG phải số broker —
->   không gồm commission và swap thật. Muốn số tiền thật phải xem trên cTrader Web.
+> - **Profit/Commission trong history là số TÍNH LẠI** từ `(Close − Open) × VolumeUnits` (USD với XAUUSD),
+>   KHÔNG phải số broker — Commission = 0, không có swap. Muốn số tiền thật phải xem trên cTrader Web.
+>
+> **Kiểm tra lot cặp đầu tiên (chỉ chế độ cTrader).** Lot chân A do trader cài trong terminal MT, app không
+> kiểm soát. Mỗi phiên Start, khi cặp Auto Open MỚI đầu tiên confirm đủ hai chân, app đợi 3 s (để chân B
+> cTrader khớp đủ nếu bị partial fill) rồi so lot thật hiện tại của hai ticket (`HedgeLotMatchChecker`,
+> làm tròn 0.01). Lệch hoặc không đọc được lot → chặn Open mới, log
+> `[HEDGE_VOLUME][ERROR] first_pair_lot`, Telegram `CTRADER_FIRST_PAIR_LOT_MISMATCH`, popup thông báo, rồi
+> **Stop** khi không còn open/close dở (tối đa chờ 60 s). Người dùng tự đóng cặp trên sàn; Start bị từ chối
+> chừng nào ticket của cặp lệch còn mở. Chỉ kiểm tra cặp đầu tiên; trạng thái từ chối Start mất khi tắt app.
 
 
 Files chính:
