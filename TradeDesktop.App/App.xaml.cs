@@ -10,6 +10,7 @@ using TradeDesktop.App.Services;
 using TradeDesktop.App.ViewModels;
 using TradeDesktop.App.State;
 using TradeDesktop.Application.Abstractions;
+using TradeDesktop.Application.Helpers;
 using TradeDesktop.Application;
 using TradeDesktop.Application.Services;
 using TradeDesktop.Infrastructure;
@@ -209,10 +210,28 @@ public partial class App : System.Windows.Application
         HandleFatalStartupException("Lỗi không xử lý (AppDomain)", ex);
     }
 
+    // Chạy trên FINALIZER THREAD: không được chặn ở đây (MessageBox đồng bộ sẽ treo việc finalize của cả process).
     private void OnTaskSchedulerUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
-        HandleFatalStartupException("Lỗi task không được observe", e.Exception);
+        if (TransportAbortExceptionClassifier.IsBenignTransportAbort(e.Exception))
+        {
+            WriteStartupLog($"[WARN] Unobserved transport abort (socket FIX đóng khi đang đọc) — bỏ qua: {e.Exception}");
+            e.SetObserved();
+            return;
+        }
+
+        const string title = "Lỗi task không được observe";
+        var exception = e.Exception;
+        WriteStartupLog($"{title}: {exception}");
         e.SetObserved();
+
+        var dispatcher = Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        dispatcher.BeginInvoke(() => ShowFatalDialog(title, exception));
     }
 
     private static string GetStartupLogPath()
@@ -236,7 +255,11 @@ public partial class App : System.Windows.Application
     private static void HandleFatalStartupException(string title, Exception ex)
     {
         WriteStartupLog($"{title}: {ex}");
+        ShowFatalDialog(title, ex);
+    }
 
+    private static void ShowFatalDialog(string title, Exception ex)
+    {
         if (_fatalDialogShown)
         {
             return;
@@ -248,12 +271,26 @@ public partial class App : System.Windows.Application
         var message =
             $"{title}.\n\n" +
             $"Chi tiết: {ex.Message}\n\n" +
-            $"Vui lòng gửi file log:\n{logPath}";
+            $"{DescribeForDialog(ex)}\n\n" +
+            $"Vui lòng gửi file log (hoặc chụp màn hình hộp thoại này):\n{logPath}";
 
         MessageBox.Show(
             message,
             "TradeDesktop Startup Error",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
+    }
+
+    // Chẩn đoán phụ không được làm hỏng chính hộp thoại lỗi.
+    private static string DescribeForDialog(Exception ex)
+    {
+        try
+        {
+            return ExceptionDiagnosticFormatter.Describe(ex);
+        }
+        catch
+        {
+            return ex.GetType().Name;
+        }
     }
 }

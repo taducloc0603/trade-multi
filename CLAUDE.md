@@ -480,6 +480,15 @@ TradeDesktop.Tests/            # xUnit tests
   `CTraderHistoryProjector` tính `move × VolumeUnits` (USD với XAUUSD). Đừng đổi projector về
   `move × point`: đó chính là lỗi đã khiến bảng hiện `-31 pt | +513 $`. Swap không có trong MMF.
 
+### Unobserved task exception từ socket FIX
+
+- QuickFIX/n 1.10 đọc socket bằng `BeginRead` + `WaitOne`; khi phiên FIX ngắt, nó đóng stream lúc lệnh đọc
+  còn treo và không gọi `EndRead` → `IOException` (995 "I/O operation has been aborted") nổi lên ở
+  `TaskScheduler.UnobservedTaskException` trên FINALIZER THREAD. QuickFIX tự reconnect; đây không phải lỗi mới.
+- `App.OnTaskSchedulerUnobservedTaskException` lọc loại này bằng `TransportAbortExceptionClassifier`
+  (chỉ ghi WARN vào `startup.log`). Lỗi khác vẫn hiện hộp thoại nhưng qua `Dispatcher.BeginInvoke`.
+  **Đừng gọi `MessageBox.Show` đồng bộ trong handler đó** — chặn finalizer thread của cả process.
+
 ### Latency hai chân KHÔNG cùng ngữ nghĩa
 
 - Chân A (MMF): `LatencyMs` là ĐỘ TRỄ TRUYỀN tick, chỉ đổi khi có tick mới.
