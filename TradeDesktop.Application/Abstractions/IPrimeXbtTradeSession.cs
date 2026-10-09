@@ -13,6 +13,11 @@ public interface IPrimeXbtTradeSession
     // giả sẽ khiến recovery đóng nhầm chân A. R3: Timestamp = content-version. R4: Ticket = PrimeXbtTicketCodec.Encode(subId).
     SharedMapReadResult<TradeSharedRecord> ReadTrades(string mapName);
 
+    // Phase 6: History map B — cùng cổng sức khoẻ với trades + đã nhận ít nhất một `report/orders2` của kết nối hiện tại.
+    // Timestamp = version RIÊNG của history. Profit = tiền (USD), tự tính; Commission = −fee.
+    SharedMapReadResult<HistorySharedRecord> ReadHistory(string mapName)
+        => SharedMapReadResult<HistorySharedRecord>.MapNotFound(mapName);
+
     // Phase 7: chiều + qty (oz) của sub-position đang mở để executor dựng lệnh đóng. null ⇒ executor PHẢI fail closed.
     (PrimeXbtSide Side, decimal Qty)? TryGetOpenPosition(long positionId) => null;
 }

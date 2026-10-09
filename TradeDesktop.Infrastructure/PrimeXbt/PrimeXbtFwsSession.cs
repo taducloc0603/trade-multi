@@ -30,6 +30,11 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
     public const int TokenCheckIntervalMs = 10 * 60_000;
     public static readonly TimeSpan RefreshBeforeExpiry = TimeSpan.FromHours(24);
     public static readonly int[] ReconnectBackoffMs = [500, 1_000, 2_000, 4_000, 8_000, 10_000];
+    // Phase 6: `report/orders2` lúc đồng bộ, ~0.5 s sau khi một vị thế biến mất, và định kỳ 10 s (6-A2: ≤ 1 lần / 5 s khi yên).
+    public const int HistoryPollIntervalMs = 10_000;
+    public const int HistoryAfterCloseDelayMs = 500;
+    public const int HistoryMinGapMs = 2_000;
+    public const int HistoryResponseTimeoutMs = 15_000;   // > chu kỳ poll: request chưa trả lời không bị gửi chồng
 
     private readonly Func<IPrimeXbtTransport> _transportFactory;
     private readonly IPrimeXbtTokenStore _tokenStore;
@@ -84,6 +89,14 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
     private string? _mismatchReported;
     private readonly PrimeXbtPositionCache _positions;
     private bool _positionsProblemReported;
+    private readonly PrimeXbtHistoryBook _history;
+    private int _historyRid;
+    private long _historySentTick;
+    private long _lastHistoryRequestTick;
+    private long _historyDueTick;
+    private bool _historyLoaded;
+    private bool _historyErrorReported;
+    private int _historyRequests;
 
     // --- read-side (chỉ luồng poll) ---
     private int _readGeneration = -1;
@@ -115,6 +128,7 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         _tickCount = tickCount ?? (() => Environment.TickCount64);
         _utcNow = utcNow ?? (() => DateTime.UtcNow);
         _positions = new PrimeXbtPositionCache(_tickCount);
+        _history = new PrimeXbtHistoryBook(_tickCount);
     }
 
     public static PrimeXbtFwsSession CreateDefault(IPrimeXbtTokenStore tokenStore)
@@ -586,6 +600,42 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
                     ApplyPositions(body, positionsConfig, notes, events);
                     break;
 
+                case "report/orders2" when frame.Type == PrimeXbtFrameType.Response && frame.Rid is { } historyRid &&
+                                           historyRid == _historyRid && _activeConfig is { } historyConfig:
+                    _historyRid = 0;
+                    if (frame.Error is not null || frame.Body is not { ValueKind: JsonValueKind.Object } historyBody)
+                    {
+                        if (!_historyErrorReported)
+                        {
+                            _historyErrorReported = true;
+                            notes.Add(("WARN", "history: phản hồi không dùng được (lỗi/thiếu body) — History map B giữ trạng thái cũ, thử lại theo lịch"));
+                        }
+
+                        break;
+                    }
+
+                    _historyErrorReported = false;
+                    var addedTrades = _history.ApplyAndReturnAdded(PrimeXbtOrderReportParser.Parse(historyBody), historyConfig.Symbol);
+                    var added = addedTrades.Count;
+                    var estimated = addedTrades.Count(c => c.ProfitIsEstimated);
+                    if (!_historyLoaded)
+                    {
+                        _historyLoaded = true;
+                        notes.Add(("INFO", $"history synced v={_history.Version} count={_history.Count} (+{added}, ước lượng {estimated})"));
+                    }
+                    else if (added > 0)
+                    {
+                        var detail = string.Join(", ", addedTrades.Select(c =>
+                            $"{c.PositionId}:{c.PositionSide}:{c.Qty.ToString(CultureInfo.InvariantCulture)} " +
+                            $"{(c.OpenPrice is { } op ? op.ToString(CultureInfo.InvariantCulture) : "?")}→{c.ClosePrice.ToString(CultureInfo.InvariantCulture)} " +
+                            $"profit={c.Profit.ToString(CultureInfo.InvariantCulture)}{(c.ProfitIsEstimated ? "(rpl)" : string.Empty)} " +
+                            $"rpl={(c.BrokerRpl?.ToString(CultureInfo.InvariantCulture) ?? "-")}"));
+                        notes.Add(("INFO", $"history +{added} v={_history.Version} count={_history.Count} [{detail}]" +
+                                           (estimated > 0 ? $" — {estimated} record profit ƯỚC LƯỢNG theo rpl (không biết giá mở)" : string.Empty)));
+                    }
+
+                    break;
+
                 case "time" when frame.Rid is { } rid && rid == _heartbeatRid && _heartbeatSentTick > 0:
                     var rtt = now - _heartbeatSentTick;
                     _heartbeatSentTick = 0;
@@ -645,6 +695,7 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         List<PrimeXbtSessionEvent> events)
     {
         var wasSynced = _positions.Synced;
+        var idsBefore = _positions.Positions.Select(p => p.Id).ToHashSet();
         var snapshot = PrimeXbtPositionsParser.Parse(body, config.Symbol);
         if (!snapshot.IsValid)
         {
@@ -676,6 +727,18 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         {
             _positionsProblemReported = false;
             notes.Add(("INFO", "snapshot positions hợp lệ trở lại"));
+        }
+
+        // Phase 6: nhớ giá mở cho history; đồng bộ lần đầu / có vị thế biến mất ⇒ hẹn lấy `report/orders2`.
+        _history.RememberOpen(_positions.Positions);
+        var now = _tickCount();
+        if (!wasSynced)
+        {
+            _historyDueTick = now;
+        }
+        else if (changed && idsBefore.Any(id => _positions.TryGet(id) is null))
+        {
+            _historyDueTick = now + HistoryAfterCloseDelayMs;
         }
 
         if (!wasSynced || changed)
@@ -716,6 +779,77 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         }
     }
 
+    public SharedMapReadResult<HistorySharedRecord> ReadHistory(string mapName)
+    {
+        try
+        {
+            bool desired;
+            lock (_desiredLock)
+            {
+                desired = _desiredActive && !_disposed;
+            }
+
+            lock (_stateLock)
+            {
+                if (!desired || !_connected || _stale || _authProblem is not null || _symbol is null ||
+                    _activeConfig is null || !_positions.Synced || !_historyLoaded ||
+                    !string.Equals(_positions.PositionMode, "HEDGE", StringComparison.Ordinal))
+                {
+                    return SharedMapReadResult<HistorySharedRecord>.MapNotFound(mapName);
+                }
+
+                var records = _history.ToHistoryRecords(_symbol.Symbol, _activeConfig.ContractSizeB);
+                return SharedMapReadResult<HistorySharedRecord>.Success(_history.Version, records, records.Count, connected: 1);
+            }
+        }
+        catch (Exception ex)
+        {
+            Emit("ERROR", "ReadHistory lỗi: " + ex.Message);
+            return SharedMapReadResult<HistorySharedRecord>.MapNotFound(mapName);
+        }
+    }
+
+    // Gọi từ luồng poll (Read). Một request treo tối đa HistoryResponseTimeoutMs; hai request cách nhau ≥ HistoryMinGapMs.
+    private void CheckHistoryDue(long now)
+    {
+        IPrimeXbtTransport? transport = null;
+        int rid;
+        lock (_stateLock)
+        {
+            if (!_connected || _stale || _transport is null || _symbol is null || !_positions.Synced)
+            {
+                return;
+            }
+
+            if (_historyRid != 0 && now - _historySentTick < HistoryResponseTimeoutMs)
+            {
+                return;
+            }
+
+            var due = _historyDueTick > 0 ? _historyDueTick : _lastHistoryRequestTick + HistoryPollIntervalMs;
+            if (now < due || now - _lastHistoryRequestTick < HistoryMinGapMs && _lastHistoryRequestTick > 0)
+            {
+                return;
+            }
+
+            rid = _historyRid = ++_rid;
+            _historySentTick = now;
+            _lastHistoryRequestTick = now;
+            _historyDueTick = 0;
+            _historyRequests++;
+            transport = _transport;
+        }
+
+        SendFrame(transport, PrimeXbtEnvelope.TypeRequest, rid, "report/orders2", new JsonObject
+        {
+            ["offset"] = 0,
+            ["limit"] = 50,
+            ["protective"] = "",
+            ["orderBy"] = "id",
+            ["orderDir"] = "desc"
+        });
+    }
+
     public (PrimeXbtSide Side, decimal Qty)? TryGetOpenPosition(long positionId)
     {
         lock (_stateLock)
@@ -743,6 +877,7 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
                 CheckReconnectDue(nowTick);
                 CheckStormRecovery(nowTick);
                 CheckTokenRefreshDue(nowTick);
+                CheckHistoryDue(nowTick);
             }
 
             int generation;
@@ -1104,6 +1239,10 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         // P4: rớt/dừng ⇒ Trades map B về MapNotFound ngay; nội dung giữ lại để stamp lần-đầu-thấy không bị reset.
         _positions.MarkUnsynced();
         _positionsProblemReported = false;
+        // Phase 6: History map B cũng chờ `report/orders2` của kết nối mới (record cũ giữ lại, dedupe theo order id).
+        _historyLoaded = false;
+        _historyRid = 0;
+        _historyDueTick = 0;
     }
 
     private void ResetReadState(int generation)
@@ -1179,8 +1318,11 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         int staleEvents;
         int heartbeats;
         long rttMax;
+        int historyRequests;
         lock (_stateLock)
         {
+            historyRequests = _historyRequests;
+            _historyRequests = 0;
             staleEvents = _staleEvents;
             heartbeats = _heartbeatsAnswered;
             rttMax = _heartbeatRttMax;
@@ -1192,7 +1334,7 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         var line = $"[STATS] window_ms={now - _windowStartMs} reads_connected={_windowAges.Count} reads_disconnected={_windowDisconnectedReads} " +
                    $"ticks={_windowTicks} stale_events={staleEvents} heartbeats_answered={heartbeats} heartbeat_rtt_max_ms={rttMax} " +
                    // Chẩn đoán `4003 No pongs`: pong do vòng nhận trả lời — thread pool nghẽn ⇒ pong trễ (F4-4).
-                   $"tp_threads={ThreadPool.ThreadCount} tp_pending={ThreadPool.PendingWorkItemCount}";
+                   $"tp_threads={ThreadPool.ThreadCount} tp_pending={ThreadPool.PendingWorkItemCount} history_requests={historyRequests}";
         if (_windowAges.Count > 0)
         {
             var sorted = _windowAges.OrderBy(x => x).ToList();

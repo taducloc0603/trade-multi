@@ -32,7 +32,11 @@ public static class DependencyInjection
             sp.GetRequiredService<IPrimeXbtQuoteSession>(),
             sp.GetRequiredService<IPrimeXbtTradeSession>()));
         // Phase 6 ROLLBACK = thay dòng dưới bằng `services.AddSingleton<IHistorySharedMemoryReader, HistorySharedMemoryReader>();`
-        services.AddSingleton<IHistorySharedMemoryReader>(sp => new CTraderAwareHistoryReader(new HistorySharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()));
+        // PrimeXBT Phase 6 ROLLBACK = bỏ lớp `new PrimeXbtAwareHistoryReader(...)` ngoài cùng.
+        services.AddSingleton<IHistorySharedMemoryReader>(sp => new PrimeXbtAwareHistoryReader(
+            new CTraderAwareHistoryReader(new HistorySharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()),
+            sp.GetRequiredService<IRuntimeConfigProvider>(),
+            sp.GetRequiredService<IPrimeXbtTradeSession>()));
         // PrimeXBT Phase 2: kho token DPAPI cục bộ. Phase 4: phiên `fws` chỉ đọc giá — chỉ mở socket khi
         // platform_b = primexbt (EnsureState do reader gọi mỗi 50 ms); container dispose lúc thoát app → đóng socket.
         services.AddSingleton<IPrimeXbtTokenStore, PrimeXbtTokenStore>();

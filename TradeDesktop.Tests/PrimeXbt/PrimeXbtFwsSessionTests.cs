@@ -662,6 +662,146 @@ public sealed class PrimeXbtFwsSessionTests
         Assert.False(h.Session.ReadTrades(TradesMap).IsMapAvailable);
     }
 
+    // ---------------- Phase 6: History map B ----------------
+
+    private const string HistoryMap = "PRIMEXBT_B_History";
+
+    private static int HistoryRequestCount(FakePrimeXbtTransport t)
+        => t.Sent.Count(s => JsonNode.Parse(s)!["action"]!.GetValue<string>() == "report/orders2");
+
+    private static void ReplyHistory(FakePrimeXbtTransport t)
+    {
+        var rid = t.LastSent("report/orders2")!["rid"]!.GetValue<int>();
+        var frame = JsonNode.Parse(PrimeXbtFixtures.Raw("history.json", "report_orders2_response"))!.AsObject();
+        frame["rid"] = rid;
+        t.Receive(frame.ToJsonString());
+    }
+
+    private static async Task<Harness> SyncedWithHedgeAsync()
+    {
+        var h = new Harness();
+        await h.StreamingAsync();
+        h.Current.Receive(PositionsFrame("positions_event_hedge_two_subs"));
+        return h;
+    }
+
+    [Fact]
+    public async Task History_RequestedOnSync_MapNotFoundUntilResponse_ThenRecords()
+    {
+        var h = await SyncedWithHedgeAsync();
+        Assert.Equal(0, HistoryRequestCount(h.Current));
+
+        await h.ReadAsync();
+        Assert.Equal(1, HistoryRequestCount(h.Current));
+        var request = h.Current.LastSent("report/orders2")!;
+        Assert.Equal("REQUEST", request["type"]!.GetValue<string>());
+        Assert.Equal("desc", request["body"]!["orderDir"]!.GetValue<string>());
+        Assert.False(h.Session.ReadHistory(HistoryMap).IsMapAvailable);
+
+        ReplyHistory(h.Current);
+        var history = h.Session.ReadHistory(HistoryMap);
+
+        Assert.True(history.IsMapAvailable);
+        Assert.Equal(2, history.Count);
+        Assert.Equal(-0.001, history.Records.Single(r => r.TradeType == 0).Profit, 9); // giá mở nhớ từ snapshot
+        Assert.Contains(h.Logs, l => l.Contains("history synced", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task History_IdlePolling_AtMostOncePer5s()
+    {
+        var h = await SyncedWithHedgeAsync();
+        await h.ReadAsync();
+        ReplyHistory(h.Current);
+
+        for (var i = 0; i < 60; i++) // 60 s yên, poll 1 s/lần, server trả ngay (cả heartbeat)
+        {
+            h.Clock += 1_000;
+            await h.ReadAsync();
+            ReplyHistory(h.Current);
+            if (h.Current.LastSent("time") is { } time)
+            {
+                h.Current.Receive($$"""{"type":"RESPONSE","action":"time","body":{"time":1},"rid":{{time["rid"]!.GetValue<int>()}}}""");
+            }
+        }
+
+        Assert.Single(h.Transports); // không rớt kết nối trong lúc đo
+
+        var count = HistoryRequestCount(h.Current);
+        Assert.InRange(count, 6, 7); // 1 lúc sync + mỗi 10 s
+        Assert.Contains(h.Logs, l => l.Contains("history_requests=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task History_PositionDisappears_RequestedSoon_RespectingMinGap()
+    {
+        var h = await SyncedWithHedgeAsync();
+        await h.ReadAsync();
+        ReplyHistory(h.Current);
+        var before = HistoryRequestCount(h.Current);
+
+        h.Clock += 3_000;
+        h.Current.Receive(PositionsFrame("positions_event_one_buy")); // Sell 10680080 biến mất
+        await h.ReadAsync();
+        Assert.Equal(before, HistoryRequestCount(h.Current)); // chưa tới 500 ms
+        h.Clock += PrimeXbtFwsSession.HistoryAfterCloseDelayMs;
+        await h.ReadAsync();
+
+        Assert.Equal(before + 1, HistoryRequestCount(h.Current));
+    }
+
+    [Fact]
+    public async Task History_UnansweredRequest_NotResentBeforeTimeout()
+    {
+        var h = await SyncedWithHedgeAsync();
+        await h.ReadAsync();
+
+        h.Clock += PrimeXbtFwsSession.HistoryPollIntervalMs;
+        await h.ReadAsync();
+        Assert.Equal(1, HistoryRequestCount(h.Current)); // còn chờ trả lời ⇒ không gửi chồng
+
+        h.Clock += PrimeXbtFwsSession.HistoryResponseTimeoutMs - PrimeXbtFwsSession.HistoryPollIntervalMs;
+        await h.ReadAsync();
+        Assert.Equal(2, HistoryRequestCount(h.Current));
+    }
+
+    [Fact]
+    public async Task History_Disconnect_MapNotFound_NewConnectionRequestsAgain_NoDuplicates()
+    {
+        var h = await SyncedWithHedgeAsync();
+        await h.ReadAsync();
+        ReplyHistory(h.Current);
+
+        h.Current.Drop("network");
+        await h.ReadAsync();
+        Assert.False(h.Session.ReadHistory(HistoryMap).IsMapAvailable);
+
+        h.Clock += PrimeXbtFwsSession.ReconnectBackoffMs[0];
+        await h.ReadAsync();
+        h.Current.Connect();
+        h.ReplyMarkets2();
+        h.Current.Receive(PositionsFrame("positions_event_flat"));
+        h.Clock += PrimeXbtFwsSession.HistoryMinGapMs;
+        await h.ReadAsync();
+        Assert.Equal(1, HistoryRequestCount(h.Current));
+        ReplyHistory(h.Current);
+
+        Assert.Equal(2, h.Session.ReadHistory(HistoryMap).Count); // cùng order id ⇒ không nhân đôi
+    }
+
+    [Fact]
+    public async Task History_ErrorResponse_KeepsMapNotFound_WarnsOnce()
+    {
+        var h = await SyncedWithHedgeAsync();
+        await h.ReadAsync();
+        var rid = h.Current.LastSent("report/orders2")!["rid"]!.GetValue<int>();
+
+        h.Current.Receive($$"""{"type":"RESPONSE","action":"report/orders2","error":{"code":"INTERNAL","description":"x"},"rid":{{rid}}}""");
+
+        Assert.False(h.Session.ReadHistory(HistoryMap).IsMapAvailable);
+        Assert.Single(h.Logs, l => l.Contains("History map B giữ trạng thái cũ", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Logs_NeverContainJwtOrCookie()
     {
