@@ -40,7 +40,7 @@ Quy tắc cứng:
 | 7A | Executor cô lập trên demo | 6 | Demo 🛑 | [phase-7](phase-7-execution.md) | ✅ | d3efba2 | 2026-10-09 |
 | 7B | Cặp đầy đủ trên demo | 7A | Demo 🛑 | [phase-7](phase-7-execution.md) | ✅ | d3efba2 | 2026-10-09 |
 | 7C | Live | 7B | **Live** 🛑 | [phase-7](phase-7-execution.md) | 🛑 chờ chủ dự án đồng ý (live) | | |
-| 8 | Hardening & vận hành | 7C | Theo kịch bản | [phase-8](phase-8-hardening.md) | 🛑 chờ chủ dự án đồng ý (live) | | |
+| 8 | Hardening & vận hành | 7C | Theo kịch bản | [phase-8](phase-8-hardening.md) | 🔄 (8.1–8.6 làm trước 7C; 8-A1 soak 7 ngày, 8-A3 cuối tuần chờ thời gian) | 2760606 | 2026-10-09 |
 
 Ký hiệu: ✅ xong · ⏳ làm được · 🔄 đang làm · ❌ fail, đang sửa · ⛔ chưa đủ phụ thuộc · ⏭ bỏ (do chọn track khác).
 
