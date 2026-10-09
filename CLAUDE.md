@@ -521,6 +521,12 @@ TradeDesktop.Tests/            # xUnit tests
   post-close theo DB; SOS không được bypass cooldown transition vừa tạo bởi chính close trước đó.
 - Manual buttons legacy hidden (Phase 6 `IsManualTradeButtonsVisible=false`). Manual per-pair là path riêng,
   bypass auto cooldown nhưng bắt buộc qua non-auto barrier và physical close mutex.
+- **Partial-open rollback** (chỉ một chân khớp ⇒ `CloseOpenedLegByTimeoutAsync`): pending-close chỉ có MỘT ticket;
+  `PendingCloseConfirmation.AreAllLegsConfirmed` coi chân không ticket là đã đóng để non-auto barrier được nhả
+  (trước 2026-10-09 barrier kẹt tới Stop — vô tình chặn luôn vòng lặp mở lại). Thay vào đó có guard chủ động:
+  `PortfolioCoordinator.PartialOpenRollbackStreakLimit = 2` rollback liên tiếp ⇒ `CanOpenNewSlot` trả
+  `PARTIAL_OPEN_ROLLBACK_STREAK` (cả hai chiều) tới `ClearAllSlots`/`Reset` (Start/Stop/Reconnect); cặp mở đủ hai chân
+  reset bộ đếm. Chỉ chặn Open, không đóng/mở gì (Rule E). Đừng gỡ một trong hai mà giữ cái kia.
 
 ### Bẫy sentinel ở `RuntimeConfigState.Update` (đã gây tắt gate âm thầm)
 

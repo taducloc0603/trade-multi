@@ -66,6 +66,7 @@ public partial class App : System.Windows.Application
                     services.AddSingleton<ITradePlatformExecutor, NullPrimeXbtTradeExecutor>();
                     services.AddSingleton<IPrimeXbtLoginDialog, PrimeXbtLoginDialog>();
                     services.AddSingleton<CTraderSessionMonitor>();
+                    services.AddSingleton<PrimeXbtSessionMonitor>();
                     services.AddSingleton<ITradeExecutionRouter, TradeExecutionRouter>();
                     services.AddSingleton<IWindowProbe, NativeWindowProbe>();
                     services.AddSingleton<IHwndHealthChecker, HwndHealthChecker>();
@@ -84,6 +85,7 @@ public partial class App : System.Windows.Application
             // Phase 4: gắn monitor TRƯỚC khi MainWindow (→ DashboardViewModel → reader) chạy, để không lỡ sự kiện
             // logon đầu tiên của QUOTE session.
             _host.Services.GetRequiredService<CTraderSessionMonitor>();
+            _host.Services.GetRequiredService<PrimeXbtSessionMonitor>();
 
             var mainWindow = _host.Services.GetRequiredService<MainWindow>();
             MainWindow = mainWindow;

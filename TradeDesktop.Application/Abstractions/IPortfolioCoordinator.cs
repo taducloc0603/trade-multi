@@ -115,6 +115,13 @@ public interface IPortfolioCoordinator
 
     // === Rollback (open/close execution failed) ===
     void AbortPendingOpen(string pairId);
+
+    // F4-3 (docs/plans/primexbt phase-4): đếm partial-open rollback LIÊN TIẾP (chỉ một chân khớp ⇒ đóng lại chân đó).
+    // Đủ PartialOpenRollbackStreakLimit ⇒ CanOpenNewSlot chặn Auto Open (PARTIAL_OPEN_ROLLBACK_STREAK) tới khi
+    // Stop/Start (ClearAllSlots/Reset). Một cặp Open xác nhận đủ hai chân reset bộ đếm. CHỈ chặn — không tạo lệnh.
+    // Trả true đúng lần gọi làm chuỗi chạm ngưỡng (caller bắn Telegram một lần).
+    bool RecordPartialOpenRollback(string pairId);
+    int ConsecutivePartialOpenRollbacks { get; }
     void AbortPendingClose(string pairId);
 
     // === Reset & recovery ===

@@ -4906,6 +4906,21 @@ public sealed class DashboardViewModel : ObservableObject
                 // Cleanup only after the compensating close was actually dispatched.
                 _portfolioCoordinator.AbortPendingOpen(action.PairId);
                 SafeVmLog($"[SLOT][WARN] Slot pending open aborted by timeout: pairId={action.PairId}");
+
+                // F4-3: chuỗi rollback liên tiếp đủ ngưỡng ⇒ coordinator chặn Auto Open (chỉ chặn, không tạo lệnh).
+                if (action.IsAutoFlow && _portfolioCoordinator.RecordPartialOpenRollback(action.PairId))
+                {
+                    NotifyTelegram(
+                        eventCode: "OPEN_PARTIAL_ROLLBACK_STREAK",
+                        severity: "CRITICAL",
+                        detail: $"{PortfolioCoordinator.PartialOpenRollbackStreakLimit} lần liên tiếp chỉ một chân khớp khi mở (chân {action.MissingExchange} không vào) — đã chặn Auto Open tới khi Stop/Start",
+                        pairId: action.PairId,
+                        meta: new Dictionary<string, string?>
+                        {
+                            ["missingExchange"] = action.MissingExchange,
+                            ["count"] = _portfolioCoordinator.ConsecutivePartialOpenRollbacks.ToString(CultureInfo.InvariantCulture)
+                        });
+                }
             }
         }
     }
@@ -5186,7 +5201,10 @@ public sealed class DashboardViewModel : ObservableObject
                 }
             }
 
-            if (state.CloseConfirmedA && state.CloseConfirmedB)
+            // Chân không có ticket (rollback / recovery chỉ một chân) coi như đã xác nhận đóng — nếu không,
+            // vòng sau rơi vào nhánh !needCheckA && !needCheckB và barrier non-auto không bao giờ được nhả.
+            if (PendingCloseConfirmation.AreAllLegsConfirmed(
+                    state.TicketA.HasValue, state.CloseConfirmedA, state.TicketB.HasValue, state.CloseConfirmedB))
             {
                 TryBeginWaitAfterCloseFromPending(state);
                 state.IsResolved = true;
@@ -9947,6 +9965,28 @@ public sealed class DashboardViewModel : ObservableObject
     // nhất khiến điều đó nhìn thấy được — công thức profit KHÔNG được sửa ở đây.
     private void LogHedgeVolumeConsistency()
     {
+        // PrimeXBT (docs/plans/primexbt Phase 5): cùng phép kiểm, khối lượng B tính bằng oz. Nhánh cTrader bên dưới giữ nguyên.
+        if (PrimeXbtRoutingRules.IsPrimeXbtPlatform(_runtimeConfigState.CurrentPlatformB))
+        {
+            var primeXbt = _runtimeConfigState.CurrentPrimeXbtConfig;
+            var primeXbtCheck = HedgeVolumeConsistencyChecker.Check(
+                (double)primeXbt.VolumeALots, (double)primeXbt.VolumeBOz, (double)primeXbt.ContractSizeB);
+            var primeXbtLevel = primeXbtCheck.Level switch
+            {
+                HedgeVolumeLevel.Ok => "INFO",
+                HedgeVolumeLevel.Warn => "WARN",
+                _ => "ERROR",
+            };
+
+            _tradeSessionFileLogger.Log($"[HEDGE_VOLUME][{primeXbtLevel}] PrimeXBT: {primeXbtCheck.Message}");
+            if (primeXbtCheck.Level == HedgeVolumeLevel.Alert)
+            {
+                _ = _telegramNotifier.NotifyAsync("PRIMEXBT_HEDGE_VOLUME_MISMATCH", "ERROR", primeXbtCheck.Message);
+            }
+
+            return;
+        }
+
         if (!CTraderRoutingRules.IsCTraderPlatform(_runtimeConfigState.CurrentPlatformB))
         {
             return;

@@ -796,6 +796,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
             _state.RdEndPostOpenLockSeconds);
         slot.MarkOpenConfirmed(ticketA, ticketB, confirmedAtUtc, selectedPostOpenLockSeconds);
         Interlocked.Increment(ref _totalOpensAllTime);
+        ResetPartialOpenRollbackStreak($"cặp {pairId} mở đủ hai chân");
         AdvanceRandomQuotaAfterConfirmedOpen(pairId);
 
         // Phase 8: cooldown ĐÃ được set tại dispatch (AllocatePendingOpenSlot).
@@ -1097,6 +1098,37 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         }
     }
 
+    // ===== F4-3: chuỗi partial-open rollback =====
+    public const int PartialOpenRollbackStreakLimit = 2;
+    private int _consecutivePartialOpenRollbacks;
+
+    public int ConsecutivePartialOpenRollbacks => Volatile.Read(ref _consecutivePartialOpenRollbacks);
+
+    public bool RecordPartialOpenRollback(string pairId)
+    {
+        var count = Interlocked.Increment(ref _consecutivePartialOpenRollbacks);
+        if (count >= PartialOpenRollbackStreakLimit)
+        {
+            _logger?.Log(
+                $"[GUARD][ERROR] PARTIAL_OPEN_ROLLBACK_STREAK count={count}/{PartialOpenRollbackStreakLimit} pairId={pairId} — " +
+                "chặn Auto Open tới khi Stop/Start (một chân liên tục không khớp; không tự đóng/mở gì thêm)");
+            return count == PartialOpenRollbackStreakLimit;
+        }
+
+        _logger?.Log(
+            $"[GUARD][WARN] Partial-open rollback count={count}/{PartialOpenRollbackStreakLimit} pairId={pairId} " +
+            "(đủ ngưỡng sẽ chặn Auto Open; cặp mở đủ hai chân reset bộ đếm)");
+        return false;
+    }
+
+    private void ResetPartialOpenRollbackStreak(string reason)
+    {
+        if (Interlocked.Exchange(ref _consecutivePartialOpenRollbacks, 0) > 0)
+        {
+            _logger?.Log($"[GUARD][INFO] Partial-open rollback streak reset ({reason})");
+        }
+    }
+
     // ===== Rule checks (Phase 2) =====
     public bool CanOpenNewSlot(TradingPositionSide side, out string blockReason)
     {
@@ -1104,6 +1136,14 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         {
             blockReason = "SCHEDULE_SLEEPING (OPEN blocked by device local time)";
             Interlocked.Increment(ref _cooldownSkipCount);
+            return false;
+        }
+
+        var rollbackStreak = ConsecutivePartialOpenRollbacks;
+        if (rollbackStreak >= PartialOpenRollbackStreakLimit)
+        {
+            blockReason = $"PARTIAL_OPEN_ROLLBACK_STREAK ({rollbackStreak}/{PartialOpenRollbackStreakLimit}) " +
+                "description=\"Một chân liên tục không khớp khi mở; Auto Open bị chặn tới khi Stop/Start\"";
             return false;
         }
 
@@ -1392,6 +1432,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         {
             _nonAutoCloseOperations.Clear();
         }
+
+        ResetPartialOpenRollbackStreak("reset");
     }
 
     public void ClearAllSlots()
@@ -1402,6 +1444,8 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         {
             _nonAutoCloseOperations.Clear();
         }
+
+        ResetPartialOpenRollbackStreak("Start/Stop");
     }
 
     /// <summary>

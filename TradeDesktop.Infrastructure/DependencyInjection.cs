@@ -25,11 +25,21 @@ public static class DependencyInjection
         services.AddSingleton<ICTraderTradeSession>(_ => CTraderTradeSession.CreateDefault());
         // Phase 5 ROLLBACK = thay dòng dưới bằng `services.AddSingleton<ITradesSharedMemoryReader, TradesSharedMemoryReader>();`
         // — quay về MMF và TRADE session không bao giờ được start (vòng đời do decorator điều khiển).
-        services.AddSingleton<ITradesSharedMemoryReader>(sp => new CTraderAwareTradesReader(new TradesSharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()));
+        // PrimeXBT Phase 5 ROLLBACK = bỏ lớp `new PrimeXbtAwareTradesReader(...)` ngoài cùng, giữ nguyên lớp cTrader bên trong.
+        services.AddSingleton<ITradesSharedMemoryReader>(sp => new PrimeXbtAwareTradesReader(
+            new CTraderAwareTradesReader(new TradesSharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()),
+            sp.GetRequiredService<IRuntimeConfigProvider>(),
+            sp.GetRequiredService<IPrimeXbtQuoteSession>(),
+            sp.GetRequiredService<IPrimeXbtTradeSession>()));
         // Phase 6 ROLLBACK = thay dòng dưới bằng `services.AddSingleton<IHistorySharedMemoryReader, HistorySharedMemoryReader>();`
         services.AddSingleton<IHistorySharedMemoryReader>(sp => new CTraderAwareHistoryReader(new HistorySharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()));
-        // PrimeXBT Phase 2: kho token DPAPI cục bộ (chưa có kết nối nào dùng tới cho tới Phase 4).
+        // PrimeXBT Phase 2: kho token DPAPI cục bộ. Phase 4: phiên `fws` chỉ đọc giá — chỉ mở socket khi
+        // platform_b = primexbt (EnsureState do reader gọi mỗi 50 ms); container dispose lúc thoát app → đóng socket.
         services.AddSingleton<IPrimeXbtTokenStore, PrimeXbtTokenStore>();
+        // Phase 5: CÙNG một instance cài cả IPrimeXbtTradeSession (positions đi chung socket `fws`). Dispose idempotent.
+        services.AddSingleton(sp => PrimeXbtFwsSession.CreateDefault(sp.GetRequiredService<IPrimeXbtTokenStore>()));
+        services.AddSingleton<IPrimeXbtQuoteSession>(sp => sp.GetRequiredService<PrimeXbtFwsSession>());
+        services.AddSingleton<IPrimeXbtTradeSession>(sp => sp.GetRequiredService<PrimeXbtFwsSession>());
         services.AddSingleton<MockSharedMemoryMarketDataReader>();
         services.AddSingleton<ISignalEngine, SimpleSignalEngine>();
         services.AddHttpClient();
