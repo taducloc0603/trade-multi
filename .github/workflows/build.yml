@@ -2,7 +2,7 @@ name: Build and Release Windows App
 
 on:
   push:
-    branches: [ dev, dev-5-gap-am-holding-ms, dev-5-release-111-ctrader ]
+    branches: [ dev, dev-5-gap-am-holding-ms, dev-5-release-111-ctrader, primexbt ]
   workflow_dispatch:
 
 permissions:
