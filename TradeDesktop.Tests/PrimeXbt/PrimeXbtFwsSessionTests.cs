@@ -957,6 +957,136 @@ public sealed class PrimeXbtFwsSessionTests
         Assert.Equal(0.01m, h.Session.CurrentTradeSettings!.MinOrderSize);
     }
 
+    // ---------------- Phase 8.1: vòng đời token ----------------
+
+    [Fact]
+    public async Task OpenBlockReason_NullWhenTokenHealthy()
+    {
+        var h = new Harness();
+        await h.StreamingAsync();
+
+        Assert.Null(h.Session.OpenBlockReason);
+    }
+
+    [Fact]
+    public async Task RefreshFails_NearExpiry_BlocksOpen_AlertsOncePerHour_ThenNewLoginReleases()
+    {
+        var h = new Harness();
+        h.Store.Current = PrimeXbtTokenStoreTests.Session(Now.AddHours(2));
+        h.Refresh = _ => null;
+
+        await h.EnsureAsync();
+        h.Current.Connect(); // JWT còn 2 h vẫn dùng được ⇒ vẫn kết nối
+
+        Assert.NotNull(h.Session.OpenBlockReason);
+        Assert.Single(h.Events, e => e.Kind == PrimeXbtSessionEventKind.TokenRefreshFailed);
+
+        h.Clock += PrimeXbtFwsSession.TokenCheckIntervalMs; // lần kiểm định kỳ: refresh lại thất bại, chưa đủ 1 giờ ⇒ không báo lại
+        await h.ReadAsync();
+        Assert.Single(h.Events, e => e.Kind == PrimeXbtSessionEventKind.TokenRefreshFailed);
+
+        if (h.Current.LastSent("time") is { } time) // giữ kết nối sống qua bước nhảy đồng hồ
+        {
+            h.Current.Receive($$"""{"type":"RESPONSE","action":"time","body":{"time":1},"rid":{{time["rid"]!.GetValue<int>()}}}""");
+        }
+
+        h.Store.Current = PrimeXbtTokenStoreTests.Session(Now.AddDays(7)); // user đăng nhập lại trong Config
+        h.Clock += PrimeXbtFwsSession.TokenCheckIntervalMs;
+        await h.ReadAsync();
+
+        Assert.Null(h.Session.OpenBlockReason);
+        Assert.Contains(h.Logs, l => l.Contains("bỏ chặn Open", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RefreshSucceedsLater_ReleasesBlock()
+    {
+        var h = new Harness();
+        h.Store.Current = PrimeXbtTokenStoreTests.Session(Now.AddHours(2));
+        h.Refresh = _ => null;
+        await h.EnsureAsync();
+        h.Current.Connect();
+        Assert.NotNull(h.Session.OpenBlockReason);
+
+        h.Refresh = _ => PrimeXbtTokenStoreTests.Session(Now.AddDays(7));
+        h.Clock += PrimeXbtFwsSession.TokenCheckIntervalMs;
+        await h.ReadAsync();
+
+        Assert.Null(h.Session.OpenBlockReason);
+    }
+
+    // ---------------- Phase 8.2 drift / 8.3 thị trường ----------------
+
+    [Fact]
+    public async Task Drift_UnknownAction_WarnsOnce()
+    {
+        var h = new Harness();
+        await h.StreamingAsync();
+
+        h.Current.Receive("""{"type":"EVENT","action":"brand/new-thing","body":{},"sid":9,"aid":1}""");
+        h.Current.Receive("""{"type":"EVENT","action":"brand/new-thing","body":{},"sid":9,"aid":2}""");
+
+        Assert.Single(h.Events, e => e.Kind == PrimeXbtSessionEventKind.ProtocolDrift);
+        Assert.Single(h.Logs, l => l.Contains("[DRIFT]") && l.Contains("brand/new-thing"));
+        Assert.True((await h.ReadAsync()).IsConnected); // action lạ không làm hỏng luồng giá
+    }
+
+    [Fact]
+    public async Task Drift_QuoteShapeChanged_FailsClosedViaTickAge_AndWarnsAfterThreshold()
+    {
+        var h = new Harness();
+        await h.StreamingAsync();
+
+        for (var i = 0; i < PrimeXbtFwsSession.QuoteDriftThreshold + 5; i++)
+        {
+            h.Current.Receive("""{"type":"EVENT","action":"fx/market","body":{"symId":1019,"askPrice":1,"bidPrice":1},"sid":6,"aid":1}""");
+            h.Current.Receive("""{"type":"EVENT","action":"fx/market","body":{"symId":2000,"askPrice":1},"sid":6,"aid":1}""");
+        }
+
+        h.Clock += 3_000;
+        var m = await h.ReadAsync();
+        Assert.Equal(3000m, m.LatencyMs); // giá cũ không được cập nhật ⇒ tuổi tick tăng ⇒ guard latency B chặn
+        Assert.Single(h.Events, e => e.Kind == PrimeXbtSessionEventKind.ProtocolDrift);
+        Assert.Contains(h.Logs, l => l.Contains("[DRIFT]") && l.Contains("symbolId 1019"));
+    }
+
+    [Fact]
+    public async Task Drift_TradeSettingsMissingLimits_Warns_PlannerStaysFailClosed()
+    {
+        var h = new Harness();
+        await h.StreamingAsync();
+
+        h.Current.Receive("""{"type":"RESPONSE","action":"trade-settings","body":{"symbol":"XAU/USD"},"rid":5}""");
+
+        Assert.Null(h.Session.CurrentTradeSettings);
+        Assert.Single(h.Events, e => e.Kind == PrimeXbtSessionEventKind.ProtocolDrift);
+    }
+
+    [Fact]
+    public async Task MarketDetail_Subscribed_ClosedAndHmrTransitions_AreNotices()
+    {
+        var h = new Harness();
+        await h.StreamingAsync();
+        // Byte-đúng frame web app (fixtures/ws-session.json): route này dùng `symId`.
+        var expected = JsonNode.Parse(PrimeXbtFixtures.Get("ws-session.json", "fws_open_sequence").EnumerateArray()
+            .Select(e => e.GetRawText()).First(s => s.Contains("market/detail")))!["body"]!.ToJsonString();
+        Assert.Equal(expected, h.Current.LastSent("market/detail")!["body"]!.ToJsonString());
+
+        h.Current.Receive(PrimeXbtFixtures.Raw("quotes.json", "trade_settings_response"));
+        h.Current.Receive(PrimeXbtFixtures.Raw("quotes.json", "market_detail_response"));
+        Assert.Contains(h.Logs, l => l.Contains("market open=true hmr=false", StringComparison.Ordinal));
+        Assert.Contains(h.Logs, l => l.Contains("hmrLeverage=100", StringComparison.Ordinal));
+
+        h.Current.Receive("""{"type":"EVENT","action":"market/detail","body":{"symbolId":1019,"isMarketOpen":true,"isHmrActive":true},"sid":7,"aid":2}""");
+        h.Current.Receive("""{"type":"EVENT","action":"market/detail","body":{"symbolId":1019,"isMarketOpen":false,"isHmrActive":true,"nextOpenTime":1791756060},"sid":7,"aid":3}""");
+
+        var notices = h.Events.Where(e => e.Kind == PrimeXbtSessionEventKind.MarketNotice).Select(e => e.Message).ToList();
+        Assert.Equal(2, notices.Count);
+        Assert.Contains(notices, n => n.Contains("VÀO khung HMR") && n.Contains("100"));
+        Assert.Contains(notices, n => n.Contains("ĐÓNG"));
+        Assert.DoesNotContain(h.Events, e => e.Kind == PrimeXbtSessionEventKind.ProtocolDrift);
+    }
+
     [Fact]
     public async Task Logs_NeverContainJwtOrCookie()
     {

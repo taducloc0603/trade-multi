@@ -489,6 +489,26 @@ TradeDesktop.Tests/            # xUnit tests
   lúc Stop): `EnsureLotMismatchPairClosedBeforeStart` dựa vào nó để từ chối Start khi cặp còn mở.
   Chỉ chặn/Stop, không tạo open/close → không vi phạm Rule E. Không tắt switch Open Buy/Sell (user chốt).
 
+### Sàn B PrimeXBT (`platform_b = primexbt`, docs/plans/primexbt)
+
+- **Một socket `fws` cho tất cả**: `PrimeXbtFwsSession` cài cả `IPrimeXbtQuoteSession` lẫn `IPrimeXbtTradeSession` (DI một
+  instance). Rớt socket ⇒ giá, Trades map, History map cùng fail-closed (MapNotFound, KHÔNG phải map rỗng).
+- **Vị thế thật là `subPositions[]`**, KHÔNG phải dòng gộp `data[]` (id 0, qty ròng — hedge Buy+Sell ra qty 0). Đọc nhầm dòng
+  gộp = tưởng đã đóng ⇒ đóng nhầm chân A. Ticket = sub id gắn **bit 61** (`PrimeXbtTicketCodec`; cTrader bit 62).
+- **qty tính bằng ounce** (`volumeBOz`, bội 0.01; 1 lot MT = 100 oz). Lot trên Trades map = qty / `contractSizeB`.
+- **Đặt lệnh KHÔNG idempotent** (không có client order id). Timeout / rớt socket sau khi gửi ⇒ `TIMEOUT_UNCERTAIN`, **không
+  bao giờ gửi lại** — lệnh có thể đã khớp (Phase 0 Q5). Đối soát chỉ báo cáo; ticket khớp vẫn được ghép qua Trades map.
+- `SendOrderAsync` là đường DUY NHẤT gửi lệnh, chỉ nhận plan của `PrimeXbtOrderPlanner` (mở market / đóng ĐÚNG một sub id).
+  Cấm route đóng dòng gộp và đóng tất cả — recheck A6 grep chặn nguyên văn trong code production.
+- **Tick không có timestamp sàn**: latency B = tuổi tick (như cTrader), ngưỡng `sans.primexbt.confirmLatencyB`.
+- `fx/market` subscribe bằng `symbolId`, `market/detail` bằng **`symId`** — sai tên là `WRONG_ARGS`. Đối chiếu
+  `TradeDesktop.Tests/PrimeXbt/Fixtures/ws-session.json` trước khi thêm subscription mới.
+- `close_pending_time_ms` < ~2500 ⇒ pending-close retry gửi đóng lại sub đã đóng (snapshot trễ 1.4–1.9 s) ⇒
+  `POSITION_NOT_FOUND`. Vô hại nhưng nhiễu — VPS đặt ≥ 2500.
+- Tab History chỉ hiện ticket do app tạo (`IsAppGeneratedTicket`) — vị thế mở tay trên web không bao giờ lên tab.
+- Refresh JWT thất bại ⇒ `OpenBlockReason` ⇒ router chặn cả cặp TRƯỚC dispatch (`ITradeLegOpenReadiness`, reason
+  `LEG_B_NOT_READY`) — chỉ chặn Open, không đóng gì. Kill switch: `docs/plans/primexbt/KILL-SWITCH.md`.
+
 ### Unobserved task exception từ socket FIX
 
 - QuickFIX/n 1.10 đọc socket bằng `BeginRead` + `WaitOne`; khi phiên FIX ngắt, nó đóng stream lúc lệnh đọc
@@ -643,6 +663,8 @@ New code MUST NOT introduce new failures.
 - **Shared memory (MMF)**: tick prices + open trades + history.
 - **MT4/MT5 native click**: via `NativeMethodsMt4/Mt5.cs` (P/Invoke, Windows-only).
 - **Telegram notifier**: critical event alerts.
+- **PrimeXBT WebSocket `fws`** (`wss://api.primexbt.com/v2/fws/`, JWT 7 ngày + cookie `fws_token`): nguồn dữ liệu VÀ đường
+  đặt lệnh của sàn B khi `platform_b = primexbt`. Token đăng nhập qua WebView2 trong Config, lưu DPAPI cục bộ — không lên DB.
 - **cTrader FIX API** (QuickFIX/n 1.10.0): nguồn dữ liệu VÀ đường đặt lệnh của sàn B khi `platform_b = ctrader`.
   Sàn B production là Deriv `live.deriv.1551176` — FxPro chặn đặt lệnh qua FIX (`CHANNEL_IS_BLOCKED`).
   Chỉ `QuickFixCTraderTransport` chạm kiểu QuickFIX; `CTraderTradeSession.SendMarketOrderAsync` là đường DUY

@@ -18,7 +18,13 @@ public enum PrimeXbtSessionEventKind
     PositionModeInvalid = 9,
     // Phase 7: lệnh gửi đi không có ack (timeout / rớt socket) và kết luận đối soát sau đó (chỉ báo cáo).
     OrderUncertain = 10,
-    OrderReconciled = 11
+    OrderReconciled = 11,
+    // Phase 8.1: refresh JWT thất bại khi phiên sắp hết hạn ⇒ Open mới bị chặn tới khi refresh/đăng nhập lại thành công.
+    TokenRefreshFailed = 12,
+    // Phase 8.3: thị trường đóng/mở, vào/ra khung HMR — CHỈ thông báo (Rule E: không chặn/đóng gì).
+    MarketNotice = 13,
+    // Phase 8.2: frame lạ / trường bắt buộc không đọc được (drift giao thức). Phần bắt buộc đã fail-closed ở parser.
+    ProtocolDrift = 14
 }
 
 public sealed record PrimeXbtSessionEvent(PrimeXbtSessionEventKind Kind, string Message);

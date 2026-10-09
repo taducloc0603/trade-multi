@@ -34,6 +34,7 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
     public const int HistoryPollIntervalMs = 10_000;
     public const int HistoryAfterCloseDelayMs = 500;
     public const int HistoryMinGapMs = 2_000;
+    public const int RefreshFailAlertIntervalMs = 60 * 60_000;
     public const int HistoryResponseTimeoutMs = 15_000;   // > chu kỳ poll: request chưa trả lời không bị gửi chồng
 
     private readonly Func<IPrimeXbtTransport> _transportFactory;
@@ -98,6 +99,22 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
     private bool _historyErrorReported;
     private int _historyRequests;
     private readonly Dictionary<int, PendingOrder> _pendingOrders = new();
+    private DateTime? _activeJwtExpiresUtc;
+    private bool _refreshFailing;
+    private long _lastRefreshFailAlertTick;
+    // Phase 8.2 / 8.3
+    private static readonly HashSet<string> KnownActions = new(StringComparer.Ordinal)
+    {
+        "markets2", "fx/market", "metrics", "trade-settings", "positions", "time", "report/orders2", "market/detail",
+        "orders/market/place", "positions/id/close", "trading/activity"
+    };
+    public const int QuoteDriftThreshold = 20;
+    private readonly HashSet<string> _driftReported = new(StringComparer.Ordinal);
+    private int _consecutiveBadQuotes;
+    private bool? _marketOpen;
+    private bool? _hmrActive;
+    private int? _hmrLeverage;
+    private bool _tradeSettingsLogged;
 
     // Phase 7: chờ ack 5 s (như cTrader OrderReportTimeoutMs); đối soát sau 3 s (vị thế hiện trên snapshot p95 1.7 s).
     public TimeSpan OrderAckTimeout { get; set; } = TimeSpan.FromSeconds(5);
@@ -296,6 +313,7 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
             ClearMarketState();
             _authProblem = null;
             _reconnectDueTick = 0;
+            _activeJwtExpiresUtc = session.JwtExpiresUtc;
             _status = "Đang kết nối PrimeXBT…";
         }
 
@@ -356,23 +374,71 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
 
     private PrimeXbtSession? TryRefresh(PrimeXbtSession session)
     {
+        string failure;
         try
         {
             var refreshed = _refresh(session, CancellationToken.None).GetAwaiter().GetResult();
-            if (refreshed is null)
+            if (refreshed is not null)
             {
-                Emit("WARN", "refresh token thất bại");
-                return null;
+                _tokenStore.Save(refreshed);
+                lock (_stateLock)
+                {
+                    _refreshFailing = false;
+                    _activeJwtExpiresUtc = refreshed.JwtExpiresUtc;
+                }
+
+                Emit("INFO", $"refresh token OK — jwtExp={refreshed.JwtExpiresUtc:yyyy-MM-dd HH:mm}Z");
+                return refreshed;
             }
 
-            _tokenStore.Save(refreshed);
-            Emit("INFO", $"refresh token OK — jwtExp={refreshed.JwtExpiresUtc:yyyy-MM-dd HH:mm}Z");
-            return refreshed;
+            failure = "refresh token thất bại";
         }
         catch (Exception ex)
         {
-            Emit("WARN", "refresh token lỗi: " + ex.GetType().Name);
-            return null;
+            failure = "refresh token lỗi: " + ex.GetType().Name;
+        }
+
+        // Phase 8.1: refresh chỉ chạy khi JWT còn < RefreshBeforeExpiry ⇒ thất bại là phải đăng nhập lại sớm. Chặn Open mới
+        // (OpenBlockReason) + Telegram tối đa 1 lần / giờ; Close vẫn đi nếu socket còn.
+        var now = _tickCount();
+        bool alert;
+        lock (_stateLock)
+        {
+            _refreshFailing = true;
+            _activeJwtExpiresUtc ??= session.JwtExpiresUtc;
+            alert = _lastRefreshFailAlertTick == 0 || now - _lastRefreshFailAlertTick >= RefreshFailAlertIntervalMs;
+            if (alert)
+            {
+                _lastRefreshFailAlertTick = now;
+            }
+        }
+
+        var left = session.JwtExpiresUtc is { } exp ? $"{Math.Max(0, (exp - _utcNow()).TotalHours):0.#} h" : "?";
+        var message = $"{failure} — JWT còn {left}; CHẶN Open mới tới khi refresh / đăng nhập lại (Config → Đăng nhập)";
+        Emit("WARN", message);
+        if (alert)
+        {
+            Raise(PrimeXbtSessionEventKind.TokenRefreshFailed, message);
+        }
+
+        return null;
+    }
+
+    public string? OpenBlockReason
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                if (_activeJwtExpiresUtc is { } exp && exp <= _utcNow())
+                {
+                    return $"JWT PrimeXBT đã hết hạn lúc {exp:yyyy-MM-dd HH:mm}Z — đăng nhập lại";
+                }
+
+                return _refreshFailing
+                    ? $"refresh JWT PrimeXBT đang thất bại (JWT hết hạn {(_activeJwtExpiresUtc is { } e ? e.ToString("yyyy-MM-dd HH:mm") + "Z" : "?")})"
+                    : null;
+            }
         }
     }
 
@@ -560,6 +626,11 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
                 orderAck = (pendingOrder, BuildOrderOutcome(frame));
             }
 
+            if (!KnownActions.Contains(frame.Action))
+            {
+                AddDrift(notes, events, "action:" + frame.Action, $"action lạ từ server: {frame.Action} ({frame.Type}) — bỏ qua");
+            }
+
             var now = _tickCount();
             _lastInboundTick = now;
             if (_stale)
@@ -602,12 +673,39 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
                         _ask = quote.Ask;
                         _lastQuoteTick = now;
                         _quoteSequence++;
+                        _consecutiveBadQuotes = 0;
+                    }
+                    else if (IsForSymbol(body, _symbol.SymbolId) && ++_consecutiveBadQuotes == QuoteDriftThreshold)
+                    {
+                        // Giá đã fail-closed (không cập nhật ⇒ tuổi tick tăng ⇒ guard chặn); đây chỉ là cảnh báo nguyên nhân.
+                        AddDrift(notes, events, "fx/market-shape", $"{QuoteDriftThreshold} frame giá liên tiếp của symbolId {_symbol.SymbolId} không đọc được a/b — có thể PrimeXBT đổi giao thức");
                     }
 
                     break;
 
                 case "trade-settings" when frame.Body is { } body:
-                    _tradeSettings = PrimeXbtTradeSettings.TryParse(body) ?? _tradeSettings;
+                    var settings = PrimeXbtTradeSettings.TryParse(body);
+                    if (settings is null)
+                    {
+                        AddDrift(notes, events, "trade-settings-shape", "trade-settings thiếu min/step/max — planner sẽ fail-closed mọi lệnh");
+                    }
+
+                    _tradeSettings = settings ?? _tradeSettings;
+                    if (body.ValueKind == JsonValueKind.Object)
+                    {
+                        _hmrLeverage = body.TryGetProperty("hmrLeverage", out var hl) && hl.ValueKind == JsonValueKind.Number ? hl.GetInt32() : _hmrLeverage;
+                        if (!_tradeSettingsLogged && settings is not null)
+                        {
+                            _tradeSettingsLogged = true;
+                            notes.Add(("INFO", $"trade-settings min={settings.MinOrderSize} step={settings.OrderStep} max={settings.MaxOrderSize} " +
+                                               $"tradingHours=\"{ReadString(body, "tradingHours")}\" hmrPeriod=\"{ReadString(body, "hmrPeriod")}\" hmrLeverage={_hmrLeverage}"));
+                        }
+                    }
+
+                    break;
+
+                case "market/detail" when frame.Body is { ValueKind: JsonValueKind.Object } body:
+                    ApplyMarketDetail(body, notes, events);
                     break;
 
                 case "metrics" when frame.Body is { ValueKind: JsonValueKind.Object } body:
@@ -668,6 +766,9 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         if (transport is not null && subscribeSymbolId > 0)
         {
             SendFrame(transport, PrimeXbtEnvelope.TypeSubscription, NextRid(), "fx/market", new JsonObject { ["symbolId"] = subscribeSymbolId });
+            // Phase 8.3: trạng thái thị trường / HMR (chỉ thông báo).
+            // Khác fx/market: route này đòi `symId` (khớp frame web app trong fixtures/ws-session.json).
+            SendFrame(transport, PrimeXbtEnvelope.TypeSubscription, NextRid(), "market/detail", new JsonObject { ["symId"] = subscribeSymbolId });
         }
 
         foreach (var (level, message) in notes)
@@ -679,6 +780,64 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         {
             Raise(e.Kind, e.Message);
         }
+    }
+
+    // Gọi trong _stateLock. Phase 8.2: mỗi loại drift báo MỘT lần trong đời session (không spam).
+    private void AddDrift(List<(string Level, string Message)> notes, List<PrimeXbtSessionEvent> events, string key, string message)
+    {
+        if (!_driftReported.Add(key))
+        {
+            return;
+        }
+
+        notes.Add(("WARN", "[DRIFT] " + message));
+        events.Add(new PrimeXbtSessionEvent(PrimeXbtSessionEventKind.ProtocolDrift, message));
+    }
+
+    private static bool IsForSymbol(JsonElement body, int symbolId)
+        => body.ValueKind == JsonValueKind.Object && body.TryGetProperty("symId", out var id) &&
+           id.ValueKind == JsonValueKind.Number && id.TryGetInt32(out var value) && value == symbolId;
+
+    private static string ReadString(JsonElement body, string name)
+        => body.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? string.Empty : string.Empty;
+
+    private static string FormatUnixLocal(JsonElement body, string name)
+        => body.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var seconds) && seconds > 0
+            ? DateTimeOffset.FromUnixTimeSeconds(seconds).ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
+            : "?";
+
+    // Gọi trong _stateLock. Phase 8.3 — CHỈ thông báo; không chặn/đóng gì (Rule E). Thị trường đóng ⇒ không có tick ⇒ guard
+    // latency B tự chặn như mọi lúc tick cũ.
+    private void ApplyMarketDetail(JsonElement body, List<(string Level, string Message)> notes, List<PrimeXbtSessionEvent> events)
+    {
+        bool? open = body.TryGetProperty("isMarketOpen", out var mo) && mo.ValueKind is JsonValueKind.True or JsonValueKind.False ? mo.GetBoolean() : null;
+        bool? hmr = body.TryGetProperty("isHmrActive", out var ha) && ha.ValueKind is JsonValueKind.True or JsonValueKind.False ? ha.GetBoolean() : null;
+        var nextOpen = FormatUnixLocal(body, "nextOpenTime");
+        var nextClose = FormatUnixLocal(body, "nextCloseTime");
+
+        if (_marketOpen is null && _hmrActive is null)
+        {
+            notes.Add(("INFO", $"market open={open?.ToString().ToLowerInvariant() ?? "?"} hmr={hmr?.ToString().ToLowerInvariant() ?? "?"} nextOpen={nextOpen} nextClose={nextClose}"));
+        }
+
+        if (open is { } isOpen && _marketOpen is { } wasOpen && isOpen != wasOpen)
+        {
+            var message = isOpen ? "thị trường XAU/USD đã MỞ lại" : $"thị trường XAU/USD ĐÓNG — mở lại lúc {nextOpen} (không có tick ⇒ guard latency B tự chặn)";
+            notes.Add((isOpen ? "INFO" : "WARN", message));
+            events.Add(new PrimeXbtSessionEvent(PrimeXbtSessionEventKind.MarketNotice, message));
+        }
+
+        if (hmr is { } isHmr && _hmrActive is { } wasHmr && isHmr != wasHmr)
+        {
+            var message = isHmr
+                ? $"VÀO khung HMR: đòn bẩy còn {_hmrLeverage?.ToString(CultureInfo.InvariantCulture) ?? "?"} (margin tăng) — app KHÔNG tự chặn/đóng"
+                : "HẾT khung HMR";
+            notes.Add((isHmr ? "WARN" : "INFO", message));
+            events.Add(new PrimeXbtSessionEvent(PrimeXbtSessionEventKind.MarketNotice, message));
+        }
+
+        _marketOpen = open ?? _marketOpen;
+        _hmrActive = hmr ?? _hmrActive;
     }
 
     // Gọi trong _stateLock.
@@ -1309,6 +1468,22 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         {
             TryRefresh(session);
         }
+        else if (session?.JwtExpiresUtc is { } fresh && fresh - _utcNow() >= RefreshBeforeExpiry)
+        {
+            // Phase 8.1: người dùng đã đăng nhập lại (Config) ⇒ kho có JWT mới ⇒ nhả chặn Open.
+            bool released;
+            lock (_stateLock)
+            {
+                released = _refreshFailing;
+                _refreshFailing = false;
+                _activeJwtExpiresUtc = fresh;
+            }
+
+            if (released)
+            {
+                Emit("INFO", $"đã có JWT mới (hết hạn {fresh:yyyy-MM-dd HH:mm}Z) — bỏ chặn Open");
+            }
+        }
     }
 
     private void TrackDisconnectForStorm(long now)
@@ -1446,6 +1621,11 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         _historyLoaded = false;
         _historyRid = 0;
         _historyDueTick = 0;
+        // Phase 8.2 / 8.3: trạng thái của kết nối hiện tại.
+        _consecutiveBadQuotes = 0;
+        _marketOpen = null;
+        _hmrActive = null;
+        _tradeSettingsLogged = false;
     }
 
     private void ResetReadState(int generation)

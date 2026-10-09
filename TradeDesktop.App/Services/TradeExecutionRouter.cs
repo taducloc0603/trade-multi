@@ -462,6 +462,17 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             return (false, "LATEST_GAP_EXCEEDS_LIMIT");
         }
 
+        // PrimeXBT Phase 8.1: executor của một chân báo chưa sẵn sàng mở ⇒ chặn cả cặp TRƯỚC dispatch (không partial-open).
+        foreach (var leg in new[] { request.LegA, request.LegB })
+        {
+            if (TryResolveExecutor(leg.Platform) is ITradeLegOpenReadiness readiness &&
+                readiness.GetOpenBlockReason() is { } notReady)
+            {
+                SafeLog($"[ROUTER][WARN] Open blocked: leg {leg.Exchange} ({leg.Platform}) chưa sẵn sàng — {notReady}");
+                return (false, $"LEG_{leg.Exchange}_NOT_READY");
+            }
+        }
+
         return (true, "ALLOWED");
     }
 
@@ -914,6 +925,16 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             _ => throw new InvalidOperationException($"Unsupported platform: {platform}")
         };
     }
+
+    // Không throw: dùng cho kiểm tra readiness trong policy (executor thiếu ⇒ dispatch sẽ tự báo lỗi như cũ).
+    private ITradePlatformExecutor? TryResolveExecutor(TradeLegPlatform platform) => platform switch
+    {
+        TradeLegPlatform.Mt4 => _mt4Executor,
+        TradeLegPlatform.Mt5 => _mt5Executor,
+        TradeLegPlatform.CTrader => _ctraderExecutor,
+        TradeLegPlatform.PrimeXbt => _primeXbtExecutor,
+        _ => null
+    };
 
     private void SafeLog(string message)
     {

@@ -13,11 +13,14 @@ namespace TradeDesktop.App.Services;
 // Kill switch: đăng ký lại NullPrimeXbtTradeExecutor trong App.xaml.cs.
 public sealed class PrimeXbtTradeExecutor(
     IPrimeXbtTradeSession tradeSession,
-    IRuntimeConfigProvider runtimeConfig) : ITradePlatformExecutor
+    IRuntimeConfigProvider runtimeConfig) : ITradePlatformExecutor, ITradeLegOpenReadiness
 {
     private const string PairLevelNotSupported = "PrimeXBT không hỗ trợ pair-level dispatch";
 
     public TradeLegPlatform Platform => TradeLegPlatform.PrimeXbt;
+
+    // Phase 8.1: phiên sắp hết hạn mà refresh JWT đang thất bại ⇒ router chặn cả cặp trước dispatch.
+    public string? GetOpenBlockReason() => tradeSession.OpenBlockReason;
 
     public async Task<ManualTradeLegResult> OpenLegAsync(TradeOpenLegRequest request, CancellationToken cancellationToken = default)
     {

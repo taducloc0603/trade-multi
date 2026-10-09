@@ -417,6 +417,22 @@ comment on column public.configs.close_rd_end_same_action_lock_seconds is
 'Số giây lớn nhất chờ giữa hai Auto Close liên tiếp.';
 ```
 
+**Sàn B = PrimeXBT (`platform_b = primexbt`)** — cấu hình nằm trong khối `primexbt` của cột `sans` (không có cột DB mới;
+token KHÔNG bao giờ lên DB — lưu DPAPI tại `%LOCALAPPDATA%\TradeDesktop\primexbt\{host}.bin`, đăng nhập qua Config):
+
+| Khoá `sans.primexbt` | Ý nghĩa |
+|---|---|
+| `accountId` | Mã tài khoản PrimeXBT (`D…` demo / `L…` thật) |
+| `symbol` | Symbol chính xác trên PrimeXBT, vd `XAU/USD` |
+| `volumeBOz` | Khối lượng chân B tính bằng **ounce**, bội của 0.01 (1 lot MT = 100 oz ⇒ 0.01 lot = `1`) |
+| `contractSizeB` | oz / lot dùng để quy đổi Lot trên Trades map (`100`) |
+| `volumeALots` | Lot chân A (chỉ để kiểm `[HEDGE_VOLUME]` lúc Start) |
+| `confirmLatencyB` | Ngưỡng guard latency B (tuổi tick, ms). Đề xuất `2000` (tick PrimeXBT p95 ~1 s, max vài giây) |
+
+Khuyến nghị cấu hình khi B = primexbt: `close_pending_time_ms` **≥ 2500** (vị thế biến mất khỏi snapshot ~1.4–1.9 s sau
+ack đóng; nhỏ hơn thì retry đóng thừa, sàn trả `POSITION_NOT_FOUND` — vô hại nhưng nhiễu), `open_pending_time_ms` ≥ 3000.
+Chi tiết và kill switch: `docs/plans/primexbt/` (`KILL-SWITCH.md`).
+
 ### 7.2 Routing thực thi lệnh
 
 File: `TradeDesktop.App/Services/TradeExecutionRouter.cs`
@@ -435,6 +451,11 @@ File: `TradeDesktop.App/Services/TradeExecutionRouter.cs`
 > map ảo `CTRADER_B_Trades` / `CTRADER_B_History` và trả dữ liệu FIX vào đúng chỗ mà code MMF vẫn đọc — nên
 > phần còn lại của app không biết có gì khác. Map khác hoặc `platform_b != ctrader` thì rơi thẳng về reader
 > MMF, không đổi gì. Tắt nhanh = đổi `platform_b` sang `mt5`. Chi tiết: `docs/plans/ctrader-fix/`.
+>
+> **`platform_b = primexbt`** đi cùng khuôn: một WebSocket `fws` (`PrimeXbtFwsSession`) cấp giá, Trades map ảo
+> `PRIMEXBT_B_Trades` (snapshot `positions`) và History map ảo `PRIMEXBT_B_History` (`report/orders2`) qua hai decorator
+> `PrimeXbtAware*Reader` bọc ngoài decorator cTrader; lệnh đi qua `PrimeXbtTradeExecutor` → `SendOrderAsync`. Ticket =
+> sub-position id gắn **bit 61** (`PrimeXbtTicketCodec`). Log riêng `Desktop\trade-log\{yyyyMMdd}-primexbt.log`.
 >
 > Ba khác biệt phải nhớ khi đọc dữ liệu chân B cTrader:
 >

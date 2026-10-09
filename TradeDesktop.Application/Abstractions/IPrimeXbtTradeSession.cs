@@ -21,6 +21,9 @@ public interface IPrimeXbtTradeSession
     // Phase 7: chiều + qty (oz) của sub-position đang mở để executor dựng lệnh đóng. null ⇒ executor PHẢI fail closed.
     (PrimeXbtSide Side, decimal Qty)? TryGetOpenPosition(long positionId) => null;
 
+    // Phase 8.1: khác null khi KHÔNG nên mở cặp mới (refresh JWT đang thất bại / JWT đã hết hạn). Chỉ chặn Open, Close vẫn đi.
+    string? OpenBlockReason => null;
+
     // Phase 7: min/step/max của symbol (route `trade-settings`) cho PrimeXbtOrderPlanner. null ⇒ planner fail closed.
     PrimeXbtTradeSettings? CurrentTradeSettings => null;
 

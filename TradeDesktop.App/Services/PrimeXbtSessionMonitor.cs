@@ -75,6 +75,15 @@ public sealed class PrimeXbtSessionMonitor : IDisposable
             case PrimeXbtSessionEventKind.DigitsMismatch:
                 Notify("PRIMEXBT_DIGITS_MISMATCH", "ERROR", $"Fail-closed sàn B: {evt.Message}");
                 break;
+            case PrimeXbtSessionEventKind.MarketNotice:
+                Notify("PRIMEXBT_MARKET", "INFO", evt.Message);
+                break;
+            case PrimeXbtSessionEventKind.ProtocolDrift:
+                Notify("PRIMEXBT_PROTOCOL_DRIFT", "WARN", evt.Message);
+                break;
+            case PrimeXbtSessionEventKind.TokenRefreshFailed:
+                Notify("PRIMEXBT_TOKEN_REFRESH_FAILED", "ERROR", evt.Message);
+                break;
             case PrimeXbtSessionEventKind.OrderUncertain:
                 Notify("PRIMEXBT_ORDER_UNCERTAIN", "CRITICAL", evt.Message);
                 break;
