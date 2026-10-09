@@ -1087,7 +1087,8 @@ public sealed class DashboardViewModel : ObservableObject
     /// </summary>
     private void CheckFirstPairLotOnce(string pairId, PendingOpenPairState state)
     {
-        if (_firstPairLotCheckDone || !state.IsAutoFlow || !IsTradingLogicEnabled || !IsExchangeBCTrader())
+        // PrimeXBT (Phase 7): cùng phép kiểm — Trades map B mang Lot = qty(oz) / contractSizeB.
+        if (_firstPairLotCheckDone || !state.IsAutoFlow || !IsTradingLogicEnabled || !IsExchangeBWithoutHwnd())
         {
             return;
         }

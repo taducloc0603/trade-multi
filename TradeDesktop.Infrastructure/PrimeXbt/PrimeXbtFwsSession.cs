@@ -97,6 +97,13 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
     private bool _historyLoaded;
     private bool _historyErrorReported;
     private int _historyRequests;
+    private readonly Dictionary<int, PendingOrder> _pendingOrders = new();
+
+    // Phase 7: chờ ack 5 s (như cTrader OrderReportTimeoutMs); đối soát sau 3 s (vị thế hiện trên snapshot p95 1.7 s).
+    public TimeSpan OrderAckTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan ReconcileDelay { get; set; } = TimeSpan.FromSeconds(3);
+
+    private sealed record PendingOrder(TaskCompletionSource<PrimeXbtOrderOutcome> Tcs, PrimeXbtOrderPlan Plan, long SentTick);
 
     // --- read-side (chỉ luồng poll) ---
     private int _readGeneration = -1;
@@ -387,6 +394,8 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
             }
         }
 
+        FailPendingOrders("phiên dừng khi lệnh còn chờ ack");
+
         if (transport is null)
         {
             return;
@@ -488,6 +497,8 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
             _lifecycle = _lifecycle.ContinueWith(_ => DropDeadTransport(generation), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         }
 
+        FailPendingOrders("socket rớt sau khi gửi");
+
         var safeReason = PrimeXbtLogMasker.Apply(reason);
         if (wasConnected)
         {
@@ -535,11 +546,18 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
         var events = new List<PrimeXbtSessionEvent>();
         IPrimeXbtTransport? transport = null;
         var subscribeSymbolId = 0;
+        (PendingOrder Order, PrimeXbtOrderOutcome Outcome)? orderAck = null;
         lock (_stateLock)
         {
             if (generation != _generation)
             {
                 return;
+            }
+
+            if (frame.Type == PrimeXbtFrameType.Response && frame.Rid is { } orderRid &&
+                _pendingOrders.Remove(orderRid, out var pendingOrder))
+            {
+                orderAck = (pendingOrder, BuildOrderOutcome(frame));
             }
 
             var now = _tickCount();
@@ -644,6 +662,8 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
                     break;
             }
         }
+
+        orderAck?.Order.Tcs.TrySetResult(orderAck.Value.Outcome);
 
         if (transport is not null && subscribeSymbolId > 0)
         {
@@ -848,6 +868,189 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
             ["orderBy"] = "id",
             ["orderDir"] = "desc"
         });
+    }
+
+    public PrimeXbtTradeSettings? CurrentTradeSettings
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _tradeSettings;
+            }
+        }
+    }
+
+    // Rule E: ĐƯỜNG DUY NHẤT gửi lệnh ra PrimeXBT. Session KHÔNG tự gọi hàm này ở bất kỳ nhánh nào (không flatten, không
+    // retry, không reconcile bằng lệnh). Không gửi lại sau timeout — lệnh có thể đã khớp (Phase 0 Q5).
+    public async Task<PrimeXbtOrderOutcome> SendOrderAsync(PrimeXbtOrderPlan plan, CancellationToken cancellationToken = default)
+    {
+        if (plan.Action is not (PrimeXbtOrderPlanner.ActionMarketPlace or PrimeXbtOrderPlanner.ActionClosePosition))
+        {
+            Emit("ERROR", $"[ORDER] từ chối route không được phép: {plan.Action}");
+            return new PrimeXbtOrderOutcome(false, $"Route không được phép: {plan.Action}");
+        }
+
+        var tcs = new TaskCompletionSource<PrimeXbtOrderOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        IPrimeXbtTransport transport;
+        int rid;
+        HashSet<long> idsBefore;
+        long sentTick;
+        lock (_stateLock)
+        {
+            if (!_connected || _stale || _transport is null || _symbol is null)
+            {
+                return new PrimeXbtOrderOutcome(false, PrimeXbtOrderOutcome.NotConnected);
+            }
+
+            rid = ++_rid;
+            transport = _transport;
+            idsBefore = _positions.Positions.Select(p => p.Id).ToHashSet();
+            sentTick = _tickCount();
+            _pendingOrders[rid] = new PendingOrder(tcs, plan, sentTick);
+        }
+
+        var body = plan.Body.ToJsonString();
+        bool sent;
+        try
+        {
+            sent = transport.Send(PrimeXbtEnvelope.Build(PrimeXbtEnvelope.TypeRequest, rid, plan.Action, plan.Body));
+        }
+        catch
+        {
+            sent = false;
+        }
+
+        if (!sent)
+        {
+            lock (_stateLock)
+            {
+                _pendingOrders.Remove(rid);
+            }
+
+            Emit("WARN", $"[ORDER] không gửi được rid={rid} {plan.Action} {body} (socket chưa sẵn sàng)");
+            return new PrimeXbtOrderOutcome(false, PrimeXbtOrderOutcome.NotConnected);
+        }
+
+        Emit("INFO", $"[ORDER] SEND rid={rid} {plan.Action} {body}");
+        var timeout = Task.Delay(OrderAckTimeout, CancellationToken.None);
+        var winner = await Task.WhenAny(tcs.Task, timeout).ConfigureAwait(false);
+        PrimeXbtOrderOutcome outcome;
+        if (winner == tcs.Task)
+        {
+            outcome = await tcs.Task.ConfigureAwait(false);
+        }
+        else
+        {
+            lock (_stateLock)
+            {
+                _pendingOrders.Remove(rid);
+            }
+
+            outcome = new PrimeXbtOrderOutcome(false, PrimeXbtOrderOutcome.TimeoutUncertain + $" (không có ack sau {(int)OrderAckTimeout.TotalMilliseconds} ms)", IsUncertain: true);
+        }
+
+        var elapsed = _tickCount() - sentTick;
+        if (outcome.IsUncertain)
+        {
+            var message = $"[ORDER] {outcome.Detail} rid={rid} {plan.Action} {body} — KHÔNG gửi lại; đối soát sau {(int)ReconcileDelay.TotalMilliseconds} ms";
+            Emit("WARN", message);
+            Raise(PrimeXbtSessionEventKind.OrderUncertain, message);
+            StartReconcile(plan, idsBefore, rid);
+        }
+        else
+        {
+            Emit(outcome.Success ? "INFO" : "WARN", $"[ORDER] {(outcome.Success ? "ACK" : "REJECT")} rid={rid} {plan.Action} {elapsed} ms — {outcome.Detail}");
+        }
+
+        return outcome;
+    }
+
+    // Gọi trong _stateLock.
+    private static PrimeXbtOrderOutcome BuildOrderOutcome(PrimeXbtFrame frame)
+    {
+        if (frame.Error is { } error)
+        {
+            return new PrimeXbtOrderOutcome(false, $"{error.Code}: {error.Description}");
+        }
+
+        long? orderId = frame.Body is { ValueKind: JsonValueKind.Object } body &&
+                        body.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.Number &&
+                        id.TryGetInt64(out var value)
+            ? value
+            : null;
+        return new PrimeXbtOrderOutcome(true, orderId is { } o ? $"ack orderId={o}" : "ack", orderId);
+    }
+
+    // Rớt/dừng socket khi lệnh còn chờ ack ⇒ không biết lệnh có khớp không (Q5) ⇒ uncertain, KHÔNG gửi lại.
+    private void FailPendingOrders(string reason)
+    {
+        List<PendingOrder> pending;
+        lock (_stateLock)
+        {
+            if (_pendingOrders.Count == 0)
+            {
+                return;
+            }
+
+            pending = _pendingOrders.Values.ToList();
+            _pendingOrders.Clear();
+        }
+
+        foreach (var order in pending)
+        {
+            order.Tcs.TrySetResult(new PrimeXbtOrderOutcome(false, $"{PrimeXbtOrderOutcome.TimeoutUncertain} ({reason})", IsUncertain: true));
+        }
+    }
+
+    // Chỉ BÁO CÁO: đối chiếu snapshot vị thế sau ReconcileDelay với trạng thái lúc gửi. Router tự xử lý theo đường
+    // partial-open/rollback/pending-close sẵn có (ticket khớp vẫn được phát hiện qua Trades map).
+    private void StartReconcile(PrimeXbtOrderPlan plan, HashSet<long> idsBefore, int rid)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(ReconcileDelay).ConfigureAwait(false);
+                var conclusion = ConcludeReconcile(plan, idsBefore);
+                var message = $"[ORDER] đối soát rid={rid} {plan.Action} {plan.Body.ToJsonString()} ⇒ {conclusion}";
+                Emit(conclusion.StartsWith("UNKNOWN", StringComparison.Ordinal) ? "ERROR" : "WARN", message);
+                Raise(PrimeXbtSessionEventKind.OrderReconciled, message);
+            }
+            catch (Exception ex)
+            {
+                Emit("ERROR", "[ORDER] đối soát lỗi: " + ex.Message);
+            }
+        });
+    }
+
+    private string ConcludeReconcile(PrimeXbtOrderPlan plan, HashSet<long> idsBefore)
+    {
+        lock (_stateLock)
+        {
+            if (!_connected || !_positions.Synced)
+            {
+                return "UNKNOWN (chưa có snapshot vị thế của kết nối hiện tại — kiểm tay trên web)";
+            }
+
+            if (plan.Action == PrimeXbtOrderPlanner.ActionClosePosition)
+            {
+                var positionId = plan.Body["positionId"]!.GetValue<long>();
+                return _positions.TryGet(positionId) is null
+                    ? $"CLOSED (sub {positionId} không còn mở)"
+                    : $"NOT_CLOSED (sub {positionId} vẫn mở)";
+            }
+
+            var side = string.Equals(plan.Body["side"]!.GetValue<string>(), "BUY", StringComparison.Ordinal) ? PrimeXbtSide.Buy : PrimeXbtSide.Sell;
+            var qty = plan.Body["qty"]!.GetValue<decimal>();
+            var candidates = _positions.Positions.Where(p => !idsBefore.Contains(p.Id) && p.Side == side && p.Qty == qty).ToList();
+            return candidates.Count switch
+            {
+                1 => $"FILLED (sub {candidates[0].Id}) — lệnh ĐÃ khớp dù không có ack",
+                0 => "NOT_PLACED (không thấy vị thế mới khớp chiều/qty)",
+                _ => $"UNKNOWN ({candidates.Count} vị thế mới cùng chiều/qty — không đoán)"
+            };
+        }
     }
 
     public (PrimeXbtSide Side, decimal Qty)? TryGetOpenPosition(long positionId)

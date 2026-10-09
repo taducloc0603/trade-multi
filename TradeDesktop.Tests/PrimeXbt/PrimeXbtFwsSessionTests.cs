@@ -802,6 +802,161 @@ public sealed class PrimeXbtFwsSessionTests
         Assert.Single(h.Logs, l => l.Contains("History map B giữ trạng thái cũ", StringComparison.Ordinal));
     }
 
+    // ---------------- Phase 7: gửi lệnh ----------------
+
+    private static PrimeXbtOrderPlan OpenPlan(string side = "BUY")
+        => PrimeXbtOrderPlanner.PlanOpen("XAU/USD", side == "BUY" ? PrimeXbtSide.Buy : PrimeXbtSide.Sell, 0.01m,
+            new PrimeXbtTradeSettings(0.01m, 0.01m, 100m, "OZ")).Plan!;
+
+    private static int LastOrderRid(FakePrimeXbtTransport t, string action) => t.LastSent(action)!["rid"]!.GetValue<int>();
+
+    private static async Task<Harness> TradingReadyAsync()
+    {
+        var h = await SyncedWithHedgeAsync();
+        h.Session.OrderAckTimeout = TimeSpan.FromMilliseconds(300);
+        h.Session.ReconcileDelay = TimeSpan.FromMilliseconds(50);
+        return h;
+    }
+
+    private static async Task WaitForLogAsync(Harness h, string fragment)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (true)
+        {
+            lock (h.Logs)
+            {
+                if (h.Logs.Any(l => l.Contains(fragment, StringComparison.Ordinal)))
+                {
+                    return;
+                }
+            }
+
+            Assert.True(DateTime.UtcNow < deadline, "Không thấy log: " + fragment);
+            await Task.Delay(20);
+        }
+    }
+
+    [Fact]
+    public async Task SendOrder_NotConnected_FailsWithoutSending()
+    {
+        var h = new Harness();
+        await h.EnsureAsync();
+
+        var outcome = await h.Session.SendOrderAsync(OpenPlan());
+
+        Assert.False(outcome.Success);
+        Assert.Equal(PrimeXbtOrderOutcome.NotConnected, outcome.Detail);
+        Assert.Empty(h.Current.Sent);
+    }
+
+    [Theory]
+    [InlineData("positions/close")]
+    [InlineData("positions/close/all")]
+    [InlineData("orders/cancel-all")]
+    public async Task SendOrder_ForbiddenRoute_IsRejected_NothingSent(string route)
+    {
+        var h = await TradingReadyAsync();
+        var sentBefore = h.Current.Sent.Count;
+
+        var outcome = await h.Session.SendOrderAsync(new PrimeXbtOrderPlan(route, new JsonObject()));
+
+        Assert.False(outcome.Success);
+        Assert.Equal(sentBefore, h.Current.Sent.Count);
+    }
+
+    [Fact]
+    public async Task SendOrder_Ack_Success_WithOrderId()
+    {
+        var h = await TradingReadyAsync();
+        h.Session.OrderAckTimeout = TimeSpan.FromSeconds(5);
+
+        var task = h.Session.SendOrderAsync(OpenPlan());
+        var sent = h.Current.LastSent("orders/market/place")!;
+        Assert.Equal("REQUEST", sent["type"]!.GetValue<string>());
+        Assert.Equal("BUY", sent["body"]!["side"]!.GetValue<string>());
+        h.Current.Receive($$"""{"type":"RESPONSE","action":"orders/market/place","body":{"id":2095468976,"error":null},"rid":{{LastOrderRid(h.Current, "orders/market/place")}}}""");
+        var outcome = await task;
+
+        Assert.True(outcome.Success);
+        Assert.Equal(2095468976L, outcome.OrderId);
+        Assert.False(outcome.IsUncertain);
+        Assert.Contains(h.Logs, l => l.Contains("[ORDER] ACK", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("""{"type":"RESPONSE","action":"orders/market/place","body":{"id":null,"error":"TOO_LOW_AMOUNT"},"rid":RID}""", "TOO_LOW_AMOUNT")]
+    [InlineData("""{"type":"RESPONSE","action":"orders/market/place","error":{"code":"WRONG_ARGS","description":"Unknown symbol"},"rid":RID}""", "WRONG_ARGS")]
+    public async Task SendOrder_Rejection_BothErrorShapes_MappedToFailure(string response, string code)
+    {
+        var h = await TradingReadyAsync();
+        h.Session.OrderAckTimeout = TimeSpan.FromSeconds(5);
+
+        var task = h.Session.SendOrderAsync(OpenPlan());
+        h.Current.Receive(response.Replace("RID", LastOrderRid(h.Current, "orders/market/place").ToString()));
+        var outcome = await task;
+
+        Assert.False(outcome.Success);
+        Assert.False(outcome.IsUncertain);
+        Assert.Contains(code, outcome.Detail);
+    }
+
+    [Fact]
+    public async Task SendOrder_NoAck_TimeoutUncertain_NotResent_ReconcileFindsFill()
+    {
+        var h = await TradingReadyAsync();
+
+        var outcome = await h.Session.SendOrderAsync(OpenPlan("BUY"));
+
+        Assert.False(outcome.Success);
+        Assert.True(outcome.IsUncertain);
+        Assert.StartsWith(PrimeXbtOrderOutcome.TimeoutUncertain, outcome.Detail);
+        Assert.Single(h.Events, e => e.Kind == PrimeXbtSessionEventKind.OrderUncertain);
+
+        // Lệnh thật ra đã khớp: snapshot có sub Buy 0.01 mới (id khác hai sub đã có).
+        h.Current.Receive("""{"type":"EVENT","action":"positions","body":{"positionMode":"HEDGE","data":[{"id":0,"symbol":"XAU/USD","qty":0.01,"subPositions":[{"id":10680080,"side":"SELL","symbol":"XAU/USD","qty":0.01,"openPrice":4179.03,"openTime":"2026-10-09T02:58:09.916Z"},{"id":10680072,"side":"BUY","symbol":"XAU/USD","qty":0.01,"openPrice":4179.61,"openTime":"2026-10-09T02:57:39.202Z"},{"id":10690001,"side":"BUY","symbol":"XAU/USD","qty":0.01,"openPrice":4180.00,"openTime":"2026-10-09T03:00:00.000Z"}]}]},"sid":3,"aid":20}""");
+        await WaitForLogAsync(h, "FILLED (sub 10690001)");
+
+        Assert.Equal(1, h.Current.Sent.Count(s => s.Contains("orders/market/place", StringComparison.Ordinal))); // không gửi lại
+    }
+
+    [Fact]
+    public async Task SendOrder_SocketDropsAfterSend_UncertainImmediately_ReconcileUnknown()
+    {
+        var h = await TradingReadyAsync();
+        h.Session.OrderAckTimeout = TimeSpan.FromSeconds(30);
+
+        var task = h.Session.SendOrderAsync(OpenPlan());
+        h.Current.Drop("network");
+        var outcome = await task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(outcome.IsUncertain);
+        Assert.Contains("socket rớt", outcome.Detail);
+        await WaitForLogAsync(h, "UNKNOWN");
+    }
+
+    [Fact]
+    public async Task SendOrder_CloseNoAck_ReconcileReportsNotClosed()
+    {
+        var h = await TradingReadyAsync();
+
+        var outcome = await h.Session.SendOrderAsync(PrimeXbtOrderPlanner.PlanClose(10680072, 0.01m).Plan!);
+
+        Assert.True(outcome.IsUncertain);
+        await WaitForLogAsync(h, "NOT_CLOSED (sub 10680072 vẫn mở)");
+    }
+
+    [Fact]
+    public async Task TradeSettings_FromSubscription_AreExposed()
+    {
+        var h = await TradingReadyAsync();
+        Assert.Null(h.Session.CurrentTradeSettings);
+
+        h.Current.Receive(PrimeXbtFixtures.Raw("quotes.json", "trade_settings_response"));
+
+        Assert.NotNull(h.Session.CurrentTradeSettings);
+        Assert.Equal(0.01m, h.Session.CurrentTradeSettings!.MinOrderSize);
+    }
+
     [Fact]
     public async Task Logs_NeverContainJwtOrCookie()
     {

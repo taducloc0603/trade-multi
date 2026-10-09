@@ -15,7 +15,10 @@ public enum PrimeXbtSessionEventKind
     ReconnectStorm = 7,
     AuthRequired = 8,
     // Phase 5 (P8): snapshot `positions` báo positionMode ≠ HEDGE ⇒ Trades map B fail-closed.
-    PositionModeInvalid = 9
+    PositionModeInvalid = 9,
+    // Phase 7: lệnh gửi đi không có ack (timeout / rớt socket) và kết luận đối soát sau đó (chỉ báo cáo).
+    OrderUncertain = 10,
+    OrderReconciled = 11
 }
 
 public sealed record PrimeXbtSessionEvent(PrimeXbtSessionEventKind Kind, string Message);

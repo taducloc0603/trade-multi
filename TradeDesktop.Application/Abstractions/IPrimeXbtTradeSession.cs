@@ -20,4 +20,20 @@ public interface IPrimeXbtTradeSession
 
     // Phase 7: chiều + qty (oz) của sub-position đang mở để executor dựng lệnh đóng. null ⇒ executor PHẢI fail closed.
     (PrimeXbtSide Side, decimal Qty)? TryGetOpenPosition(long positionId) => null;
+
+    // Phase 7: min/step/max của symbol (route `trade-settings`) cho PrimeXbtOrderPlanner. null ⇒ planner fail closed.
+    PrimeXbtTradeSettings? CurrentTradeSettings => null;
+
+    // Phase 7: ĐƯỜNG DUY NHẤT gửi lệnh PrimeXBT, chỉ PrimeXbtTradeExecutor gọi khi router ra lệnh. Chỉ nhận plan của
+    // PrimeXbtOrderPlanner (mở market / đóng ĐÚNG một sub-position). Success = RESPONSE không lỗi — KHÔNG có nghĩa đã có
+    // vị thế (xác nhận qua Trades map, D2). Timeout/rớt socket sau khi gửi ⇒ IsUncertain, KHÔNG BAO GIỜ gửi lại (Q5: lệnh
+    // vẫn có thể khớp); session đối soát và chỉ báo cáo (Rule E). Mặc định fail để fake/test cũ không "đặt lệnh được".
+    Task<PrimeXbtOrderOutcome> SendOrderAsync(PrimeXbtOrderPlan plan, CancellationToken cancellationToken = default)
+        => Task.FromResult(new PrimeXbtOrderOutcome(false, "SendOrderAsync chưa được cài đặt"));
+}
+
+public sealed record PrimeXbtOrderOutcome(bool Success, string Detail, long? OrderId = null, bool IsUncertain = false)
+{
+    public const string NotConnected = "NOT_CONNECTED";
+    public const string TimeoutUncertain = "TIMEOUT_UNCERTAIN";
 }

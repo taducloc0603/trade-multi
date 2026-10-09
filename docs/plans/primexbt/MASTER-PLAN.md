@@ -36,11 +36,11 @@ Quy tắc cứng:
 | 3 | Lõi giao thức offline | 2 | Không | [phase-3](phase-3-protocol-core-offline.md) | ✅ | df8e971 | 2026-10-09 |
 | 4 | Socket + luồng giá (chỉ đọc) | 3 | Không | [phase-4](phase-4-quote-feed.md) | ✅ (A2 rút gọn theo chủ dự án; F4-1 sửa; F4-3 guard N=2) | 116b9c9 | 2026-10-09 |
 | 5 | Vị thế mở (chỉ đọc) | 4 | User mở tay trên web | [phase-5](phase-5-open-positions.md) | ✅ | 116b9c9 | 2026-10-09 |
-| 6 | Lịch sử (chỉ đọc) | 5 | User mở tay trên web | [phase-6](phase-6-history.md) | ✅ (A1 ở mức map — tab chỉ hiện ticket app) | (xem §6) | 2026-10-09 |
-| 7A | Executor cô lập trên demo | 6 | Demo 🛑 | [phase-7](phase-7-execution.md) | ⏳ | | |
-| 7B | Cặp đầy đủ trên demo | 7A | Demo 🛑 | [phase-7](phase-7-execution.md) | ⏳ | | |
-| 7C | Live | 7B | **Live** 🛑 | [phase-7](phase-7-execution.md) | ⏳ | | |
-| 8 | Hardening & vận hành | 7C | Theo kịch bản | [phase-8](phase-8-hardening.md) | ⛔ | | |
+| 6 | Lịch sử (chỉ đọc) | 5 | User mở tay trên web | [phase-6](phase-6-history.md) | ✅ (A1 ở mức map — tab chỉ hiện ticket app) | 4b209e7 | 2026-10-09 |
+| 7A | Executor cô lập trên demo | 6 | Demo 🛑 | [phase-7](phase-7-execution.md) | ✅ | (xem §6) | 2026-10-09 |
+| 7B | Cặp đầy đủ trên demo | 7A | Demo 🛑 | [phase-7](phase-7-execution.md) | ✅ | (xem §6) | 2026-10-09 |
+| 7C | Live | 7B | **Live** 🛑 | [phase-7](phase-7-execution.md) | 🛑 chờ chủ dự án đồng ý (live) | | |
+| 8 | Hardening & vận hành | 7C | Theo kịch bản | [phase-8](phase-8-hardening.md) | 🛑 chờ chủ dự án đồng ý (live) | | |
 
 Ký hiệu: ✅ xong · ⏳ làm được · 🔄 đang làm · ❌ fail, đang sửa · ⛔ chưa đủ phụ thuộc · ⏭ bỏ (do chọn track khác).
 
@@ -227,6 +227,8 @@ không in/ghi token, cookie, email; kết thúc mỗi phiên test tài khoản p
 | 2026-10-09 | 5 | 6–8 Cổng ra | (chưa commit) | 1285 / 11, warning 3 | auto PASS | **5-A2 ✅** (map B True→False lúc heartbeat quá hạn, False→True sau snapshot mới). **Phase 5 đóng ✅**. DB laptop trả số thường, demo flat |
 | 2026-10-09 | 4–5 | Commit | 116b9c9 | — | — | Chủ dự án: commit rồi làm hết các phase, chỉ nhắn khi có vấn đề |
 | 2026-10-09 | 6 | 4–8 | (chưa commit) | 1302 / 11, warning 3 | auto PASS | PrimeXbtHistoryBook + lịch eport/orders2 (sync / 0.5 s sau khi đóng / 10 s) + PrimeXbtAwareHistoryReader. Live: 2 vị thế spike ⇒ 2 record đúng giá/profit (rpl sàn = 0 do làm tròn), idle 6 request/phút. Tab History chỉ hiện ticket app tạo (sẵn có) ⇒ hiển thị kiểm ở 7B. **Phase 6 đóng ✅** |
+| 2026-10-09 | 6 | Commit | 4b209e7 | — | — | |
+| 2026-10-09 | 7 | 4–7 (7A + 7B demo) | (chưa commit) | 1313 / 11, warning 3, Rule F 8/8 | auto PASS | Executor thật (SendOrderAsync đường duy nhất, không gửi lại, đối soát chỉ báo cáo). **7A** harness dùng đúng session app: 4/4 (7A-4 FILLED đúng). **7B** 26 lệnh Open: ≥ 17 cặp Auto, manual per-pair, external close, restart giữa chu kỳ, partial (qty > max) + F4-3, lot check, Rule A/B/D (2 slot). open→confirm p50 1.5 / p95 2.2 s. **F7-1** khuyến nghị close_pending_time_ms ≥ 2500 cho primexbt (1015 ⇒ retry đóng thừa, vô hại). **F7-2** race rollback vs external-close có từ trước (đóng cùng ticket A hai lần, vô hại). Laptop trả config gốc, demo flat |
 ---
 
 ## §7 Prompt mẫu để bắt đầu một phiên
