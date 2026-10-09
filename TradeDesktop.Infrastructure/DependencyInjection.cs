@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Infrastructure.CTrader;
 using TradeDesktop.Infrastructure.MarketData;
+using TradeDesktop.Infrastructure.PrimeXbt;
 using TradeDesktop.Infrastructure.Signals;
 using TradeDesktop.Infrastructure.SharedMemory;
 using TradeDesktop.Infrastructure.Supabase;
@@ -27,6 +28,8 @@ public static class DependencyInjection
         services.AddSingleton<ITradesSharedMemoryReader>(sp => new CTraderAwareTradesReader(new TradesSharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()));
         // Phase 6 ROLLBACK = thay dòng dưới bằng `services.AddSingleton<IHistorySharedMemoryReader, HistorySharedMemoryReader>();`
         services.AddSingleton<IHistorySharedMemoryReader>(sp => new CTraderAwareHistoryReader(new HistorySharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()));
+        // PrimeXBT Phase 2: kho token DPAPI cục bộ (chưa có kết nối nào dùng tới cho tới Phase 4).
+        services.AddSingleton<IPrimeXbtTokenStore, PrimeXbtTokenStore>();
         services.AddSingleton<MockSharedMemoryMarketDataReader>();
         services.AddSingleton<ISignalEngine, SimpleSignalEngine>();
         services.AddHttpClient();

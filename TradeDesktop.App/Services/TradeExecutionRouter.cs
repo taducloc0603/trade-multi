@@ -12,6 +12,7 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
     private readonly ITradePlatformExecutor _mt4Executor;
     private readonly ITradePlatformExecutor _mt5Executor;
     private readonly ITradePlatformExecutor? _ctraderExecutor;
+    private readonly ITradePlatformExecutor? _primeXbtExecutor;
     private readonly ITradeSessionFileLogger _logger;
     private readonly IPortfolioCoordinator _portfolioCoordinator;
     private readonly IRuntimeConfigProvider _runtimeConfig;
@@ -30,6 +31,7 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         _mt4Executor = executors.First(x => x.Platform == TradeLegPlatform.Mt4);
         _mt5Executor = executors.First(x => x.Platform == TradeLegPlatform.Mt5);
         _ctraderExecutor = executors.FirstOrDefault(x => x.Platform == TradeLegPlatform.CTrader);
+        _primeXbtExecutor = executors.FirstOrDefault(x => x.Platform == TradeLegPlatform.PrimeXbt);
         _logger = logger;
         _portfolioCoordinator = portfolioCoordinator;
         _runtimeConfig = runtimeConfig;
@@ -808,7 +810,12 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             throw new InvalidOperationException("cTrader chỉ được dùng cho sàn B.");
         }
 
-        if (platform is TradeLegPlatform.Mt4 or TradeLegPlatform.Mt5 or TradeLegPlatform.CTrader)
+        if (exchange == "A" && platform == TradeLegPlatform.PrimeXbt)
+        {
+            throw new InvalidOperationException("PrimeXBT chỉ được dùng cho sàn B.");
+        }
+
+        if (platform is TradeLegPlatform.Mt4 or TradeLegPlatform.Mt5 or TradeLegPlatform.CTrader or TradeLegPlatform.PrimeXbt)
         {
             return;
         }
@@ -902,6 +909,8 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             TradeLegPlatform.Mt5 => _mt5Executor,
             TradeLegPlatform.CTrader => _ctraderExecutor
                 ?? throw new InvalidOperationException("Chưa đăng ký executor cho cTrader."),
+            TradeLegPlatform.PrimeXbt => _primeXbtExecutor
+                ?? throw new InvalidOperationException("Chưa đăng ký executor cho PrimeXBT."),
             _ => throw new InvalidOperationException($"Unsupported platform: {platform}")
         };
     }

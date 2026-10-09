@@ -53,6 +53,29 @@ public sealed class PlatformBSwitchGuardTests
     }
 
     [Theory]
+    [InlineData("mt5", "primexbt", 1)]
+    [InlineData("primexbt", "mt5", 2)]
+    [InlineData("primexbt", "ctrader", 1)]
+    [InlineData("ctrader", "primexbt", 1)]
+    [InlineData("MT4", " PrimeXBT ", 3)]
+    public void OpenSlots_AnySwitchInvolvingPrimeXbt_IsRejected(string running, string next, int slots)
+    {
+        var decision = PlatformBSwitchGuard.Evaluate(running, next, slots);
+
+        Assert.False(decision.Allowed);
+        Assert.Contains($"Đang có {slots} slot mở", decision.Message);
+    }
+
+    [Theory]
+    [InlineData("primexbt", "primexbt", 5)]
+    [InlineData("primexbt", "PRIMEXBT", 5)]
+    [InlineData("mt5", "primexbt", 0)]
+    public void PrimeXbt_NoRelevantChangeOrNoSlots_IsAllowed(string running, string next, int slots)
+    {
+        Assert.True(PlatformBSwitchGuard.Evaluate(running, next, slots).Allowed);
+    }
+
+    [Theory]
     [InlineData(null, "ctrader", 1, false)]
     [InlineData("ctrader", null, 1, false)]
     [InlineData(null, null, 1, true)]

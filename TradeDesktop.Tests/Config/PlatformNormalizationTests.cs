@@ -20,6 +20,10 @@ public sealed class PlatformNormalizationTests
         { "ctrader", "ctrader" },
         { "CTRADER", "ctrader" },
         { " ctrader ", "ctrader" },
+        { "primexbt", "primexbt" },
+        { "PRIMEXBT", "primexbt" },
+        { " PrimeXBT ", "primexbt" },
+        { "prime-xbt", "mt5" },
         { " MT4 ", "mt4" },
         { "xyz", "mt5" },
         { "", "mt5" },
@@ -64,6 +68,33 @@ public sealed class PlatformNormalizationTests
         Assert.Equal(0, repository.UpdateCallCount);
     }
 
+    [Fact]
+    public async Task Save_PlatformAPrimeXbt_IsRejectedAndNothingWritten()
+    {
+        var repository = new CapturingConfigRepository(BaseRecord);
+
+        var result = await BuildService(repository)
+            .SaveByMachineHostNameAsync("MAP_A", "MAP_B", "primexbt", "mt5");
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("PrimeXBT chỉ được dùng cho sàn B.", result.Error);
+        Assert.Equal(0, repository.UpdateCallCount);
+    }
+
+    [Theory]
+    [InlineData("PRIMEXBT")]
+    [InlineData(" PrimeXbt ")]
+    public async Task Save_PlatformAPrimeXbtInAnyCase_IsRejected(string platformA)
+    {
+        var repository = new CapturingConfigRepository(BaseRecord);
+
+        var result = await BuildService(repository)
+            .SaveByMachineHostNameAsync("MAP_A", "MAP_B", platformA, "mt5");
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(0, repository.UpdateCallCount);
+    }
+
     [Theory]
     [InlineData("CTRADER")]
     [InlineData(" ctrader ")]
@@ -86,6 +117,8 @@ public sealed class PlatformNormalizationTests
     [InlineData("mt5", "mt5")]
     [InlineData("mt4", "ctrader")]
     [InlineData("mt5", "ctrader")]
+    [InlineData("mt4", "primexbt")]
+    [InlineData("mt5", "primexbt")]
     public async Task Save_SupportedPlatformMatrix_RoundTripsUnchanged(string platformA, string platformB)
     {
         var repository = new CapturingConfigRepository(BaseRecord);
@@ -102,6 +135,8 @@ public sealed class PlatformNormalizationTests
     [InlineData("mt4", "ctrader")]
     [InlineData("mt5", "ctrader")]
     [InlineData("mt5", "mt4")]
+    [InlineData("mt4", "primexbt")]
+    [InlineData("mt5", "primexbt")]
     public async Task Load_SupportedPlatformMatrix_RoundTripsUnchanged(string platformA, string platformB)
     {
         var result = await BuildService(new CapturingConfigRepository(
@@ -127,6 +162,22 @@ public sealed class PlatformNormalizationTests
         using var payload = JsonDocument.Parse(handler.LastRequestBody!);
         Assert.Equal("mt5", payload.RootElement.GetProperty("platform_a").GetString());
         Assert.Equal("ctrader", payload.RootElement.GetProperty("platform_b").GetString());
+    }
+
+    [Fact]
+    public async Task SupabaseRepository_WritePath_KeepsPrimeXbtInPatchPayload()
+    {
+        var handler = new CapturingHandler("""[{"id":"config-id"}]""");
+        using var httpClient = new HttpClient(handler);
+        var repository = new SupabaseConfigRepository(httpClient, "https://example.test", "key");
+
+        var updated = await repository.UpdateSansAndHostNameByHostNameAsync(
+            "test-host", "[]", "mt5", " PrimeXBT ");
+
+        Assert.True(updated);
+        using var payload = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.Equal("mt5", payload.RootElement.GetProperty("platform_a").GetString());
+        Assert.Equal("primexbt", payload.RootElement.GetProperty("platform_b").GetString());
     }
 
     private static async Task<string> ReadPlatformBFromSupabaseAsync(string? raw)

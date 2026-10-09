@@ -14,7 +14,8 @@ public interface IConfigService
         string platformB,
         IReadOnlyList<ManualHwndColumnConfig>? manualHwndColumns = null,
         CancellationToken cancellationToken = default,
-        CTraderFixConfig? ctraderFix = null);
+        CTraderFixConfig? ctraderFix = null,
+        PrimeXbtConfig? primeXbt = null);
     Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default);
     Task SaveCurrentSlotsAsync(string currentSlotsJson, CancellationToken cancellationToken = default);
 }
@@ -29,7 +30,7 @@ public sealed class ConfigService(
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" or "ctrader" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" ? normalized : "mt5";
     }
 
     public async Task<ConfigLoadResult> LoadByMachineHostNameAsync(CancellationToken cancellationToken = default)
@@ -81,7 +82,7 @@ public sealed class ConfigService(
                 $"Cấu hình [NORMAL CLOSE GAP STABILITY] không hợp lệ: {closeGapError}");
         }
 
-        SansJsonHelper.TryParseSans(record.SansJson, out var mapName1, out var mapName2, out var manualHwndColumns, out var ctraderFix);
+        SansJsonHelper.TryParseSans(record.SansJson, out var mapName1, out var mapName2, out var manualHwndColumns, out var ctraderFix, out var primeXbt);
         return ConfigLoadResult.Success(
             hostName,
             mapName1,
@@ -150,7 +151,7 @@ public sealed class ConfigService(
             scheduleSleepingJson: record.ScheduleSleepingJson,
             openGapStability: record.OpenGapStability,
             closeGapStability: record.CloseGapStability,
-            openMaxLastGapPts: record.OpenMaxLastGapPts) with { CTraderFix = ctraderFix };
+            openMaxLastGapPts: record.OpenMaxLastGapPts) with { CTraderFix = ctraderFix, PrimeXbt = primeXbt };
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -182,7 +183,8 @@ public sealed class ConfigService(
         string platformB,
         IReadOnlyList<ManualHwndColumnConfig>? manualHwndColumns = null,
         CancellationToken cancellationToken = default,
-        CTraderFixConfig? ctraderFix = null)
+        CTraderFixConfig? ctraderFix = null,
+        PrimeXbtConfig? primeXbt = null)
     {
         var hostName = machineIdentityService.GetHostName();
         if (string.IsNullOrWhiteSpace(hostName))
@@ -198,7 +200,12 @@ public sealed class ConfigService(
             return ConfigSaveResult.Failed("cTrader chỉ được dùng cho sàn B.");
         }
 
-        var sansJson = SansJsonHelper.BuildSans(mapName1, mapName2, manualHwndColumns, ctraderFix);
+        if (normalizedPlatformA == "primexbt")
+        {
+            return ConfigSaveResult.Failed("PrimeXBT chỉ được dùng cho sàn B.");
+        }
+
+        var sansJson = SansJsonHelper.BuildSans(mapName1, mapName2, manualHwndColumns, ctraderFix, primeXbt);
 
         var updated = await configRepository.UpdateSansAndHostNameByHostNameAsync(
             hostName,
@@ -307,7 +314,9 @@ public sealed record ConfigLoadResult(
     // null — hoặc platform_b là MT — thì dùng chung `ConfirmLatencyMs` (hành vi trước task này).
     // KHÔNG clamp: 0 = tắt guard latency riêng cho chân B.
     // Đặt CUỐI danh sách để không làm lệch các tham số positional mà Success(...) đang truyền.
-    int? CTraderConfirmLatencyB = null)
+    int? CTraderConfirmLatencyB = null,
+    // Khối primexbt trong sans_json (kể cả ngưỡng latency B riêng); Empty khi máy chưa cấu hình PrimeXBT.
+    PrimeXbtConfig? PrimeXbt = null)
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -517,7 +526,7 @@ public sealed record ConfigLoadResult(
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" or "ctrader" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" ? normalized : "mt5";
     }
 }
 

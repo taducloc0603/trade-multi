@@ -1,3 +1,5 @@
+using TradeDesktop.Application.Services.PrimeXbt;
+
 namespace TradeDesktop.Application.Services.CTrader;
 
 public sealed record PlatformBSwitchDecision(bool Allowed, string? Message);
@@ -15,8 +17,11 @@ public static class PlatformBSwitchGuard
         var changed = !string.Equals(running, next, StringComparison.OrdinalIgnoreCase);
         var involvesCTrader =
             CTraderRoutingRules.IsCTraderPlatform(running) || CTraderRoutingRules.IsCTraderPlatform(next);
+        // PrimeXBT cũng mã hoá ticket B theo namespace riêng → cùng lý do chặn như cTrader.
+        var involvesPrimeXbt =
+            PrimeXbtRoutingRules.IsPrimeXbtPlatform(running) || PrimeXbtRoutingRules.IsPrimeXbtPlatform(next);
 
-        return changed && involvesCTrader && openSlots > 0
+        return changed && (involvesCTrader || involvesPrimeXbt) && openSlots > 0
             ? new PlatformBSwitchDecision(false, $"Đang có {openSlots} slot mở — đóng hết trước khi đổi nền tảng sàn B.")
             : new PlatformBSwitchDecision(true, null);
     }

@@ -1,0 +1,21 @@
+{
+  "_note": "How the web app opens fws on the XAU/USD page (2026-10-09, client-version 34866). Secrets replaced.",
+  "url_shape": "wss://api.primexbt.com/v2/fws/?accountId=<lowercase id, e.g. d0000000>&jwt=<JWT 7d>&client-version=<build>&auth-guard=<base64 of 32 bytes, from device fingerprint>",
+  "pws_url_shape": "wss://api.primexbt.com/v2/pws/?jwt=<JWT>&client-version=<build>&auth-guard=<AG>",
+  "rest_refresh": {"method":"GET","url":"https://api.primexbt.com/v2/auth/refresh","credentials":"httpOnly cookie refresh_token (.api.primexbt.com, ~30d)","headers":["x-auth-guard","x-client-version","x-client-time"]},
+  "heartbeat": {"request":{"type":"REQUEST","rid":"<n>","action":"time","body":{}},"interval_ms":20000,"timeout_ms":16000,"on_timeout":"client closes socket and reconnects"},
+  "fws_open_sequence": [
+    {"type":"SUBSCRIPTION","rid":1,"action":"markets2","body":{}},
+    {"type":"SUBSCRIPTION","rid":2,"action":"metrics","body":{}},
+    {"type":"SUBSCRIPTION","rid":3,"action":"positions","body":{}},
+    {"type":"REQUEST","rid":4,"action":"time","body":{}},
+    {"type":"SUBSCRIPTION","rid":5,"action":"trade-settings","body":{"symbol":"XAU/USD"}},
+    {"type":"REQUEST","rid":6,"action":"margins","body":{}},
+    {"type":"SUBSCRIPTION","rid":7,"action":"account-settings","body":{}},
+    {"type":"SUBSCRIPTION","rid":8,"action":"fx/market","body":{"symbolId":1019}},
+    {"type":"SUBSCRIPTION","rid":9,"action":"market/detail","body":{"symId":1019}},
+    {"type":"SUBSCRIPTION","rid":11,"action":"margin","body":{}},
+    {"type":"SUBSCRIPTION","rid":13,"action":"orders/active2","body":{}}
+  ],
+  "account_settings_response": {"type":"RESPONSE","action":"account-settings","body":{"accountId":"D0000000","favoriteSymbols":[],"favoriteSymbolsIds":[],"tradeOneClick":false,"orderForms":[]},"rid":7,"sid":5}
+}

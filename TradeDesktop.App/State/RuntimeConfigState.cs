@@ -1,6 +1,7 @@
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services.CTrader;
+using TradeDesktop.Application.Services.PrimeXbt;
 using TradeDesktop.Domain.Models;
 
 namespace TradeDesktop.App.State;
@@ -76,10 +77,14 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     // Ngưỡng có hiệu lực cho chân B — guard và router PHẢI dùng cùng giá trị này.
     // Chỉ áp dụng khi platform_b = ctrader (đúng như tên cột): cặp MT-MT luôn dùng confirm_latency chung,
     // kể cả khi cột này có giá trị sót lại từ lần chạy cTrader trước đó.
+    // PrimeXBT: ngưỡng riêng nằm trong sans_json.primexbt.confirmLatencyB (không có cột DB), cùng quy tắc
+    // "chỉ áp dụng khi platform_b đúng là primexbt".
     public int CurrentConfirmLatencyMsBEffective =>
         CTraderRoutingRules.IsCTraderPlatform(CurrentPlatformB) && CurrentCTraderConfirmLatencyB is { } ctraderLatencyB
             ? ctraderLatencyB
-            : CurrentConfirmLatencyMs;
+            : PrimeXbtRoutingRules.ResolveConfirmLatencyB(CurrentPlatformB, CurrentPrimeXbtConfig) is { } primeXbtLatencyB
+                ? primeXbtLatencyB
+                : CurrentConfirmLatencyMs;
     // false khi start hoặc end của nhóm là null trong DB → nhóm không áp dụng same-action lock.
     public bool CurrentSameActionLockEnabled { get; private set; } = true;
     public bool CurrentCloseSameActionLockEnabled { get; private set; } = true;
@@ -106,12 +111,18 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     // Map sàn B có hiệu lực: khi platform_b = ctrader dùng kênh cố định để reader MMF không đọc nhầm EA MT
     // sàn B còn chạy. Chỗ nào GHI config ngược lại (ConfigViewModel, reload không có record) phải dùng
     // StoredMapName2, nếu không sẽ ghi đè map MT bằng CTRADER_B.
+    // PrimeXBT cũng dùng kênh cố định riêng: không EA nào ghi map này nên reader MMF trả Disconnected cho sàn B
+    // (fail-closed) cho tới khi có quote session PrimeXBT — không bao giờ đọc nhầm EA MT sàn B cũ.
     public string CurrentMapName2 =>
         string.Equals(CurrentPlatformB, "ctrader", StringComparison.Ordinal)
             ? CTraderFixConfig.ChannelMapName
-            : StoredMapName2;
+            : string.Equals(CurrentPlatformB, PrimeXbtRoutingRules.PlatformName, StringComparison.Ordinal)
+                ? PrimeXbtRoutingRules.ChannelMapName
+                : StoredMapName2;
 
     public CTraderFixConfig CurrentCTraderFixConfig { get; private set; } = CTraderFixConfig.Empty;
+    // Khối sans_json.primexbt. Cập nhật qua UpdatePrimeXbt (KHÔNG qua Update(...)) nên không dính bẫy sentinel.
+    public PrimeXbtConfig CurrentPrimeXbtConfig { get; private set; } = PrimeXbtConfig.Empty;
     public string CurrentPlatformA { get; private set; } = "mt5";
     public string CurrentPlatformB { get; private set; } = "mt5";
     public string CurrentChartHwndA { get; private set; } = string.Empty;
@@ -528,7 +539,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" or "ctrader" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" ? normalized : "mt5";
     }
 
     public void Update(string machineHostName, string mapName1, string mapName2, int point)
@@ -668,6 +679,12 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public void UpdateCTraderFix(CTraderFixConfig? ctraderFix)
     {
         CurrentCTraderFixConfig = (ctraderFix ?? CTraderFixConfig.Empty).Normalize();
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void UpdatePrimeXbt(PrimeXbtConfig? primeXbt)
+    {
+        CurrentPrimeXbtConfig = (primeXbt ?? PrimeXbtConfig.Empty).Normalize();
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 

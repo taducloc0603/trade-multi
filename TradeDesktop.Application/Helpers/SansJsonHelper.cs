@@ -30,11 +30,21 @@ public static class SansJsonHelper
         out string mapName2,
         out IReadOnlyList<ManualHwndColumnConfig> manualHwndColumns,
         out CTraderFixConfig ctraderFix)
+        => TryParseSans(sansJson, out mapName1, out mapName2, out manualHwndColumns, out ctraderFix, out _);
+
+    public static bool TryParseSans(
+        string? sansJson,
+        out string mapName1,
+        out string mapName2,
+        out IReadOnlyList<ManualHwndColumnConfig> manualHwndColumns,
+        out CTraderFixConfig ctraderFix,
+        out PrimeXbtConfig primeXbt)
     {
         mapName1 = string.Empty;
         mapName2 = string.Empty;
         manualHwndColumns = [ManualHwndColumnConfig.Empty];
         ctraderFix = CTraderFixConfig.Empty;
+        primeXbt = PrimeXbtConfig.Empty;
 
         if (string.IsNullOrWhiteSpace(sansJson))
         {
@@ -115,6 +125,13 @@ public static class SansJsonHelper
                 ctraderFix = ParseCTraderFix(ctraderElement);
             }
 
+            // Khối primexbt cũng parse riêng: hỏng/thiếu ⇒ Empty, không ảnh hưởng phần còn lại.
+            if (doc.RootElement.TryGetProperty("primexbt", out var primeXbtElement) &&
+                primeXbtElement.ValueKind == JsonValueKind.Object)
+            {
+                primeXbt = ParsePrimeXbt(primeXbtElement);
+            }
+
             return !string.IsNullOrWhiteSpace(mapName1) || !string.IsNullOrWhiteSpace(mapName2);
         }
         catch
@@ -123,7 +140,32 @@ public static class SansJsonHelper
             mapName2 = string.Empty;
             manualHwndColumns = [ManualHwndColumnConfig.Empty];
             ctraderFix = CTraderFixConfig.Empty;
+            primeXbt = PrimeXbtConfig.Empty;
             return false;
+        }
+    }
+
+    private static PrimeXbtConfig ParsePrimeXbt(JsonElement element)
+    {
+        try
+        {
+            int? confirmLatencyB = element.TryGetProperty("confirmLatencyB", out var latencyElement) &&
+                                   latencyElement.ValueKind == JsonValueKind.Number &&
+                                   latencyElement.TryGetInt32(out var latency)
+                ? latency
+                : null;
+
+            return new PrimeXbtConfig(
+                ReadString(element, "accountId"),
+                ReadString(element, "symbol"),
+                ReadDecimal(element, "volumeBOz"),
+                ReadDecimal(element, "contractSizeB"),
+                ReadDecimal(element, "volumeALots"),
+                confirmLatencyB).Normalize();
+        }
+        catch
+        {
+            return PrimeXbtConfig.Empty;
         }
     }
 
@@ -309,5 +351,34 @@ public static class SansJsonHelper
                 volumeALots = fix.VolumeALots
             }
         });
+    }
+
+    // Có khối primexbt: dựng lại JSON giữ đúng thứ tự key và GIỮ khối ctraderFix (BuildSans luôn dựng từ đầu,
+    // key nào không truyền vào sẽ mất). primexbt rỗng ⇒ trả đúng từng byte như overload cũ.
+    public static string BuildSans(
+        string? mapName1,
+        string? mapName2,
+        IReadOnlyList<ManualHwndColumnConfig>? manualHwndColumns,
+        CTraderFixConfig? ctraderFix,
+        PrimeXbtConfig? primeXbt)
+    {
+        var withoutPrimeXbt = BuildSans(mapName1, mapName2, manualHwndColumns, ctraderFix);
+        var px = primeXbt?.Normalize();
+        if (px is null || px == PrimeXbtConfig.Empty)
+        {
+            return withoutPrimeXbt;
+        }
+
+        var root = System.Text.Json.Nodes.JsonNode.Parse(withoutPrimeXbt)!.AsObject();
+        root["primexbt"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["accountId"] = px.AccountId,
+            ["symbol"] = px.Symbol,
+            ["volumeBOz"] = px.VolumeBOz,
+            ["contractSizeB"] = px.ContractSizeB,
+            ["volumeALots"] = px.VolumeALots,
+            ["confirmLatencyB"] = px.ConfirmLatencyB
+        };
+        return root.ToJsonString();
     }
 }

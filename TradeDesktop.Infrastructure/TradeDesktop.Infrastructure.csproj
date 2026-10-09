@@ -8,6 +8,8 @@
          Nâng cấp là task riêng vì 1.11+ đổi API transport/log. -->
     <PackageReference Include="QuickFIXn.Core" Version="1.10.0" />
     <PackageReference Include="QuickFIXn.FIX4.4" Version="1.10.0" />
+    <!-- PrimeXBT (docs/plans/primexbt D5): token phiên lưu cục bộ bằng DPAPI, không lên Supabase. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

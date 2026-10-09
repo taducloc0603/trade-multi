@@ -9,6 +9,7 @@ using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
 using TradeDesktop.Application.Services.CTrader;
+using TradeDesktop.Application.Services.PrimeXbt;
 using System.Globalization;
 
 namespace TradeDesktop.App.ViewModels;
@@ -45,6 +46,18 @@ public sealed class ConfigViewModel : ObservableObject
     private string _storedCTraderPassword = string.Empty;
     private string _pendingCTraderPassword = string.Empty;
 
+    // Form PrimeXBT (mode PrimeXBT của khối Sàn B, docs/plans/primexbt Phase 2). Chuỗi để bind hai chiều; parse khi Save.
+    // Token đăng nhập KHÔNG nằm ở đây: lưu riêng qua IPrimeXbtTokenStore (DPAPI), không vào sans_json.
+    private readonly IPrimeXbtTokenStore? _primeXbtTokenStore;
+    private readonly IPrimeXbtLoginDialog? _primeXbtLoginDialog;
+    private string _primeXbtAccountId = string.Empty;
+    private string _primeXbtSymbol = PrimeXbtConfig.DefaultSymbol;
+    private string _primeXbtVolumeBOz = string.Empty;
+    private string _primeXbtContractSizeB = PrimeXbtConfig.DefaultContractSizeB.ToString(CultureInfo.InvariantCulture);
+    private string _primeXbtVolumeALots = string.Empty;
+    private string _primeXbtConfirmLatencyB = string.Empty;
+    private string _primeXbtTokenStatus = "Chưa đăng nhập";
+
     private string _mapName1 = string.Empty;
     private string _mapName2 = string.Empty;
     private string _tradeHwndA = string.Empty;
@@ -69,7 +82,9 @@ public sealed class ConfigViewModel : ObservableObject
         ITradeSessionFileLogger tradeSessionFileLogger,
         IHwndHealthChecker hwndHealthChecker,
         IPortfolioCoordinator portfolioCoordinator,
-        ICTraderQuoteSession? ctraderQuoteSession = null)
+        ICTraderQuoteSession? ctraderQuoteSession = null,
+        IPrimeXbtTokenStore? primeXbtTokenStore = null,
+        IPrimeXbtLoginDialog? primeXbtLoginDialog = null)
     {
         _runtimeConfigState = runtimeConfigState;
         _configService = configService;
@@ -77,6 +92,10 @@ public sealed class ConfigViewModel : ObservableObject
         _hwndHealthChecker = hwndHealthChecker;
         _portfolioCoordinator = portfolioCoordinator;
         _ctraderQuoteSession = ctraderQuoteSession;
+        _primeXbtTokenStore = primeXbtTokenStore;
+        _primeXbtLoginDialog = primeXbtLoginDialog;
+        PrimeXbtLoginCommand = new AsyncRelayCommand(PrimeXbtLoginAsync, () => _primeXbtLoginDialog is not null && _primeXbtTokenStore is not null);
+        PrimeXbtLogoutCommand = new AsyncRelayCommand(PrimeXbtLogoutAsync, () => _primeXbtTokenStore is not null);
 
         CheckMap1Command = new AsyncRelayCommand(CheckMap1Async, CanCheckMap1);
         CheckMap2Command = new AsyncRelayCommand(CheckMap2Async, CanCheckMap2);
@@ -94,6 +113,8 @@ public sealed class ConfigViewModel : ObservableObject
         PlatformA = runtimeConfigState.CurrentPlatformA;
         PlatformB = runtimeConfigState.CurrentPlatformB;
         ApplyCTraderFixToForm(runtimeConfigState.CurrentCTraderFixConfig);
+        ApplyPrimeXbtToForm(runtimeConfigState.CurrentPrimeXbtConfig);
+        RefreshPrimeXbtTokenStatus();
         CTraderSessionStatus = _ctraderQuoteSession?.StatusText ?? "Không có FIX session";
 
         var hasRuntimeState =
@@ -257,6 +278,7 @@ public sealed class ConfigViewModel : ObservableObject
             OnPropertyChanged(nameof(IsPlatformBMt4));
             OnPropertyChanged(nameof(IsPlatformBMt5));
             OnPropertyChanged(nameof(IsPlatformBCTrader));
+            OnPropertyChanged(nameof(IsPlatformBPrimeXbt));
             OnPropertyChanged(nameof(IsPlatformBMtMode));
             RefreshButtons();
         }
@@ -333,7 +355,94 @@ public sealed class ConfigViewModel : ObservableObject
         }
     }
 
-    public bool IsPlatformBMtMode => !IsPlatformBCTrader;
+    public bool IsPlatformBPrimeXbt
+    {
+        get => PrimeXbtRoutingRules.IsPrimeXbtPlatform(PlatformB);
+        set
+        {
+            if (!value)
+            {
+                return;
+            }
+
+            PlatformB = PrimeXbtRoutingRules.PlatformName;
+        }
+    }
+
+    // Mode MT (Map Name 2 + HWND B) chỉ khi B không phải cTrader/PrimeXBT — hai nền tảng này không có cửa sổ MT.
+    public bool IsPlatformBMtMode => !IsPlatformBCTrader && !IsPlatformBPrimeXbt;
+
+    // Sàn B không có cửa sổ MT để click → HWND B không bắt buộc khi Save.
+    private bool IsPlatformBWithoutHwnd => IsPlatformBCTrader || IsPlatformBPrimeXbt;
+
+    public string PrimeXbtChannelMapName => PrimeXbtRoutingRules.ChannelMapName;
+
+    public string PrimeXbtAccountId
+    {
+        get => _primeXbtAccountId;
+        set => SetCTraderField(ref _primeXbtAccountId, value);
+    }
+
+    public string PrimeXbtSymbol
+    {
+        get => _primeXbtSymbol;
+        set => SetCTraderField(ref _primeXbtSymbol, value);
+    }
+
+    public string PrimeXbtVolumeBOz
+    {
+        get => _primeXbtVolumeBOz;
+        set
+        {
+            if (SetCTraderField(ref _primeXbtVolumeBOz, value))
+            {
+                OnPropertyChanged(nameof(PrimeXbtVolumeLotHint));
+            }
+        }
+    }
+
+    public string PrimeXbtContractSizeB
+    {
+        get => _primeXbtContractSizeB;
+        set
+        {
+            if (SetCTraderField(ref _primeXbtContractSizeB, value))
+            {
+                OnPropertyChanged(nameof(PrimeXbtVolumeLotHint));
+            }
+        }
+    }
+
+    public string PrimeXbtVolumeALots
+    {
+        get => _primeXbtVolumeALots;
+        set => SetCTraderField(ref _primeXbtVolumeALots, value);
+    }
+
+    // Trống = dùng confirm_latency chung. Số (kể cả 0 = tắt guard latency riêng chân B) không clamp.
+    public string PrimeXbtConfirmLatencyB
+    {
+        get => _primeXbtConfirmLatencyB;
+        set => SetCTraderField(ref _primeXbtConfirmLatencyB, value);
+    }
+
+    public string PrimeXbtVolumeLotHint
+    {
+        get
+        {
+            var oz = ParseDecimal(PrimeXbtVolumeBOz);
+            var contract = ParseDecimal(PrimeXbtContractSizeB);
+            return oz > 0m && contract > 0m
+                ? $"= {(oz / contract).ToString("0.####", CultureInfo.InvariantCulture)} lot"
+                : string.Empty;
+        }
+    }
+
+    public string PrimeXbtTokenStatus
+    {
+        get => _primeXbtTokenStatus;
+        private set => SetProperty(ref _primeXbtTokenStatus, value);
+    }
 
     public string CTraderChannelMapName => CTraderFixConfig.ChannelMapName;
 
@@ -519,6 +628,8 @@ public sealed class ConfigViewModel : ObservableObject
     public AsyncRelayCommand CheckMap1Command { get; }
     public AsyncRelayCommand CheckMap2Command { get; }
     public AsyncRelayCommand CheckCTraderSessionCommand { get; }
+    public AsyncRelayCommand PrimeXbtLoginCommand { get; }
+    public AsyncRelayCommand PrimeXbtLogoutCommand { get; }
     public AsyncRelayCommand SaveCommand { get; }
     public AsyncRelayCommand CancelCommand { get; }
     public AsyncRelayCommand AddHwndColumnCommand { get; }
@@ -528,11 +639,11 @@ public sealed class ConfigViewModel : ObservableObject
     private bool CanCheckMap2() => AreMapNamesEnabled && !string.IsNullOrWhiteSpace(MapName2);
     private bool CanDeleteHwndColumn() => ManualHwndColumns.Count > 1;
 
-    // Mode MT giữ nguyên điều kiện cũ. Mode cTrader không đòi MapName2 (kênh B là hằng CTRADER_B).
+    // Mode MT giữ nguyên điều kiện cũ. Mode cTrader/PrimeXBT không đòi MapName2 (kênh B là hằng cố định).
     private bool CanSaveCommand() =>
         CanSave &&
         !string.IsNullOrWhiteSpace(MapName1) &&
-        (IsPlatformBCTrader || !string.IsNullOrWhiteSpace(MapName2));
+        (IsPlatformBWithoutHwnd || !string.IsNullOrWhiteSpace(MapName2));
 
     // Add/Delete chỉ tác động số cột CHART.
     private Task AddHwndColumnAsync()
@@ -599,6 +710,7 @@ public sealed class ConfigViewModel : ObservableObject
             PlatformB = loadResult.PlatformB;
             InitializeColumns(loadResult.ManualHwndColumns);
             ApplyCTraderFixToForm(loadResult.CTraderFix);
+            ApplyPrimeXbtToForm(loadResult.PrimeXbt);
 
             _runtimeConfigState.Update(
                 loadResult.MachineHostName,
@@ -667,6 +779,7 @@ public sealed class ConfigViewModel : ObservableObject
             _runtimeConfigState.UpdateScheduleSleeping(loadResult.ScheduleSleepingJson);
             _runtimeConfigState.UpdateManualTradeHwnd(BuildManualHwndColumns());
             _runtimeConfigState.UpdateCTraderFix(loadResult.CTraderFix);
+            _runtimeConfigState.UpdatePrimeXbt(loadResult.PrimeXbt);
 
             IsExistingRecordLoaded = true;
             AreMapNamesEnabled = true;
@@ -731,8 +844,8 @@ public sealed class ConfigViewModel : ObservableObject
 
             // Re-validate HWND trước khi persist: chặn lưu nếu có handle sai định dạng /
             // trống / cửa sổ không tồn tại (tránh lưu cấu hình hỏng rồi vẫn skip).
-            // Sàn B là cTrader thì HWND B không bắt buộc.
-            var hwndIssues = _hwndHealthChecker.Check(columns, requiresExchangeBHwnd: !IsPlatformBCTrader);
+            // Sàn B là cTrader/PrimeXBT thì HWND B không bắt buộc.
+            var hwndIssues = _hwndHealthChecker.Check(columns, requiresExchangeBHwnd: !IsPlatformBWithoutHwnd);
             if (hwndIssues.Count > 0)
             {
                 LoadStatus = "✖ Save thất bại";
@@ -766,9 +879,21 @@ public sealed class ConfigViewModel : ObservableObject
                 }
             }
 
-            // Save ghi CẢ mapNames[1] MT lẫn khối ctraderFix (giữ dữ liệu mode đang ẩn).
+            var primeXbt = BuildPrimeXbtFromForm();
+            if (IsPlatformBPrimeXbt)
+            {
+                var missing = primeXbt.GetMissingRequiredFields();
+                if (missing.Count > 0)
+                {
+                    LoadStatus = "✖ Save thất bại";
+                    ErrorMessage = "Thiếu thông số PrimeXBT: " + string.Join(", ", missing);
+                    return;
+                }
+            }
+
+            // Save ghi CẢ mapNames[1] MT lẫn khối ctraderFix/primexbt (giữ dữ liệu các mode đang ẩn).
             var saveResult = await _configService.SaveByMachineHostNameAsync(
-                MapName1, MapName2, PlatformA, PlatformB, columns, ctraderFix: ctraderFix);
+                MapName1, MapName2, PlatformA, PlatformB, columns, ctraderFix: ctraderFix, primeXbt: primeXbt);
             if (!saveResult.IsSuccess)
             {
                 LoadStatus = "✖ Save thất bại";
@@ -788,6 +913,7 @@ public sealed class ConfigViewModel : ObservableObject
             _runtimeConfigState.UpdatePlatform(PlatformA, PlatformB);
             _runtimeConfigState.UpdateManualTradeHwnd(columns);
             _runtimeConfigState.UpdateCTraderFix(ctraderFix);
+            _runtimeConfigState.UpdatePrimeXbt(primeXbt);
             _storedCTraderPassword = ctraderFix.Password;
             _pendingCTraderPassword = string.Empty;
             SafeConfigLog(
@@ -824,8 +950,98 @@ public sealed class ConfigViewModel : ObservableObject
             !string.IsNullOrWhiteSpace(MapName1) &&
             (IsPlatformBCTrader
                 ? BuildCTraderFixFromForm() is var fix && fix.GetMissingRequiredFields(fix.HasPassword).Count == 0
-                : !string.IsNullOrWhiteSpace(MapName2)) &&
+                : IsPlatformBPrimeXbt
+                    ? BuildPrimeXbtFromForm().GetMissingRequiredFields().Count == 0
+                    : !string.IsNullOrWhiteSpace(MapName2)) &&
             ManualHwndColumns.Count > 0;
+    }
+
+    private void ApplyPrimeXbtToForm(PrimeXbtConfig? source)
+    {
+        var px = (source ?? PrimeXbtConfig.Empty).Normalize();
+        PrimeXbtAccountId = px.AccountId;
+        // Máy chưa cấu hình PrimeXBT: điền sẵn giá trị mặc định đã đo ở Phase 0 (XAU/USD, 1 lot MT = 100 oz).
+        PrimeXbtSymbol = string.IsNullOrWhiteSpace(px.Symbol) ? PrimeXbtConfig.DefaultSymbol : px.Symbol;
+        PrimeXbtVolumeBOz = FormatDecimal(px.VolumeBOz);
+        PrimeXbtContractSizeB = px.ContractSizeB > 0m
+            ? FormatDecimal(px.ContractSizeB)
+            : FormatDecimal(PrimeXbtConfig.DefaultContractSizeB);
+        PrimeXbtVolumeALots = FormatDecimal(px.VolumeALots);
+        PrimeXbtConfirmLatencyB = px.ConfirmLatencyB?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+    }
+
+    private PrimeXbtConfig BuildPrimeXbtFromForm()
+    {
+        var latencyText = (PrimeXbtConfirmLatencyB ?? string.Empty).Trim();
+        int? latency = int.TryParse(latencyText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+        var px = new PrimeXbtConfig(
+            PrimeXbtAccountId,
+            PrimeXbtSymbol,
+            ParseDecimal(PrimeXbtVolumeBOz),
+            ParseDecimal(PrimeXbtContractSizeB),
+            ParseDecimal(PrimeXbtVolumeALots),
+            latency).Normalize();
+
+        // Chỉ điền mặc định mà chưa nhập gì khác ⇒ coi như chưa cấu hình, để máy MT/cTrader không bị ghi khối primexbt.
+        return string.IsNullOrEmpty(px.AccountId) && px.VolumeBOz == 0m && px.VolumeALots == 0m && px.ConfirmLatencyB is null
+            ? PrimeXbtConfig.Empty
+            : px;
+    }
+
+    private Task PrimeXbtLoginAsync()
+    {
+        if (_primeXbtLoginDialog is null || _primeXbtTokenStore is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        try
+        {
+            var session = _primeXbtLoginDialog.ShowLogin();
+            if (session is not null)
+            {
+                _primeXbtTokenStore.Save(session);
+                // Chỉ log hạn + tên cookie (PrimeXbtSession.ToString không chứa bí mật).
+                SafeConfigLog($"[PRIMEXBT][INFO] Login captured: {session}");
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Đăng nhập PrimeXBT lỗi: {GetErrorMessage(ex)}";
+        }
+
+        RefreshPrimeXbtTokenStatus();
+        return Task.CompletedTask;
+    }
+
+    private Task PrimeXbtLogoutAsync()
+    {
+        _primeXbtTokenStore?.Clear();
+        SafeConfigLog("[PRIMEXBT][INFO] Local session cleared");
+        RefreshPrimeXbtTokenStatus();
+        return Task.CompletedTask;
+    }
+
+    private void RefreshPrimeXbtTokenStatus()
+    {
+        if (_primeXbtTokenStore is null)
+        {
+            PrimeXbtTokenStatus = "Không có kho token";
+            return;
+        }
+
+        var session = _primeXbtTokenStore.Load();
+        if (session is null)
+        {
+            PrimeXbtTokenStatus = "Chưa đăng nhập";
+            return;
+        }
+
+        PrimeXbtTokenStatus = session.IsUsableAt(DateTime.UtcNow)
+            ? $"✔ Đã đăng nhập — JWT hết hạn {session.JwtExpiresUtc!.Value.ToLocalTime():dd/MM HH:mm}"
+            : "✖ Phiên hết hạn hoặc thiếu cookie — đăng nhập lại";
     }
 
     private bool SetCTraderField(ref string field, string? value)
@@ -1034,7 +1250,7 @@ public sealed class ConfigViewModel : ObservableObject
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" or "ctrader" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" ? normalized : "mt5";
     }
 
     private void SafeConfigLog(string message)

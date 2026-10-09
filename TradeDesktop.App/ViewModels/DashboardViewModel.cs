@@ -18,6 +18,7 @@ using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
 using TradeDesktop.Application.Services.Portfolio;
 using TradeDesktop.Application.Services.CTrader;
+using TradeDesktop.Application.Services.PrimeXbt;
 using TradeDesktop.Domain.Models;
 
 namespace TradeDesktop.App.ViewModels;
@@ -854,6 +855,12 @@ public sealed class DashboardViewModel : ObservableObject
     private bool IsExchangeBCTrader()
         => string.Equals(_runtimeConfigState.CurrentPlatformB, "ctrader", StringComparison.Ordinal);
 
+    // PrimeXBT (đặt lệnh qua WebSocket) cũng không có cửa sổ MT → HWND B không bắt buộc. Chỉ dùng cho các
+    // cửa chặn HWND; các nhánh riêng của cTrader (vd kiểm lot cặp đầu) vẫn dùng IsExchangeBCTrader().
+    private bool IsExchangeBWithoutHwnd()
+        => IsExchangeBCTrader()
+           || string.Equals(_runtimeConfigState.CurrentPlatformB, PrimeXbtRoutingRules.PlatformName, StringComparison.Ordinal);
+
     private void RunHwndHealthCheck(string source)
     {
         IReadOnlyList<HwndIssue> issues;
@@ -861,7 +868,7 @@ public sealed class DashboardViewModel : ObservableObject
         {
             issues = _hwndHealthChecker.Check(
                 _runtimeConfigState.CurrentManualHwndColumns,
-                requiresExchangeBHwnd: !IsExchangeBCTrader());
+                requiresExchangeBHwnd: !IsExchangeBWithoutHwnd());
         }
         catch (Exception ex)
         {
@@ -3545,6 +3552,7 @@ public sealed class DashboardViewModel : ObservableObject
             "mt4" => TradeLegPlatform.Mt4,
             "mt5" => TradeLegPlatform.Mt5,
             "ctrader" => TradeLegPlatform.CTrader,
+            "primexbt" => TradeLegPlatform.PrimeXbt,
             _ => throw new InvalidOperationException($"Unsupported platform: '{platformRaw}'")
         };
     }
@@ -4089,7 +4097,7 @@ public sealed class DashboardViewModel : ObservableObject
         RuntimeSummary =
             $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  MinProfitToClose: {_runtimeConfigState.CurrentMinProfitToClose}  |  MaxLifeTime: {_runtimeConfigState.CurrentMaxLifeTimeBySecond}s  |  SOS A Distance: {_runtimeConfigState.CurrentSosTriggerAOpenDistancePts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  CTraderConfirmLatencyB: {(_runtimeConfigState.CurrentCTraderConfirmLatencyB is { } latencyB ? latencyB.ToString(CultureInfo.InvariantCulture) : "SHARED")} (effective {_runtimeConfigState.CurrentConfirmLatencyMsBEffective})  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
 
-        var requiresExchangeBHwnd = !IsExchangeBCTrader();
+        var requiresExchangeBHwnd = !IsExchangeBWithoutHwnd();
         HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsCompleteFor(requiresExchangeBHwnd));
         RefreshManualOpenAvailability(ComputeToolAwarePairStateForOpenGate(GetLivePairTradeStateStrict()));
 
@@ -7508,6 +7516,7 @@ public sealed class DashboardViewModel : ObservableObject
                     result.MaxSellOpens);
                 _runtimeConfigState.UpdateManualTradeHwnd(result.ManualHwndColumns);
                 _runtimeConfigState.UpdateCTraderFix(result.CTraderFix);
+                _runtimeConfigState.UpdatePrimeXbt(result.PrimeXbt);
                 IsShowConfigVisible = result.IsShowConfig == 1;
                 ResetTradingLogicState();
                 _portfolioCoordinator.EnableRandomQuota();

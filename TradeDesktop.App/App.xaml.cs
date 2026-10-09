@@ -62,6 +62,9 @@ public partial class App : System.Windows.Application
                     // Phase 7 Bước C (2026-09-24): executor THẬT — app có thể đặt lệnh trên sàn B qua FIX.
                     // Quay lại NullCTraderTradeExecutor là cách tắt nhanh nhất nếu cần dừng khẩn cấp.
                     services.AddSingleton<ITradePlatformExecutor, CTraderTradeExecutor>();
+                    // PrimeXBT (docs/plans/primexbt Phase 1): chưa có executor thật — mọi lệnh sàn B fail an toàn.
+                    services.AddSingleton<ITradePlatformExecutor, NullPrimeXbtTradeExecutor>();
+                    services.AddSingleton<IPrimeXbtLoginDialog, PrimeXbtLoginDialog>();
                     services.AddSingleton<CTraderSessionMonitor>();
                     services.AddSingleton<ITradeExecutionRouter, TradeExecutionRouter>();
                     services.AddSingleton<IWindowProbe, NativeWindowProbe>();

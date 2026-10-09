@@ -1,0 +1,48 @@
+{
+  "_note": "Captured 2026-10-09 on DEMO with user consent. Times are ms after the UI confirm click.",
+  "open_buy": {
+    "request":  {"t":58,  "frame":{"type":"REQUEST","rid":27,"action":"orders/market/place","body":{"qty":0.01,"side":"BUY","symbol":"XAU/USD"}}},
+    "response": {"t":313, "frame":{"type":"RESPONSE","action":"orders/market/place","body":{"id":2095468976,"error":null},"rid":27}},
+    "activity": {"t":341, "frame":{"type":"EVENT","action":"trading/activity","body":{"id":"8d1317b1-1c27-535a-a74b-6efeb5af112d","level":"SUCCESS","title":"Market order filled","body":"Buy 0.01 XAU/USD @ 4179.61"},"sid":10,"aid":1}},
+    "first_positions_with_sub": {"t":1076, "sub_id":10680072}
+  },
+  "open_sell_hedge": {
+    "request":  {"t":42,  "frame":{"type":"REQUEST","rid":31,"action":"orders/market/place","body":{"qty":0.01,"side":"SELL","symbol":"XAU/USD"}}},
+    "response": {"t":335, "frame":{"type":"RESPONSE","action":"orders/market/place","body":{"id":2095469981,"error":null},"rid":31}},
+    "activity": {"t":383, "frame":{"type":"EVENT","action":"trading/activity","body":{"id":"e348a431-9077-5f89-8880-22f42a0b1e9c","level":"SUCCESS","title":"Market order filled","body":"Sell 0.01 XAU/USD @ 4179.03"},"sid":10,"aid":2}},
+    "first_positions_with_sub": {"t":1792, "sub_id":10680080}
+  },
+  "close_buy_by_id": {
+    "request":  {"t":60,  "frame":{"type":"REQUEST","rid":35,"action":"positions/id/close","body":{"positionId":10680072,"qty":0.01}}},
+    "response": {"t":312, "frame":{"type":"RESPONSE","action":"positions/id/close","body":{},"rid":35}},
+    "activity": {"t":450, "frame":{"type":"EVENT","action":"trading/activity","body":{"id":"1467921b-d4ab-5100-be36-df35ee5e31b9","level":"SUCCESS","title":"Market order filled","body":"Sell 0.01 XAU/USD @ 4179.51"},"sid":10,"aid":3}},
+    "first_positions_without_sub": {"t":1327}
+  },
+  "close_sell_by_id": {
+    "request":  {"t":39,  "frame":{"type":"REQUEST","rid":38,"action":"positions/id/close","body":{"positionId":10680080,"qty":0.01}}},
+    "response": {"t":314, "frame":{"type":"RESPONSE","action":"positions/id/close","body":{},"rid":38}},
+    "activity": {"t":364, "frame":{"type":"EVENT","action":"trading/activity","body":{"id":"1612c59e-f61a-595f-99b4-ea3e9b4e272f","level":"SUCCESS","title":"Market order filled","body":"Buy 0.01 XAU/USD @ 4179.34"},"sid":10,"aid":4}},
+    "first_positions_without_sub": {"t":1689}
+  },
+  "routes_from_bundle_not_exercised": {
+    "positions/close": "aggregated close - DO NOT USE",
+    "positions/close/all": "FORBIDDEN in app",
+    "orders/limit/place": "{qty,price,side,symbol,takeProfit,stopLoss}",
+    "orders/stop/place": "{qty,price,side,symbol,takeProfit,stopLoss}",
+    "orders/cancel": "body e", "orders/cancel-all": "no body"
+  },
+  "rejections_phase0": {
+    "_note": "Captured 2026-10-09 by scan/primexbt spike 'reject'. TWO shapes: business errors live in body.error (string, body.id null); argument errors are a top-level error object WITHOUT body.",
+    "qty_below_min": {"type":"RESPONSE","action":"orders/market/place","body":{"id":null,"error":"TOO_LOW_AMOUNT"},"rid":7},
+    "qty_wrong_step": {"type":"RESPONSE","action":"orders/market/place","body":{"id":null,"error":"WRONG_ORDER_AMOUNT"},"rid":8},
+    "unknown_symbol": {"type":"RESPONSE","action":"orders/market/place","error":{"code":"WRONG_ARGS","description":"Unknown symbol","rid":"416066.00000000-0000-0000-0000-000000000000"},"rid":9},
+    "close_unknown_position": {"type":"RESPONSE","action":"positions/id/close","error":{"code":"POSITION_NOT_FOUND","description":"120: Not found position of symbol #0000000 on account #0000000","rid":"416066.00000000-0000-0000-0000-000000000000"},"rid":10}
+  },
+  "socket_drop_after_send_phase0": {
+    "_note": "Order sent then socket aborted before the ack: the order WAS executed. Reconcile with report/orders2 (placedAt >= sendTime-2s, side, qty, openReason CLIENT) + positions snapshot. Never resend.",
+    "conclusion": "FILLED despite drop"
+  },
+  "latency_phase0_20_cycles_ms": {"open_ack":"p50 261 p95 318 max 338","open_visible":"p50 1105 p95 1700 max 1906","close_ack":"p50 253 p95 307 max 609","close_gone":"p50 1680 p95 1865 max 1903","d3_match":"20/20"},
+  "rate_phase0": {"time_requests":"100/100 at 10 req/s","rtt_ms":"p50 242 p99 283"},
+  "unknown_yet": ["order rejected because market closed (weekend)"]
+}

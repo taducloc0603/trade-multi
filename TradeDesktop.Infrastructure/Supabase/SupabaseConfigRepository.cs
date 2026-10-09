@@ -258,7 +258,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" or "ctrader" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" ? normalized : "mt5";
     }
 
     private bool IsConfigured() =>

@@ -185,6 +185,7 @@
                         <RadioButton Content="MT4" GroupName="ExchangeBPlatform" Margin="0,0,22,0" IsChecked="{Binding IsPlatformBMt4, Mode=TwoWay}" />
                         <RadioButton Content="MT5" GroupName="ExchangeBPlatform" IsChecked="{Binding IsPlatformBMt5, Mode=TwoWay}" />
                         <RadioButton Content="cTrader" GroupName="ExchangeBPlatform" Margin="22,0,0,0" IsChecked="{Binding IsPlatformBCTrader, Mode=TwoWay}" />
+                        <RadioButton Content="PrimeXBT" GroupName="ExchangeBPlatform" Margin="22,0,0,0" IsChecked="{Binding IsPlatformBPrimeXbt, Mode=TwoWay}" />
                     </StackPanel>
                 </Grid>
 
@@ -442,6 +443,111 @@
                                  Text="{Binding CTraderVolumeALots, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085"
                                    Text="Chỉ khai báo để cảnh báo hedge ratio, không cưỡng chế chân A" />
+                    </Grid>
+                </StackPanel>
+
+                <!-- Mode PrimeXBT (docs/plans/primexbt Phase 2): phủ đúng hàng 10–14 như panel cTrader. Token đăng nhập
+                     lưu cục bộ (DPAPI), KHÔNG nằm trong config DB. -->
+                <StackPanel Grid.Row="10"
+                            Grid.RowSpan="5"
+                            Visibility="{Binding IsPlatformBPrimeXbt, Converter={StaticResource BoolToVisibility}}">
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Kênh B" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" VerticalAlignment="Center" Foreground="#344054"
+                                   Text="{Binding PrimeXbtChannelMapName}"
+                                   ToolTip="Tên kênh cố định do app đặt khi sàn B là PrimeXBT" />
+                    </Grid>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Phiên đăng nhập" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" VerticalAlignment="Center" Foreground="#344054" TextWrapping="Wrap"
+                                   Text="{Binding PrimeXbtTokenStatus}"
+                                   ToolTip="Token lưu trên máy này (mã hoá DPAPI), không lưu lên DB" />
+                        <Button Grid.Column="2" Margin="10,0,0,0" Height="32" Padding="12,0" Content="Đăng nhập"
+                                Command="{Binding PrimeXbtLoginCommand}" />
+                        <Button Grid.Column="3" Margin="8,0,0,0" Height="32" Padding="12,0" Content="Đăng xuất"
+                                Command="{Binding PrimeXbtLogoutCommand}" />
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="160" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Account ID" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding PrimeXbtAccountId, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085"
+                                   Text="Vd D1234567 (demo) / L1234567 (thật) — tài khoản PXTrader 2.0, chế độ HEDGE" />
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="160" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Symbol" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding PrimeXbtSymbol, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085"
+                                   Text="Tên chính xác trên PrimeXBT, vd XAU/USD (không phải XAU/USD.24)" />
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="92" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Volume B (oz)" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding PrimeXbtVolumeBOz, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#344054"
+                                   Text="{Binding PrimeXbtVolumeLotHint}" />
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="92" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Contract size B" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding PrimeXbtContractSizeB, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085"
+                                   Text="oz / 1 lot MT (XAU: 100)" />
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="92" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Volume A (lot)" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding PrimeXbtVolumeALots, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085"
+                                   Text="Chỉ khai báo để cảnh báo hedge ratio, không cưỡng chế chân A" />
+                    </Grid>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="92" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Latency B (ms)" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding PrimeXbtConfirmLatencyB, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085" TextWrapping="Wrap"
+                                   Text="Tuổi tick tối đa chân B. Trống = dùng confirm_latency chung; 0 = tắt. Đề xuất 2000 (đo Phase 0)" />
                     </Grid>
                 </StackPanel>
                 </Grid>

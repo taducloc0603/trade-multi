@@ -56,6 +56,7 @@ public interface IRuntimeConfigProvider
     // tối giản ở chế độ MT như trước.
     string CurrentPlatformB => "mt5";
     CTraderFixConfig CurrentCTraderFixConfig => CTraderFixConfig.Empty;
+    PrimeXbtConfig CurrentPrimeXbtConfig => PrimeXbtConfig.Empty;
 
     // Thời điểm ứng dụng quan sát thấy Bid/Ask thực sự thay đổi trên từng sàn.
     // Default null giữ tương thích với các provider tối giản; production provider

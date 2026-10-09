@@ -20,6 +20,13 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- PrimeXBT Phase 3: frame thật đã che danh tính (nguồn: docs/plans/primexbt/fixtures). -->
+  <ItemGroup>
+    <None Update="PrimeXbt\Fixtures\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\TradeDesktop.Application\TradeDesktop.Application.csproj" />
     <ProjectReference Include="..\TradeDesktop.Domain\TradeDesktop.Domain.csproj" />
