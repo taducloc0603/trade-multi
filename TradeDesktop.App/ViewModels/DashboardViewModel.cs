@@ -135,9 +135,10 @@ public sealed class DashboardViewModel : ObservableObject
     private const double AlertSlippageThresholdPt = 40.0;
     private const long AlertExecutionThresholdMs = 1000;
     private bool _isAutoOpenPausedByInvariant;
-    // Chế độ cTrader: kiểm tra lot THẬT của cặp Auto Open đầu tiên mỗi phiên Start. Lệch / không đọc được →
-    // chặn Open mới ngay, rồi Stop khi không còn open/close dở (người dùng tự xử lý cặp trên sàn).
-    // _lotMismatchPair giữ qua Stop: Start bị từ chối cho tới khi cặp đó đóng hết. Mất khi tắt app.
+    // B = cTrader / PrimeXBT: kiểm tra lot THẬT của cặp Auto Open đầu tiên mỗi phiên Start. Lệch / không đọc được →
+    // chặn Open mới ngay + popup cho người dùng chọn Tiếp tục / Stop (chưa chọn thì chặn vô hạn, nhắc Telegram).
+    // Stop → dừng khi không còn open/close dở. _lotMismatchPair giữ qua Stop: Start bị từ chối cho tới khi cặp đó
+    // đóng hết (chọn Tiếp tục thì xoá). Mất khi tắt app.
     private bool _firstPairLotCheckDone;
     // So lot sau một khoảng trễ để chân B cTrader khớp đủ (partial fill) — xem CheckFirstPairLotOnce.
     private LotMismatchPair? _firstPairLotCheckPending;
@@ -145,8 +146,11 @@ public sealed class DashboardViewModel : ObservableObject
     private const int FirstPairLotCheckDelaySeconds = 3;
     private const int FirstPairLotCheckMaxDeferSeconds = 30;
     private DateTime _firstPairLotCheckDeferUntilUtc;
-    // Đọc từ thread polling và từ AutoBuyAsync/AutoSellAsync ngoài UI thread.
-    private volatile bool _lotMismatchStopRequested;
+    // Đọc từ thread polling và từ AutoBuyAsync/AutoSellAsync ngoài UI thread (trạng thái gate là volatile).
+    private readonly FirstPairLotDecisionGate _lotDecisionGate = new();
+    // Tăng mỗi lần Start: trả lời của popup thuộc phiên cũ bị bỏ qua.
+    private int _lotCheckSessionId;
+    private static readonly TimeSpan LotDecisionReminderInterval = TimeSpan.FromMinutes(15);
     private DateTime _lotMismatchStopRequestedAtUtc;
     private LotMismatchPair? _lotMismatchPair;
     private const int LotMismatchStopMaxWaitSeconds = 60;
@@ -604,6 +608,9 @@ public sealed class DashboardViewModel : ObservableObject
     public string LoadingMessage { get => _loadingMessage; private set => SetProperty(ref _loadingMessage, value); }
     public string MachineHostName { get => _machineHostName; private set => SetProperty(ref _machineHostName, value); }
 
+    // Nút "PrimeXBT" (mở Chrome PrimeXBT) chỉ hiện khi sàn B là PrimeXBT — MT4/MT5/cTrader không thấy.
+    public bool IsPlatformBPrimeXbt => PrimeXbtRoutingRules.IsPrimeXbtPlatform(_runtimeConfigState.CurrentPlatformB);
+
     public bool IsShowConfigVisible
     {
         get => _isShowConfigVisible;
@@ -855,8 +862,8 @@ public sealed class DashboardViewModel : ObservableObject
     private bool IsExchangeBCTrader()
         => string.Equals(_runtimeConfigState.CurrentPlatformB, "ctrader", StringComparison.Ordinal);
 
-    // PrimeXBT (đặt lệnh qua WebSocket) cũng không có cửa sổ MT → HWND B không bắt buộc. Chỉ dùng cho các
-    // cửa chặn HWND; các nhánh riêng của cTrader (vd kiểm lot cặp đầu) vẫn dùng IsExchangeBCTrader().
+    // PrimeXBT (đặt lệnh qua WebSocket) cũng không có cửa sổ MT → HWND B không bắt buộc. Dùng cho các cửa chặn HWND
+    // và kiểm lot cặp đầu (CheckFirstPairLotOnce).
     private bool IsExchangeBWithoutHwnd()
         => IsExchangeBCTrader()
            || string.Equals(_runtimeConfigState.CurrentPlatformB, PrimeXbtRoutingRules.PlatformName, StringComparison.Ordinal);
@@ -1080,9 +1087,9 @@ public sealed class DashboardViewModel : ObservableObject
         double? LotB);
 
     /// <summary>
-    /// Chế độ cTrader: lên lịch so lot THẬT của cặp Auto Open MỚI đầu tiên mỗi phiên (đúng một lần),
+    /// B = cTrader / PrimeXBT: lên lịch so lot THẬT của cặp Auto Open MỚI đầu tiên mỗi phiên (đúng một lần),
     /// chạy ở <see cref="TryRunPendingFirstPairLotCheck"/>. Lệch hoặc không đọc được → chặn Open mới,
-    /// log/Telegram/popup, rồi Stop khi an toàn (<see cref="TryCompleteLotMismatchStop"/>).
+    /// log/Telegram/popup Tiếp tục / Stop; chọn Stop thì dừng khi an toàn (<see cref="TryCompleteLotMismatchStop"/>).
     /// Chỉ chặn/dừng, không tạo open/close (Rule E).
     /// </summary>
     private void CheckFirstPairLotOnce(string pairId, PendingOpenPairState state)
@@ -1146,19 +1153,98 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         _lotMismatchPair = pending with { LotA = lotA, LotB = lotB };
-        _lotMismatchStopRequested = true;
-        _lotMismatchStopRequestedAtUtc = DateTime.UtcNow;
+        var sessionId = _lotCheckSessionId;
+        _lotDecisionGate.Raise(sessionId, DateTime.UtcNow);
 
         var reason = check.Level == HedgeLotMatchLevel.Unknown ? "UNREADABLE" : "MISMATCH";
         var detail = $"first_pair_lot {reason} pairId={pairId} stt={stt} ticketA={pending.TicketA} ticketB={pending.TicketB} {check.Message}";
-        _tradeSessionFileLogger.Log($"[HEDGE_VOLUME][ERROR] {detail} → chặn Open, sẽ Stop khi không còn lệnh dở");
-        AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Lot cặp #{stt} không khớp ({check.Message}) → dừng hệ thống");
-        NotifyTelegram("CTRADER_FIRST_PAIR_LOT_MISMATCH", "ERROR", detail, pairId);
+        _tradeSessionFileLogger.Log($"[HEDGE_VOLUME][ERROR] {detail} → chặn Open, chờ người dùng chọn Tiếp tục / Stop");
+        AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Lot cặp #{stt} không khớp ({check.Message}) → chặn Open, chờ chọn Tiếp tục / Stop");
+        NotifyTelegram("CTRADER_FIRST_PAIR_LOT_MISMATCH", "ERROR", detail + " — đang chặn Open, chờ chọn Tiếp tục / Stop trên app", pairId);
 
-        var message = check.Level == HedgeLotMatchLevel.Unknown
-            ? $"Không đọc được lot của cặp #{stt} (A={FormatLotForPopup(lotA)} / B={FormatLotForPopup(lotB)}). Hệ thống đã dừng."
-            : $"Lot cặp #{stt} không khớp: A={FormatLotForPopup(lotA)} / B={FormatLotForPopup(lotB)}. Hệ thống đã dừng.";
-        ShowLotMismatchPopup(message);
+        var head = check.Level == HedgeLotMatchLevel.Unknown
+            ? $"Không đọc được lot của cặp #{stt} (A={FormatLotForPopup(lotA)} / B={FormatLotForPopup(lotB)})."
+            : $"Lot cặp #{stt} không khớp: A={FormatLotForPopup(lotA)} / B={FormatLotForPopup(lotB)}.";
+        ShowLotMismatchDecisionPopup(
+            head + "\n\nĐang CHẶN mở lệnh mới cho tới khi bạn chọn:\n" +
+            "  • Yes = TIẾP TỤC chạy (chấp nhận lệch lot)\n" +
+            "  • No  = STOP hệ thống\n\n" +
+            "Cặp đang mở không bị đóng tự động.",
+            sessionId,
+            pairId);
+    }
+
+    // Popup KHÔNG chặn vòng polling (BeginInvoke). Mặc định No = Stop (bấm nhầm Enter thì an toàn hơn).
+    private void ShowLotMismatchDecisionPopup(string message, int sessionId, string pairId)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null)
+        {
+            return;
+        }
+
+        dispatcher.BeginInvoke(new Action(() =>
+        {
+            System.Windows.MessageBoxResult result;
+            try
+            {
+                result = System.Windows.MessageBox.Show(
+                    message,
+                    "Lot không khớp — Tiếp tục hay Stop?",
+                    System.Windows.MessageBoxButton.YesNo,
+                    System.Windows.MessageBoxImage.Warning,
+                    System.Windows.MessageBoxResult.No);
+            }
+            catch
+            {
+                return; // không hiện được popup ⇒ vẫn chặn Open (an toàn), nhắc qua Telegram
+            }
+
+            OnLotMismatchDecision(
+                sessionId,
+                result == System.Windows.MessageBoxResult.Yes ? LotMismatchChoice.Continue : LotMismatchChoice.Stop,
+                pairId);
+        }));
+    }
+
+    private void OnLotMismatchDecision(int sessionId, LotMismatchChoice choice, string pairId)
+    {
+        if (!_lotDecisionGate.Decide(sessionId, choice, DateTime.UtcNow))
+        {
+            _tradeSessionFileLogger.Log(
+                $"[HEDGE_VOLUME][INFO] first_pair_lot decision {choice} bỏ qua (phiên cũ hoặc đã xử lý) pairId={pairId}");
+            return;
+        }
+
+        if (choice == LotMismatchChoice.Continue)
+        {
+            // Người dùng chấp nhận lệch ⇒ không chặn Start sau vì cặp này; không kiểm lot lại trong phiên.
+            _lotMismatchPair = null;
+            _tradeSessionFileLogger.Log($"[HEDGE_VOLUME][WARN] first_pair_lot CONTINUE by user pairId={pairId} → mở lại Auto Open");
+            AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Lot lệch: người dùng chọn TIẾP TỤC → Auto Open chạy lại");
+            NotifyTelegram("FIRST_PAIR_LOT_CONTINUE", "WARN", $"Người dùng chọn Tiếp tục dù lot cặp đầu lệch (pairId={pairId})", pairId);
+            return;
+        }
+
+        _lotMismatchStopRequestedAtUtc = DateTime.UtcNow;
+        _tradeSessionFileLogger.Log($"[HEDGE_VOLUME][ERROR] first_pair_lot STOP by user pairId={pairId} → Stop khi không còn lệnh dở");
+        AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Lot lệch: người dùng chọn STOP → dừng hệ thống");
+        NotifyTelegram("FIRST_PAIR_LOT_STOP", "ERROR", $"Người dùng chọn Stop vì lot cặp đầu lệch (pairId={pairId})", pairId);
+    }
+
+    // Gọi cuối vòng polling (UI thread): chưa ai chọn ⇒ nhắc Telegram mỗi LotDecisionReminderInterval.
+    private void TryRemindLotMismatchDecision()
+    {
+        if (!_lotDecisionGate.ShouldRemind(DateTime.UtcNow, LotDecisionReminderInterval))
+        {
+            return;
+        }
+
+        var waited = DateTime.UtcNow - (_lotDecisionGate.RaisedAtUtc ?? DateTime.UtcNow);
+        var pairId = _lotMismatchPair?.PairId;
+        _tradeSessionFileLogger.Log($"[HEDGE_VOLUME][WARN] first_pair_lot vẫn chờ chọn Tiếp tục / Stop ({waited.TotalMinutes:0} phút) — Open đang bị chặn");
+        NotifyTelegram("FIRST_PAIR_LOT_DECISION_PENDING", "WARN",
+            $"Lot cặp đầu lệch, đã {waited.TotalMinutes:0} phút chưa chọn Tiếp tục / Stop — Auto Open đang bị chặn", pairId);
     }
 
     private static bool IsTradeMapReadable(
@@ -1191,14 +1277,19 @@ public sealed class DashboardViewModel : ObservableObject
     /// </summary>
     private void TryCompleteLotMismatchStop()
     {
-        if (!_lotMismatchStopRequested)
+        if (!IsTradingLogicEnabled)
         {
+            // Người dùng tự Stop khi đang chờ / đang dừng: về Idle; trả lời popup cũ sẽ bị bỏ qua.
+            if (_lotDecisionGate.IsOpenBlocked)
+            {
+                _lotDecisionGate.Reset();
+            }
+
             return;
         }
 
-        if (!IsTradingLogicEnabled)
+        if (!_lotDecisionGate.IsStopRequested)
         {
-            _lotMismatchStopRequested = false;
             return;
         }
 
@@ -1222,7 +1313,7 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         _tradeSessionFileLogger.Log($"[HEDGE_VOLUME][ERROR] lot mismatch → Stop trading logic (pairId={_lotMismatchPair?.PairId ?? "-"})");
-        _lotMismatchStopRequested = false;
+        _lotDecisionGate.Reset();
         _ = StopTradingLogicAsync();
     }
 
@@ -1331,7 +1422,8 @@ public sealed class DashboardViewModel : ObservableObject
         // Mỗi phiên Start kiểm tra lại lot của cặp Auto Open MỚI đầu tiên (slot resync không tính).
         _firstPairLotCheckDone = false;
         _firstPairLotCheckPending = null;
-        _lotMismatchStopRequested = false;
+        _lotCheckSessionId++;
+        _lotDecisionGate.Reset();
         // Wipe display state on Start only — Stop giữ nguyên để xem P&L cuối session
         _sttByPairId.Clear();
         _nextStt = 1;
@@ -2136,10 +2228,11 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
-        if (_lotMismatchStopRequested)
+        if (_lotDecisionGate.IsOpenBlocked)
         {
-            AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: lot mismatch, hệ thống đang dừng");
-            LogSignalOutcome(signalContext, "BLOCKED", "LOT_MISMATCH_STOPPING");
+            var lotBlockReason = _lotDecisionGate.IsStopRequested ? "LOT_MISMATCH_STOPPING" : "LOT_MISMATCH_AWAITING_DECISION";
+            AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: lot mismatch ({lotBlockReason})");
+            LogSignalOutcome(signalContext, "BLOCKED", lotBlockReason);
             return;
         }
 
@@ -2379,10 +2472,11 @@ public sealed class DashboardViewModel : ObservableObject
             return;
         }
 
-        if (_lotMismatchStopRequested)
+        if (_lotDecisionGate.IsOpenBlocked)
         {
-            AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: lot mismatch, hệ thống đang dừng");
-            LogSignalOutcome(signalContext, "BLOCKED", "LOT_MISMATCH_STOPPING");
+            var lotBlockReason = _lotDecisionGate.IsStopRequested ? "LOT_MISMATCH_STOPPING" : "LOT_MISMATCH_AWAITING_DECISION";
+            AddSignalLog($"    - [{DateTime.Now:HH:mm:ss.fff}] Open blocked: lot mismatch ({lotBlockReason})");
+            LogSignalOutcome(signalContext, "BLOCKED", lotBlockReason);
             return;
         }
 
@@ -4309,7 +4403,7 @@ public sealed class DashboardViewModel : ObservableObject
             }
 
             // Cuối vòng: timeout rollback / close retry của vòng này đã chạy xong ở trên.
-            if (_firstPairLotCheckPending is not null || _lotMismatchStopRequested)
+            if (_firstPairLotCheckPending is not null || _lotDecisionGate.IsOpenBlocked)
             {
                 // Không để lỗi của phần kiểm tra lot làm chết vòng polling (loop không có try/catch).
                 try
@@ -4317,6 +4411,7 @@ public sealed class DashboardViewModel : ObservableObject
                     System.Windows.Application.Current.Dispatcher.Invoke(() =>
                     {
                         TryRunPendingFirstPairLotCheck();
+                        TryRemindLotMismatchDecision();
                         TryCompleteLotMismatchStop();
                     });
                 }
@@ -5165,9 +5260,7 @@ public sealed class DashboardViewModel : ObservableObject
                     {
                         state.CloseConfirmedB = true;
                     }
-                    else if (!string.IsNullOrWhiteSpace(state.TradeMapNameB) &&
-                             state.PlatformB.HasValue &&
-                             !string.IsNullOrWhiteSpace(state.TradeHwndB))
+                    else if (CanRetryCloseLegB(state))
                     {
                         actions.Add(new PendingCloseRetryAction(
                             PairId: state.PairId,
@@ -5175,17 +5268,15 @@ public sealed class DashboardViewModel : ObservableObject
                             SlotNumber: state.SlotNumber,
                             Exchange: "B",
                             TradeMapName: state.TradeMapNameB!,
-                            Platform: state.PlatformB.Value,
-                            TradeHwnd: state.TradeHwndB!,
+                            Platform: state.PlatformB.GetValueOrDefault(), // CanRetryCloseLegB đã bảo đảm HasValue
+                            TradeHwnd: state.TradeHwndB ?? string.Empty,
                             Ticket: state.TicketB!.Value,
                             TradeType: state.TradeTypeB,
                             Symbol: state.SymbolB,
                             Volume: state.VolumeB));
                     }
                 }
-                else if (!string.IsNullOrWhiteSpace(state.TradeMapNameB) &&
-                         state.PlatformB.HasValue &&
-                         !string.IsNullOrWhiteSpace(state.TradeHwndB))
+                else if (CanRetryCloseLegB(state))
                 {
                     actions.Add(new PendingCloseRetryAction(
                         PairId: state.PairId,
@@ -5193,8 +5284,8 @@ public sealed class DashboardViewModel : ObservableObject
                         SlotNumber: state.SlotNumber,
                         Exchange: "B",
                         TradeMapName: state.TradeMapNameB!,
-                        Platform: state.PlatformB.Value,
-                        TradeHwnd: state.TradeHwndB!,
+                        Platform: state.PlatformB.GetValueOrDefault(), // CanRetryCloseLegB đã bảo đảm HasValue
+                        TradeHwnd: state.TradeHwndB ?? string.Empty,
                         Ticket: state.TicketB!.Value,
                         TradeType: state.TradeTypeB,
                         Symbol: state.SymbolB,
@@ -5218,6 +5309,15 @@ public sealed class DashboardViewModel : ObservableObject
 
         return actions;
     }
+
+    // Leg B: cTrader / PrimeXBT đóng theo ticket, HWND B không bắt buộc ở cấu hình ⇒ không được đòi HWND để retry
+    // (trước đây HWND B trống thì leg B không bao giờ được retry, im lặng). MT4/MT5 vẫn bắt buộc có HWND như cũ.
+    private static bool CanRetryCloseLegB(PendingClosePairState state)
+        => PendingCloseRetryEligibility.CanRetry(
+            hasTradeMap: !string.IsNullOrWhiteSpace(state.TradeMapNameB),
+            hasPlatform: state.PlatformB.HasValue,
+            hasTradeHwnd: !string.IsNullOrWhiteSpace(state.TradeHwndB),
+            platformUsesHwnd: state.PlatformB is not (TradeLegPlatform.CTrader or TradeLegPlatform.PrimeXbt));
 
     private void TryBeginWaitAfterCloseFromPending(PendingClosePairState state)
     {
@@ -7537,6 +7637,7 @@ public sealed class DashboardViewModel : ObservableObject
                 _runtimeConfigState.UpdateCTraderFix(result.CTraderFix);
                 _runtimeConfigState.UpdatePrimeXbt(result.PrimeXbt);
                 IsShowConfigVisible = result.IsShowConfig == 1;
+                OnPropertyChanged(nameof(IsPlatformBPrimeXbt));
                 ResetTradingLogicState();
                 _portfolioCoordinator.EnableRandomQuota();
 
