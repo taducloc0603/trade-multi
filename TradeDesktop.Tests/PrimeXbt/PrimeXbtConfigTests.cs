@@ -68,7 +68,7 @@ public sealed class PrimeXbtConfigTests
     [Theory]
     [InlineData("D1282507", true)]
     [InlineData("d1282507", true)]
-    [InlineData("L1852279", false)]
+    [InlineData("L0000000", false)]
     [InlineData("", false)]
     public void IsDemoAccount_FollowsPxTraderPrefix(string accountId, bool expected)
     {

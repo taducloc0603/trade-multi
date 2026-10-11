@@ -8,7 +8,8 @@ using TradeDesktop.Application.Services.PrimeXbt;
 
 namespace TradeDesktop.Infrastructure.PrimeXbt;
 
-// Phiên WebSocket `fws` của PrimeXBT cho sàn B (docs/plans/primexbt Phase 4 — CHỈ ĐỌC giá).
+// Phiên WebSocket `fws` của PrimeXBT cho sàn B (docs/plans/primexbt): giá (Phase 4), vị thế (5), lịch sử (6) và
+// đường DUY NHẤT gửi lệnh `SendOrderAsync` (7, chỉ khi router ra lệnh qua PrimeXbtTradeExecutor — Rule E).
 // Mô hình luồng soi gương CTraderQuoteSession:
 //   - EnsureState/Read chạy trên luồng poll 50 ms; không chặn, không throw.
 //   - Start/Stop chạy tuần tự trên chuỗi _lifecycle (nền).
@@ -862,7 +863,7 @@ public sealed class PrimeXbtFwsSession : IPrimeXbtQuoteSession, IPrimeXbtTradeSe
 
         if (!string.Equals(_positionMode, "HEDGE", StringComparison.Ordinal))
         {
-            notes.Add(("WARN", $"positionMode={_positionMode} — app cần HEDGE (Phase 5 sẽ fail-closed vị thế)"));
+            notes.Add(("WARN", $"positionMode={_positionMode} — app cần HEDGE (Trades map B fail-closed)"));
         }
     }
 

@@ -479,14 +479,19 @@ TradeDesktop.Tests/            # xUnit tests
   MT4/MT5 lấy số broker,
   `CTraderHistoryProjector` tính `move × VolumeUnits` (USD với XAUUSD). Đừng đổi projector về
   `move × point`: đó chính là lỗi đã khiến bảng hiện `-31 pt | +513 $`. Swap không có trong MMF.
-- **Kiểm tra lot cặp đầu tiên (chế độ cTrader)** — `CheckFirstPairLotOnce` trong `MarkOpenPairLegConfirmed`
+- **Kiểm tra lot cặp đầu tiên (B = cTrader / PrimeXBT)** — `CheckFirstPairLotOnce` trong `MarkOpenPairLegConfirmed`
   chỉ LÊN LỊCH; `TryRunPendingFirstPairLotCheck` (cuối vòng polling) sau 3 s mới so lot HIỆN TẠI theo ticket
   bằng `HedgeLotMatchChecker`. Đừng so ngay bằng `state.VolumeA/B`: nó là lot lúc thấy ticket lần đầu, mà
   `CTraderPositionCache` tạo position từ `150=F` đầu tiên rồi cộng dồn partial fill → báo lệch giả, Stop sai.
-  Đúng MỘT lần mỗi phiên Start, chỉ cặp Auto MỚI (slot resync không đi qua đây). Lệch/Unknown → `_lotMismatchStopRequested` chặn Open trong
-  `AutoBuyAsync`/`AutoSellAsync`, rồi `TryCompleteLotMismatchStop` (cuối vòng polling) Stop khi không còn
-  open/close dở, trần chờ 60 s. `_lotMismatchPair` cố ý KHÔNG reset trong `ResetTradingLogicState` (chạy cả
-  lúc Stop): `EnsureLotMismatchPairClosedBeforeStart` dựa vào nó để từ chối Start khi cặp còn mở.
+  Đúng MỘT lần mỗi phiên Start, chỉ cặp Auto MỚI (slot resync không đi qua đây). Lệch/Unknown →
+  `FirstPairLotDecisionGate.Raise` ⇒ chặn Open trong `AutoBuyAsync`/`AutoSellAsync` (`LOT_MISMATCH_AWAITING_DECISION`)
+  + popup YesNo (**Yes = Tiếp tục, No = Stop**, mặc định No). Chưa chọn ⇒ chặn VÔ HẠN, Telegram nhắc mỗi 15 phút
+  (`FIRST_PAIR_LOT_DECISION_PENDING`); Close vẫn chạy. Tiếp tục ⇒ mở lại Open, `_lotMismatchPair = null`, không kiểm lại
+  trong phiên. Stop ⇒ `TryCompleteLotMismatchStop` (cuối vòng polling) Stop khi không còn open/close dở, trần chờ 60 s.
+  Trả lời popup của phiên cũ (sau Stop/Start) bị bỏ qua theo `_lotCheckSessionId`. ĐỪNG reset gate trong
+  `ResetTradingLogicState` (chạy cả lúc Reconnect ⇒ sẽ âm thầm bỏ chặn khi chưa ai chọn) — chỉ reset ở Start / khi đã
+  Stop. `_lotMismatchPair` cố ý KHÔNG reset trong `ResetTradingLogicState` (chạy cả lúc Stop):
+  `EnsureLotMismatchPairClosedBeforeStart` dựa vào nó để từ chối Start khi cặp còn mở.
   Chỉ chặn/Stop, không tạo open/close → không vi phạm Rule E. Không tắt switch Open Buy/Sell (user chốt).
 
 ### Sàn B PrimeXBT (`platform_b = primexbt`, docs/plans/primexbt)
@@ -508,6 +513,12 @@ TradeDesktop.Tests/            # xUnit tests
 - Tab History chỉ hiện ticket do app tạo (`IsAppGeneratedTicket`) — vị thế mở tay trên web không bao giờ lên tab.
 - Refresh JWT thất bại ⇒ `OpenBlockReason` ⇒ router chặn cả cặp TRƯỚC dispatch (`ITradeLegOpenReadiness`, reason
   `LEG_B_NOT_READY`) — chỉ chặn Open, không đóng gì. Kill switch: `docs/plans/primexbt/KILL-SWITCH.md`.
+- **Chrome PrimeXBT luôn mở** (`PrimeXbtChromeBrowserService`, phase-2-config-auth §Bổ sung 2026-10-11): profile RIÊNG
+  `chrome-primexbt` + `--remote-debugging-port=0` (Chrome 136+ chặn cờ debug trên profile mặc định). ĐỪNG thêm
+  `--remote-allow-origins` (trang web vào được cổng debug) hay `--enable-automation`. Sync chỉ GHI khi
+  `PrimeXbtSessionSyncDecision.ShouldSave` cho phép (không bao giờ lùi JWT) và KHÔNG BAO GIỜ Clear kho. Đăng xuất phải
+  `StopSync()` TRƯỚC `Clear()` (Save trong sync kiểm huỷ dưới cùng lock) — đảo thứ tự là token bị ghi lại ngay.
+  Chrome cố ý không đóng theo app; luồng WebView2 cũ giữ làm dự phòng.
 
 ### Unobserved task exception từ socket FIX
 
