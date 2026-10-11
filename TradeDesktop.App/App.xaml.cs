@@ -66,6 +66,8 @@ public partial class App : System.Windows.Application
                     // `services.AddSingleton<ITradePlatformExecutor, NullPrimeXbtTradeExecutor>();` ⇒ mọi lệnh sàn B fail an toàn.
                     services.AddSingleton<ITradePlatformExecutor, PrimeXbtTradeExecutor>();
                     services.AddSingleton<IPrimeXbtLoginDialog, PrimeXbtLoginDialog>();
+                    // Chrome PrimeXBT luôn mở + đồng bộ token qua CDP (phương án B). Chrome KHÔNG đóng theo app.
+                    services.AddSingleton<IPrimeXbtBrowserService, PrimeXbtChromeBrowserService>();
                     services.AddSingleton<CTraderSessionMonitor>();
                     services.AddSingleton<PrimeXbtSessionMonitor>();
                     services.AddSingleton<ITradeExecutionRouter, TradeExecutionRouter>();
@@ -102,6 +104,16 @@ public partial class App : System.Windows.Application
 
     protected override async void OnExit(ExitEventArgs e)
     {
+        try
+        {
+            // Chỉ dừng vòng đồng bộ; cửa sổ Chrome PrimeXBT cố ý được giữ mở.
+            _host?.Services.GetService<IPrimeXbtBrowserService>()?.StopSync();
+        }
+        catch
+        {
+            // ignore
+        }
+
         try
         {
             _host?.Services.GetService<ITradeSessionFileLogger>()?.StopSession(DateTimeOffset.Now);

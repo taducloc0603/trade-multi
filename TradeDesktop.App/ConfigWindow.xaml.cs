@@ -18,6 +18,7 @@ public partial class ConfigWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _viewModel.RequestClose -= OnRequestClose;
+        _viewModel.DetachPrimeXbtBrowser();
         base.OnClosed(e);
     }
 

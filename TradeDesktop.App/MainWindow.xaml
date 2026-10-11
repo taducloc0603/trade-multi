@@ -137,6 +137,13 @@
                             Height="36"
                             Margin="0,0,8,0"
                             Click="OnOpenLogClick" />
+                    <Button Content="PrimeXBT"
+                            Width="84"
+                            Height="36"
+                            Margin="0,0,8,0"
+                            ToolTip="Mở / đưa lên trước cửa sổ Chrome PrimeXBT (giữ mở để xử lý tay)"
+                            Visibility="{Binding IsPlatformBPrimeXbt, Converter={StaticResource BoolToVisibilityConverter}}"
+                            Click="OnOpenPrimeXbtClick" />
                     <Button Content="Config"
                             Width="82"
                             Height="36"

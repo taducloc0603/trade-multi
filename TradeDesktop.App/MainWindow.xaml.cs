@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Windows;
+using TradeDesktop.App.Services;
 using TradeDesktop.App.ViewModels;
 
 namespace TradeDesktop.App;
@@ -7,10 +8,12 @@ namespace TradeDesktop.App;
 public partial class MainWindow : Window
 {
     private SignalLogWindow? _signalLogWindow;
+    private readonly IPrimeXbtBrowserService? _primeXbtBrowserService;
 
-    public MainWindow(DashboardViewModel viewModel)
+    public MainWindow(DashboardViewModel viewModel, IPrimeXbtBrowserService? primeXbtBrowserService = null)
     {
         InitializeComponent();
+        _primeXbtBrowserService = primeXbtBrowserService;
         DataContext = viewModel;
         Closing += OnMainWindowClosing;
     }
@@ -35,6 +38,22 @@ public partial class MainWindow : Window
         };
         _signalLogWindow.Closed += (_, _) => _signalLogWindow = null;
         _signalLogWindow.Show();
+    }
+
+    private async void OnOpenPrimeXbtClick(object sender, RoutedEventArgs e)
+    {
+        if (_primeXbtBrowserService is null)
+        {
+            return;
+        }
+
+        await _primeXbtBrowserService.OpenOrFocusAsync();
+        var status = _primeXbtBrowserService.Status;
+        // Chỉ báo khi không mở/attach được; trường hợp bình thường Chrome tự hiện lên.
+        if (!_primeXbtBrowserService.IsSyncing)
+        {
+            MessageBox.Show(this, status, "PrimeXBT", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
     }
 
     private void OnMainWindowClosing(object? sender, CancelEventArgs e)

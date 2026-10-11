@@ -43,6 +43,34 @@
 | `ConfigViewModel.cs`, `ConfigWindow.xaml` | Radio "PrimeXBT", panel: account, symbol, volume (oz) + hiển thị lot tương đương, latency, nút **Đăng nhập** / **Đăng xuất**, trạng thái token. `IsPlatformBMtMode=false` khi primexbt; HWND B không bắt buộc |
 | `App/Views/PrimeXbtLoginWindow` (mới, nếu chọn WebView2) | Mở `https://primexbt.com/my/id/sign-in`, chờ `prm-token`, lưu qua TokenStore, đóng |
 
+## Bổ sung 2026-10-11 — Chrome PrimeXBT luôn mở (phương án B: Chrome + CDP)
+
+Mục đích: có sẵn một trình duyệt PrimeXBT để **xử lý tay** khi có sự cố, sống độc lập với app. Luồng WebView2 ở trên
+**giữ nguyên** làm dự phòng (máy không có Chrome/Edge, hoặc CDP lỗi).
+
+- Nút **"PrimeXBT"** (dashboard) / **"Mở PrimeXBT (Chrome)"** (Config) → `PrimeXbtChromeBrowserService.OpenOrFocusAsync`:
+  1. Profile `%LOCALAPPDATA%\TradeDesktop\chrome-primexbt` đang chạy có cổng debug (`DevToolsActivePort` + `/json/version`
+     trả lời) ⇒ attach, đưa tab primexbt.com lên trước (không có thì mở tab sign-in).
+  2. Profile bị khoá mà không có cổng (user mở tay không kèm cờ) ⇒ báo đóng Chrome đó rồi bấm lại.
+  3. Còn lại ⇒ mở Chrome (không có thì Edge): `--user-data-dir=<profile> --remote-debugging-port=0 --no-first-run
+     --no-default-browser-check <sign-in>`.
+- Vòng sync (2 s khi kho chưa có phiên dùng được, 30 s khi đã có): JWT = `Runtime.evaluate(localStorage['prm-token'])` trên
+  tab primexbt.com; cookie = `Storage.getCookies` cấp browser, lọc domain `api.primexbt.com`. Ghi DPAPI khi
+  `PrimeXbtSessionSyncDecision.ShouldSave` (đủ cookie bắt buộc, JWT mới hơn hoặc cookie đổi; **không bao giờ lùi JWT**).
+  Web mất token / Chrome đóng ⇒ **không** Clear kho.
+- Sync chỉ chạy sau khi bấm nút, không tự attach lúc khởi động. App thoát ⇒ dừng sync, **Chrome vẫn mở**.
+- Nút "PrimeXBT" trên dashboard chỉ hiện khi `platform_b = primexbt` (`DashboardViewModel.IsPlatformBPrimeXbt`).
+- Đăng xuất trong Config ⇒ `StopSync()` rồi mới `Clear()`. `StopSync` tăng "thế hệ": luồng mở/attach đang chạy dở không
+  tự bật sync lại; chỉ lần bấm nút KẾ TIẾP (hành động chủ động của user) mới đồng bộ lại.
+- Sync chỉ dừng khi probe `/json/version` lỗi **3 lần liên tiếp** (Chrome bận có thể trễ một lần).
+- Bảo mật (đã chấp nhận): cổng debug chỉ nghe 127.0.0.1 nhưng KHÔNG xác thực — **mọi process và mọi user Windows** trên
+  máy (VPS nhiều user RDP) điều khiển được Chrome đó (đọc cookie phiên, thao tác tài khoản), kể cả sau khi app thoát.
+  App ghi `[PRIMEXBT][WARN]` mỗi lần launch/attach. Không dùng `--remote-allow-origins` (trang web sẽ vào được cổng) và
+  `--enable-automation`. Muốn đóng cổng ⇒ đóng cửa sổ Chrome PrimeXBT. Không chạy trên máy nhiều user.
+- Đã biết, chưa xử lý: (1) refresh JWT của app trùng lúc web đăng nhập lại có thể giữ `refresh_token` cũ tới khi JWT web
+  mới hơn; (2) chưa so tài khoản trước khi ghi đè (Chrome đăng nhập tài khoản khác có JWT mới hơn sẽ ghi đè); (3) chỉ lấy
+  cookie domain chính xác `api.primexbt.com` (cookie `Domain=.primexbt.com` bị bỏ qua).
+
 ## Test mới
 
 - `SansJsonPrimeXbtTests`: round-trip, giữ `ctraderFix` song song, thiếu block → null.

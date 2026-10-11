@@ -50,6 +50,8 @@ public sealed class ConfigViewModel : ObservableObject
     // Token đăng nhập KHÔNG nằm ở đây: lưu riêng qua IPrimeXbtTokenStore (DPAPI), không vào sans_json.
     private readonly IPrimeXbtTokenStore? _primeXbtTokenStore;
     private readonly IPrimeXbtLoginDialog? _primeXbtLoginDialog;
+    private readonly IPrimeXbtBrowserService? _primeXbtBrowserService;
+    private string _primeXbtBrowserStatus = string.Empty;
     private string _primeXbtAccountId = string.Empty;
     private string _primeXbtSymbol = PrimeXbtConfig.DefaultSymbol;
     private string _primeXbtVolumeBOz = string.Empty;
@@ -84,7 +86,8 @@ public sealed class ConfigViewModel : ObservableObject
         IPortfolioCoordinator portfolioCoordinator,
         ICTraderQuoteSession? ctraderQuoteSession = null,
         IPrimeXbtTokenStore? primeXbtTokenStore = null,
-        IPrimeXbtLoginDialog? primeXbtLoginDialog = null)
+        IPrimeXbtLoginDialog? primeXbtLoginDialog = null,
+        IPrimeXbtBrowserService? primeXbtBrowserService = null)
     {
         _runtimeConfigState = runtimeConfigState;
         _configService = configService;
@@ -96,6 +99,13 @@ public sealed class ConfigViewModel : ObservableObject
         _primeXbtLoginDialog = primeXbtLoginDialog;
         PrimeXbtLoginCommand = new AsyncRelayCommand(PrimeXbtLoginAsync, () => _primeXbtLoginDialog is not null && _primeXbtTokenStore is not null);
         PrimeXbtLogoutCommand = new AsyncRelayCommand(PrimeXbtLogoutAsync, () => _primeXbtTokenStore is not null);
+        _primeXbtBrowserService = primeXbtBrowserService;
+        PrimeXbtOpenBrowserCommand = new AsyncRelayCommand(PrimeXbtOpenBrowserAsync, () => _primeXbtBrowserService is not null);
+        if (_primeXbtBrowserService is not null)
+        {
+            _primeXbtBrowserStatus = _primeXbtBrowserService.Status;
+            _primeXbtBrowserService.StatusChanged += OnPrimeXbtBrowserStatusChanged;
+        }
 
         CheckMap1Command = new AsyncRelayCommand(CheckMap1Async, CanCheckMap1);
         CheckMap2Command = new AsyncRelayCommand(CheckMap2Async, CanCheckMap2);
@@ -444,6 +454,12 @@ public sealed class ConfigViewModel : ObservableObject
         private set => SetProperty(ref _primeXbtTokenStatus, value);
     }
 
+    public string PrimeXbtBrowserStatus
+    {
+        get => _primeXbtBrowserStatus;
+        private set => SetProperty(ref _primeXbtBrowserStatus, value);
+    }
+
     public string CTraderChannelMapName => CTraderFixConfig.ChannelMapName;
 
     // Phase 4: mode cTrader thay "Check Map 2" bằng trạng thái FIX QUOTE session (chỉ đọc, phản ánh config ĐANG CHẠY,
@@ -630,6 +646,7 @@ public sealed class ConfigViewModel : ObservableObject
     public AsyncRelayCommand CheckCTraderSessionCommand { get; }
     public AsyncRelayCommand PrimeXbtLoginCommand { get; }
     public AsyncRelayCommand PrimeXbtLogoutCommand { get; }
+    public AsyncRelayCommand PrimeXbtOpenBrowserCommand { get; }
     public AsyncRelayCommand SaveCommand { get; }
     public AsyncRelayCommand CancelCommand { get; }
     public AsyncRelayCommand AddHwndColumnCommand { get; }
@@ -1016,8 +1033,38 @@ public sealed class ConfigViewModel : ObservableObject
         return Task.CompletedTask;
     }
 
+    private Task PrimeXbtOpenBrowserAsync()
+        => _primeXbtBrowserService?.OpenOrFocusAsync() ?? Task.CompletedTask;
+
+    // Gọi từ thread nền của vòng sync ⇒ đẩy về UI thread.
+    private void OnPrimeXbtBrowserStatusChanged()
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null)
+        {
+            return;
+        }
+
+        dispatcher.BeginInvoke(() =>
+        {
+            PrimeXbtBrowserStatus = _primeXbtBrowserService?.Status ?? string.Empty;
+            RefreshPrimeXbtTokenStatus();
+        });
+    }
+
+    // ConfigWindow là transient: gỡ handler khỏi service singleton để không giữ ViewModel.
+    public void DetachPrimeXbtBrowser()
+    {
+        if (_primeXbtBrowserService is not null)
+        {
+            _primeXbtBrowserService.StatusChanged -= OnPrimeXbtBrowserStatusChanged;
+        }
+    }
+
     private Task PrimeXbtLogoutAsync()
     {
+        // Dừng sync TRƯỚC khi xoá: nếu không, nhịp sync kế tiếp đọc lại phiên từ Chrome và ghi lại ngay.
+        _primeXbtBrowserService?.StopSync();
         _primeXbtTokenStore?.Clear();
         SafeConfigLog("[PRIMEXBT][INFO] Local session cleared");
         RefreshPrimeXbtTokenStatus();
