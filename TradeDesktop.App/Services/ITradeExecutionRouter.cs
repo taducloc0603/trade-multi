@@ -13,7 +13,8 @@ public enum TradeLegPlatform
     Mt4 = 0,
     Mt5 = 1,
     CTrader = 2,
-    PrimeXbt = 3
+    PrimeXbt = 3,
+    TradeLocker = 4
 }
 
 public enum TradeLegAction

@@ -15,7 +15,8 @@ public interface IConfigService
         IReadOnlyList<ManualHwndColumnConfig>? manualHwndColumns = null,
         CancellationToken cancellationToken = default,
         CTraderFixConfig? ctraderFix = null,
-        PrimeXbtConfig? primeXbt = null);
+        PrimeXbtConfig? primeXbt = null,
+        TradeLockerConfig? tradeLocker = null);
     Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default);
     Task SaveCurrentSlotsAsync(string currentSlotsJson, CancellationToken cancellationToken = default);
 }
@@ -30,7 +31,7 @@ public sealed class ConfigService(
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" or "tradelocker" ? normalized : "mt5";
     }
 
     public async Task<ConfigLoadResult> LoadByMachineHostNameAsync(CancellationToken cancellationToken = default)
@@ -82,7 +83,7 @@ public sealed class ConfigService(
                 $"Cấu hình [NORMAL CLOSE GAP STABILITY] không hợp lệ: {closeGapError}");
         }
 
-        SansJsonHelper.TryParseSans(record.SansJson, out var mapName1, out var mapName2, out var manualHwndColumns, out var ctraderFix, out var primeXbt);
+        SansJsonHelper.TryParseSans(record.SansJson, out var mapName1, out var mapName2, out var manualHwndColumns, out var ctraderFix, out var primeXbt, out var tradeLocker);
         return ConfigLoadResult.Success(
             hostName,
             mapName1,
@@ -153,7 +154,7 @@ public sealed class ConfigService(
             closeGapStability: record.CloseGapStability,
             openMaxLastGapPts: record.OpenMaxLastGapPts,
             bBidOffsetPts: record.BBidOffsetPts,
-            bAskOffsetPts: record.BAskOffsetPts) with { CTraderFix = ctraderFix, PrimeXbt = primeXbt };
+            bAskOffsetPts: record.BAskOffsetPts) with { CTraderFix = ctraderFix, PrimeXbt = primeXbt, TradeLocker = tradeLocker };
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -186,7 +187,8 @@ public sealed class ConfigService(
         IReadOnlyList<ManualHwndColumnConfig>? manualHwndColumns = null,
         CancellationToken cancellationToken = default,
         CTraderFixConfig? ctraderFix = null,
-        PrimeXbtConfig? primeXbt = null)
+        PrimeXbtConfig? primeXbt = null,
+        TradeLockerConfig? tradeLocker = null)
     {
         var hostName = machineIdentityService.GetHostName();
         if (string.IsNullOrWhiteSpace(hostName))
@@ -207,7 +209,12 @@ public sealed class ConfigService(
             return ConfigSaveResult.Failed("PrimeXBT chỉ được dùng cho sàn B.");
         }
 
-        var sansJson = SansJsonHelper.BuildSans(mapName1, mapName2, manualHwndColumns, ctraderFix, primeXbt);
+        if (normalizedPlatformA == "tradelocker")
+        {
+            return ConfigSaveResult.Failed("TradeLocker chỉ được dùng cho sàn B.");
+        }
+
+        var sansJson = SansJsonHelper.BuildSans(mapName1, mapName2, manualHwndColumns, ctraderFix, primeXbt, tradeLocker);
 
         var updated = await configRepository.UpdateSansAndHostNameByHostNameAsync(
             hostName,
@@ -322,7 +329,10 @@ public sealed record ConfigLoadResult(
     // Offset (point) cộng vào giá Bid/Ask sàn B sau khi đổi sang point, áp ở reader trước mọi xử lý.
     // 0 = không dịch; số âm hợp lệ, KHÔNG clamp. Đặt CUỐI để không lệch tham số positional.
     int BBidOffsetPts = 0,
-    int BAskOffsetPts = 0)
+    int BAskOffsetPts = 0,
+    // Khối tradelocker trong sans_json (docs/plans/tradelocker); Empty khi máy chưa cấu hình TradeLocker.
+    // Đặt CUỐI để không lệch tham số positional.
+    TradeLockerConfig? TradeLocker = null)
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -537,7 +547,7 @@ public sealed record ConfigLoadResult(
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" or "tradelocker" ? normalized : "mt5";
     }
 }
 

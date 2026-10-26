@@ -13,6 +13,7 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
     private readonly ITradePlatformExecutor _mt5Executor;
     private readonly ITradePlatformExecutor? _ctraderExecutor;
     private readonly ITradePlatformExecutor? _primeXbtExecutor;
+    private readonly ITradePlatformExecutor? _tradeLockerExecutor;
     private readonly ITradeSessionFileLogger _logger;
     private readonly IPortfolioCoordinator _portfolioCoordinator;
     private readonly IRuntimeConfigProvider _runtimeConfig;
@@ -32,6 +33,7 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         _mt5Executor = executors.First(x => x.Platform == TradeLegPlatform.Mt5);
         _ctraderExecutor = executors.FirstOrDefault(x => x.Platform == TradeLegPlatform.CTrader);
         _primeXbtExecutor = executors.FirstOrDefault(x => x.Platform == TradeLegPlatform.PrimeXbt);
+        _tradeLockerExecutor = executors.FirstOrDefault(x => x.Platform == TradeLegPlatform.TradeLocker);
         _logger = logger;
         _portfolioCoordinator = portfolioCoordinator;
         _runtimeConfig = runtimeConfig;
@@ -826,7 +828,13 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             throw new InvalidOperationException("PrimeXBT chỉ được dùng cho sàn B.");
         }
 
-        if (platform is TradeLegPlatform.Mt4 or TradeLegPlatform.Mt5 or TradeLegPlatform.CTrader or TradeLegPlatform.PrimeXbt)
+        if (exchange == "A" && platform == TradeLegPlatform.TradeLocker)
+        {
+            throw new InvalidOperationException("TradeLocker chỉ được dùng cho sàn B.");
+        }
+
+        if (platform is TradeLegPlatform.Mt4 or TradeLegPlatform.Mt5 or TradeLegPlatform.CTrader or TradeLegPlatform.PrimeXbt
+            or TradeLegPlatform.TradeLocker)
         {
             return;
         }
@@ -922,6 +930,8 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
                 ?? throw new InvalidOperationException("Chưa đăng ký executor cho cTrader."),
             TradeLegPlatform.PrimeXbt => _primeXbtExecutor
                 ?? throw new InvalidOperationException("Chưa đăng ký executor cho PrimeXBT."),
+            TradeLegPlatform.TradeLocker => _tradeLockerExecutor
+                ?? throw new InvalidOperationException("Chưa đăng ký executor cho TradeLocker."),
             _ => throw new InvalidOperationException($"Unsupported platform: {platform}")
         };
     }
@@ -933,6 +943,7 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         TradeLegPlatform.Mt5 => _mt5Executor,
         TradeLegPlatform.CTrader => _ctraderExecutor,
         TradeLegPlatform.PrimeXbt => _primeXbtExecutor,
+        TradeLegPlatform.TradeLocker => _tradeLockerExecutor,
         _ => null
     };
 

@@ -2,6 +2,7 @@ using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services.CTrader;
 using TradeDesktop.Application.Services.PrimeXbt;
+using TradeDesktop.Application.Services.TradeLocker;
 using TradeDesktop.Domain.Models;
 
 namespace TradeDesktop.App.State;
@@ -84,7 +85,9 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             ? ctraderLatencyB
             : PrimeXbtRoutingRules.ResolveConfirmLatencyB(CurrentPlatformB, CurrentPrimeXbtConfig) is { } primeXbtLatencyB
                 ? primeXbtLatencyB
-                : CurrentConfirmLatencyMs;
+                : TradeLockerRoutingRules.ResolveConfirmLatencyB(CurrentPlatformB, CurrentTradeLockerConfig) is { } tradeLockerLatencyB
+                    ? tradeLockerLatencyB
+                    : CurrentConfirmLatencyMs;
     // false khi start hoặc end của nhóm là null trong DB → nhóm không áp dụng same-action lock.
     public bool CurrentSameActionLockEnabled { get; private set; } = true;
     public bool CurrentCloseSameActionLockEnabled { get; private set; } = true;
@@ -118,11 +121,16 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
             ? CTraderFixConfig.ChannelMapName
             : string.Equals(CurrentPlatformB, PrimeXbtRoutingRules.PlatformName, StringComparison.Ordinal)
                 ? PrimeXbtRoutingRules.ChannelMapName
-                : StoredMapName2;
+                // TradeLocker: cùng lý do — kênh riêng không EA nào ghi ⇒ fail-closed tới khi có quote session.
+                : string.Equals(CurrentPlatformB, TradeLockerRoutingRules.PlatformName, StringComparison.Ordinal)
+                    ? TradeLockerRoutingRules.ChannelMapName
+                    : StoredMapName2;
 
     public CTraderFixConfig CurrentCTraderFixConfig { get; private set; } = CTraderFixConfig.Empty;
     // Khối sans_json.primexbt. Cập nhật qua UpdatePrimeXbt (KHÔNG qua Update(...)) nên không dính bẫy sentinel.
     public PrimeXbtConfig CurrentPrimeXbtConfig { get; private set; } = PrimeXbtConfig.Empty;
+    // Khối sans_json.tradelocker. Cập nhật qua UpdateTradeLocker (KHÔNG qua Update(...)) nên không dính bẫy sentinel.
+    public TradeLockerConfig CurrentTradeLockerConfig { get; private set; } = TradeLockerConfig.Empty;
     // Offset (point) cộng vào giá Bid/Ask sàn B sau khi đổi sang point (b_bid_offset_pts / b_ask_offset_pts).
     // Số âm hợp lệ nên KHÔNG đi qua Update(...) (sentinel -1 không dùng được) — chỉ cập nhật qua UpdateBPriceOffsets.
     public int CurrentBBidOffsetPts { get; private set; }
@@ -543,7 +551,7 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" or "tradelocker" ? normalized : "mt5";
     }
 
     public void Update(string machineHostName, string mapName1, string mapName2, int point)
@@ -689,6 +697,12 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public void UpdatePrimeXbt(PrimeXbtConfig? primeXbt)
     {
         CurrentPrimeXbtConfig = (primeXbt ?? PrimeXbtConfig.Empty).Normalize();
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void UpdateTradeLocker(TradeLockerConfig? tradeLocker)
+    {
+        CurrentTradeLockerConfig = (tradeLocker ?? TradeLockerConfig.Empty).Normalize();
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 

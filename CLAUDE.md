@@ -543,6 +543,33 @@ TradeDesktop.Tests/            # xUnit tests
   `StopSync()` TRƯỚC `Clear()` (Save trong sync kiểm huỷ dưới cùng lock) — đảo thứ tự là token bị ghi lại ngay.
   Chrome cố ý không đóng theo app; luồng WebView2 cũ giữ làm dự phòng.
 
+### Sàn B TradeLocker (`platform_b = tradelocker`, docs/plans/tradelocker)
+
+- **Giao thức KHÔNG chính thức** (dò ngược web `app.tradelocker.com`, engine APOLLO): RSocket trên WebSocket `hermes` +
+  protobuf. T&C TradeLocker cấm bot/reverse-engineer/thu thập tự động — chủ dự án đã chấp nhận rủi ro (2026-10-26).
+  Web đổi giao thức ⇒ `[DRIFT]` + fail-closed; probe A7 (`scan\tradelocker-spike\probe.cmd`) phát hiện trước.
+- **Codec protobuf viết tay** (`ProtoMessage`/`ProtoWriter`, không package). Mỗi loại order đánh số field KHÁC nhau
+  (bảng `OrderLayouts` trong `TradeLockerMessages`) — thêm loại order phải lấy số từ `descriptors.json`, không đoán.
+  Frame BUY phải khớp từng byte frame web đã bắt (test khoá `OpenBuy_EncodesByteForByteLikeTheCapturedWebFrame`).
+- **Ticket = bit 63** (`TradeLockerTicketCodec`): position id là snowflake ~9e17 và TĂNG theo thời gian — không nhét vừa
+  60 bit lâu dài. Ticket là `ulong` ở mọi tầng; ĐỪNG ép sang `long` (ra số âm). Bit 61 = PrimeXBT, bit 62 = cTrader.
+- **Một socket cho tất cả** (`TradeLockerHermesSession` cài cả quote lẫn trade session): rớt socket ⇒ giá, Trades map,
+  History map cùng MapNotFound. JWT account 5' chỉ kiểm lúc SETUP — server KHÔNG cắt socket khi JWT hết hạn (Phase 0 Q1),
+  nên chỉ mint lại khi (re)connect / gọi hera. Lifetime 15 s không có frame ⇒ xoá giá + nối lại.
+- **Đặt lệnh KHÔNG idempotent** (không client order id; order mang `last_correlation_id="-1"`). Lỗi transport sau khi gửi
+  ⇒ `TIMEOUT_UNCERTAIN`, **không bao giờ gửi lại** — Phase 0 chứng minh lệnh vẫn khớp dù socket đóng 4 ms sau khi gửi.
+  Khớp lệnh mở = position MỚI cùng unit + chiều + đủ lot; ≥ 2 ứng viên ⇒ AMBIGUOUS, không đoán. Vì hai lệnh cùng chiều
+  gửi đồng thời không phân biệt được (Phase 0 R9), session chỉ cho **một Open in-flight mỗi tradable unit + chiều**.
+- Lỗi validation về **đồng bộ** qua frame ERROR (base64 `ProtoError`), không qua notification. Close `NOT_FOUND` chỉ coi
+  là đã đóng khi PositionStore cũng không còn id đó.
+- Route đóng-tất-cả của hermes CẤM trong code production (recheck A6 grep). `SendOrderAsync` từ chối mọi route khác
+  `v3.positions:open` / `v3.positions.{id}:close`.
+- **Đăng nhập 2 bước:** Google từ chối đăng nhập trên Chrome bật `--remote-debugging-port`. Nút **Đăng nhập** mở profile
+  `chrome-tradelocker` ở Chrome THƯỜNG; đăng nhập xong ĐÓNG Chrome rồi bấm **Mở TradeLocker (Chrome)** (có cổng) — web tự
+  đăng nhập lại bằng cookie TradeLocker và sync đọc refresh token (sessionStorage `tlx-oidc:user:…`, ~30 ngày) vào DPAPI.
+- Hera `closed-positions-history`: mới nhất trước, 20 dòng/trang, `links.next` là **object `{cursorId}`** chứ không phải URL;
+  `pnl` là TIỀN (move × lot × lot_size). Session chỉ đọc trang đầu (đủ cho các lần đóng gần đây).
+
 ### Unobserved task exception từ socket FIX
 
 - QuickFIX/n 1.10 đọc socket bằng `BeginRead` + `WaitOne`; khi phiên FIX ngắt, nó đóng stream lúc lệnh đọc
@@ -576,6 +603,9 @@ TradeDesktop.Tests/            # xUnit tests
   (tuổi tick) với `ctrader_confirm_latency_b` — ô trên màn hình có thể nhỏ trong khi tín hiệu đang bị chặn.
 - Chênh lệch giữa tag 52 (SendingTime của broker) và giờ máy chủ yếu là **lệch đồng hồ**, không phải độ trễ
   mạng: đo 2026-09-23 thấy RTT tới broker chỉ ~230–310 ms. Đừng diễn giải nhầm con số đó.
+- Log `[MARKET][WARN] Latency spike` (chỉ log): chân B socket (cTrader/PrimeXBT/TradeLocker, `IsExchangeBWithoutHwnd`)
+  so tuổi tick với ngưỡng guard `CurrentConfirmLatencyMsBEffective` qua `LatencySpikeThresholdResolver`; chân A / B MMF
+  giữ 500 ms. Trước 2026-10-26 chân B socket cũng dùng 500 ms nên vượt liên tục (~41 dòng/phút với tick ~500 ms).
 
 ### Cooldown
 - Auto action thường dùng transition matrix, không dùng global post-action cooldown. Same-action và
@@ -712,6 +742,9 @@ New code MUST NOT introduce new failures.
 - **Telegram notifier**: critical event alerts.
 - **PrimeXBT WebSocket `fws`** (`wss://api.primexbt.com/v2/fws/`, JWT 7 ngày + cookie `fws_token`): nguồn dữ liệu VÀ đường
   đặt lệnh của sàn B khi `platform_b = primexbt`. Token đăng nhập qua WebView2 trong Config, lưu DPAPI cục bộ — không lên DB.
+- **TradeLocker `hermes`** (`wss://api.<cluster>.tradelocker.com/hermes`, RSocket + protobuf, KHÔNG chính thức) + REST hera +
+  Keycloak/kerber: nguồn dữ liệu VÀ đường đặt lệnh sàn B khi `platform_b = tradelocker`. Refresh token Keycloak lưu DPAPI
+  cục bộ. Tắt nhanh: `docs/plans/tradelocker/KILL-SWITCH.md`.
 - **cTrader FIX API** (QuickFIX/n 1.10.0): nguồn dữ liệu VÀ đường đặt lệnh của sàn B khi `platform_b = ctrader`.
   Sàn B production là Deriv `live.deriv.1551176` — FxPro chặn đặt lệnh qua FIX (`CHANNEL_IS_BLOCKED`).
   Chỉ `QuickFixCTraderTransport` chạm kiểu QuickFIX; `CTraderTradeSession.SendMarketOrderAsync` là đường DUY

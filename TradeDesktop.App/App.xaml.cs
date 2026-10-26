@@ -65,11 +65,17 @@ public partial class App : System.Windows.Application
                     // PrimeXBT (docs/plans/primexbt Phase 7): executor THẬT. Kill switch = thay dòng dưới bằng
                     // `services.AddSingleton<ITradePlatformExecutor, NullPrimeXbtTradeExecutor>();` ⇒ mọi lệnh sàn B fail an toàn.
                     services.AddSingleton<ITradePlatformExecutor, PrimeXbtTradeExecutor>();
+                    // TradeLocker (docs/plans/tradelocker Phase 7A): executor THẬT. Kill switch = thay dòng dưới bằng
+                    // `services.AddSingleton<ITradePlatformExecutor, NullTradeLockerTradeExecutor>();` ⇒ mọi lệnh sàn B fail an toàn.
+                    services.AddSingleton<ITradePlatformExecutor, TradeLockerTradeExecutor>();
                     services.AddSingleton<IPrimeXbtLoginDialog, PrimeXbtLoginDialog>();
                     // Chrome PrimeXBT luôn mở + đồng bộ token qua CDP (phương án B). Chrome KHÔNG đóng theo app.
                     services.AddSingleton<IPrimeXbtBrowserService, PrimeXbtChromeBrowserService>();
+                    // TradeLocker: Chrome profile riêng + đồng bộ refresh token qua CDP (docs/plans/tradelocker Phase 2).
+                    services.AddSingleton<ITradeLockerBrowserService, TradeLockerChromeBrowserService>();
                     services.AddSingleton<CTraderSessionMonitor>();
                     services.AddSingleton<PrimeXbtSessionMonitor>();
+                    services.AddSingleton<TradeLockerSessionMonitor>();
                     services.AddSingleton<ITradeExecutionRouter, TradeExecutionRouter>();
                     services.AddSingleton<IWindowProbe, NativeWindowProbe>();
                     services.AddSingleton<IHwndHealthChecker, HwndHealthChecker>();
@@ -89,6 +95,7 @@ public partial class App : System.Windows.Application
             // logon đầu tiên của QUOTE session.
             _host.Services.GetRequiredService<CTraderSessionMonitor>();
             _host.Services.GetRequiredService<PrimeXbtSessionMonitor>();
+            _host.Services.GetRequiredService<TradeLockerSessionMonitor>();
 
             var mainWindow = _host.Services.GetRequiredService<MainWindow>();
             MainWindow = mainWindow;
@@ -108,6 +115,7 @@ public partial class App : System.Windows.Application
         {
             // Chỉ dừng vòng đồng bộ; cửa sổ Chrome PrimeXBT cố ý được giữ mở.
             _host?.Services.GetService<IPrimeXbtBrowserService>()?.StopSync();
+            _host?.Services.GetService<ITradeLockerBrowserService>()?.StopSync();
         }
         catch
         {

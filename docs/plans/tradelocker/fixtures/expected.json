@@ -1,0 +1,148 @@
+{
+  "note": "Decoded by scan/trade-locker reference decoder (@bufbuild/protobuf + descriptors.json). Captured 2026-10-26 on OPEN_DEMO by tradelocker-spike probe.",
+  "quote": {
+    "ask": "4008.76",
+    "bid": "4008.5"
+  },
+  "positionAggregates": {
+    "payload": {
+      "case": "positionsAggregate",
+      "value": {
+        "positions": [
+          {
+            "id": "895596180090928800",
+            "accountId": "1791342294192995800",
+            "tradableUnitId": "806905199205435676",
+            "side": 1,
+            "status": 2,
+            "createdAt": "1791363568706",
+            "totalCommission": "0.0",
+            "totalSwap": "0.0"
+          },
+          {
+            "id": "895683725856354606",
+            "accountId": "1791342294192995800",
+            "tradableUnitId": "806903684076031137",
+            "side": 2,
+            "status": 2,
+            "createdAt": "1791384441243",
+            "totalCommission": "0.0",
+            "totalSwap": "0.0"
+          },
+          {
+            "id": "895678797842759191",
+            "accountId": "1791342294192995800",
+            "tradableUnitId": "806905199205435676",
+            "side": 2,
+            "status": 2,
+            "createdAt": "1791383266313",
+            "totalCommission": "0.0",
+            "totalSwap": "0.0"
+          }
+        ],
+        "orders": [
+          {
+            "orderType": {
+              "case": "marketOrder",
+              "value": {
+                "side": 1,
+                "requestedQuantity": "0.01",
+                "timeInForce": 2,
+                "positionId": "895596180090928800",
+                "status": 8,
+                "lastCorrelationId": "-1",
+                "filledQuantity": "0.01",
+                "createdAt": "1791363568706",
+                "modifiedAt": "1791363568981",
+                "id": "895596180090928801",
+                "parentStatus": 3,
+                "intent": 1,
+                "timeInForceGtdTimestamp": "51",
+                "averagePrice": "7822.1"
+              }
+            }
+          },
+          {
+            "orderType": {
+              "case": "marketOrder",
+              "value": {
+                "side": 2,
+                "requestedQuantity": "0.01",
+                "timeInForce": 2,
+                "positionId": "895683725856354606",
+                "status": 8,
+                "lastCorrelationId": "-1",
+                "filledQuantity": "0.01",
+                "createdAt": "1791384441244",
+                "modifiedAt": "1791384441428",
+                "id": "895683725856354607",
+                "parentStatus": 3,
+                "intent": 1,
+                "timeInForceGtdTimestamp": "51",
+                "averagePrice": "4104.2"
+              }
+            }
+          },
+          {
+            "orderType": {
+              "case": "marketOrder",
+              "value": {
+                "side": 2,
+                "requestedQuantity": "0.01",
+                "timeInForce": 2,
+                "positionId": "895678797842759191",
+                "status": 8,
+                "lastCorrelationId": "-1",
+                "filledQuantity": "0.01",
+                "createdAt": "1791383266313",
+                "modifiedAt": "1791383266507",
+                "id": "895678797842759192",
+                "parentStatus": 3,
+                "intent": 1,
+                "timeInForceGtdTimestamp": "51",
+                "averagePrice": "7772.5"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "tradableUnits": {
+    "counts": {
+      "tradableUnits": 33,
+      "instruments": 33,
+      "tickers": 33
+    },
+    "xauusd": {
+      "instrument": {
+        "id": "806900667184467277",
+        "code": "",
+        "name": "XAUUSD",
+        "brandId": "806887857167681928",
+        "tradingStatus": 1,
+        "tickerId": "806102601859910870",
+        "tradingSessionId": "806084749618627597",
+        "instrumentGroupIds": [
+          "806901376424497027"
+        ],
+        "description": "Gold vs US Dollar"
+      },
+      "ticker": {
+        "id": "806102601859910870",
+        "name": "XAUUSD",
+        "bridgeId": "805113098546496521",
+        "feedTunnelId": "806084647747373178",
+        "feedSessionId": "806084749618627597",
+        "baseAssetId": "806090323773145717",
+        "quoteCurrencyAssetId": "789055732803644447",
+        "tickSize": "0.01",
+        "lotSize": "100.0",
+        "lotStep": "0.01",
+        "minimumLot": "0.01",
+        "maximumLot": "1000.0"
+      },
+      "tradableUnitId": "806903684076031137"
+    }
+  }
+}

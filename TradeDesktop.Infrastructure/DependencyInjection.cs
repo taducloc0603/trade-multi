@@ -7,6 +7,7 @@ using TradeDesktop.Infrastructure.PrimeXbt;
 using TradeDesktop.Infrastructure.Signals;
 using TradeDesktop.Infrastructure.SharedMemory;
 using TradeDesktop.Infrastructure.Supabase;
+using TradeDesktop.Infrastructure.TradeLocker;
 
 namespace TradeDesktop.Infrastructure;
 
@@ -26,17 +27,26 @@ public static class DependencyInjection
         // Phase 5 ROLLBACK = thay dòng dưới bằng `services.AddSingleton<ITradesSharedMemoryReader, TradesSharedMemoryReader>();`
         // — quay về MMF và TRADE session không bao giờ được start (vòng đời do decorator điều khiển).
         // PrimeXBT Phase 5 ROLLBACK = bỏ lớp `new PrimeXbtAwareTradesReader(...)` ngoài cùng, giữ nguyên lớp cTrader bên trong.
-        services.AddSingleton<ITradesSharedMemoryReader>(sp => new PrimeXbtAwareTradesReader(
-            new CTraderAwareTradesReader(new TradesSharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()),
+        // TradeLocker Phase 5 ROLLBACK = bỏ lớp `new TradeLockerAwareTradesReader(...)` ngoài cùng, giữ nguyên chuỗi bên trong.
+        services.AddSingleton<ITradesSharedMemoryReader>(sp => new TradeLockerAwareTradesReader(
+            new PrimeXbtAwareTradesReader(
+                new CTraderAwareTradesReader(new TradesSharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()),
+                sp.GetRequiredService<IRuntimeConfigProvider>(),
+                sp.GetRequiredService<IPrimeXbtQuoteSession>(),
+                sp.GetRequiredService<IPrimeXbtTradeSession>()),
             sp.GetRequiredService<IRuntimeConfigProvider>(),
-            sp.GetRequiredService<IPrimeXbtQuoteSession>(),
-            sp.GetRequiredService<IPrimeXbtTradeSession>()));
+            sp.GetRequiredService<ITradeLockerQuoteSession>(),
+            sp.GetRequiredService<ITradeLockerTradeSession>()));
         // Phase 6 ROLLBACK = thay dòng dưới bằng `services.AddSingleton<IHistorySharedMemoryReader, HistorySharedMemoryReader>();`
         // PrimeXBT Phase 6 ROLLBACK = bỏ lớp `new PrimeXbtAwareHistoryReader(...)` ngoài cùng.
-        services.AddSingleton<IHistorySharedMemoryReader>(sp => new PrimeXbtAwareHistoryReader(
-            new CTraderAwareHistoryReader(new HistorySharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()),
+        // TradeLocker Phase 6 ROLLBACK = bỏ lớp `new TradeLockerAwareHistoryReader(...)` ngoài cùng.
+        services.AddSingleton<IHistorySharedMemoryReader>(sp => new TradeLockerAwareHistoryReader(
+            new PrimeXbtAwareHistoryReader(
+                new CTraderAwareHistoryReader(new HistorySharedMemoryReader(), sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<ICTraderTradeSession>(), sp.GetRequiredService<ICTraderQuoteSession>()),
+                sp.GetRequiredService<IRuntimeConfigProvider>(),
+                sp.GetRequiredService<IPrimeXbtTradeSession>()),
             sp.GetRequiredService<IRuntimeConfigProvider>(),
-            sp.GetRequiredService<IPrimeXbtTradeSession>()));
+            sp.GetRequiredService<ITradeLockerTradeSession>()));
         // PrimeXBT Phase 2: kho token DPAPI cục bộ. Phase 4–7: phiên `fws` (giá, vị thế, lịch sử, gửi lệnh) — chỉ mở socket
         // khi platform_b = primexbt (EnsureState do reader gọi mỗi 50 ms); container dispose lúc thoát app → đóng socket.
         services.AddSingleton<IPrimeXbtTokenStore, PrimeXbtTokenStore>();
@@ -44,6 +54,16 @@ public static class DependencyInjection
         services.AddSingleton(sp => PrimeXbtFwsSession.CreateDefault(sp.GetRequiredService<IPrimeXbtTokenStore>()));
         services.AddSingleton<IPrimeXbtQuoteSession>(sp => sp.GetRequiredService<PrimeXbtFwsSession>());
         services.AddSingleton<IPrimeXbtTradeSession>(sp => sp.GetRequiredService<PrimeXbtFwsSession>());
+        // TradeLocker (docs/plans/tradelocker Phase 2): kho refresh token DPAPI cục bộ + Keycloak/kerber. Chưa mở socket nào.
+        services.AddSingleton<ITradeLockerTokenStore, TradeLockerTokenStore>();
+        services.AddSingleton(_ => new TradeLockerAuthClient());
+        services.AddSingleton(sp => new TradeLockerAuthSession(
+            sp.GetRequiredService<ITradeLockerTokenStore>(), sp.GetRequiredService<TradeLockerAuthClient>()));
+        // Phase 4–7: phiên hermes (giá, vị thế, gửi lệnh) — chỉ mở socket khi platform_b = tradelocker (EnsureState do reader
+        // gọi mỗi 50 ms). CÙNG một instance cài cả hai interface; container dispose lúc thoát app → đóng socket.
+        services.AddSingleton(sp => TradeLockerHermesSession.CreateDefault(sp.GetRequiredService<TradeLockerAuthSession>()));
+        services.AddSingleton<ITradeLockerQuoteSession>(sp => sp.GetRequiredService<TradeLockerHermesSession>());
+        services.AddSingleton<ITradeLockerTradeSession>(sp => sp.GetRequiredService<TradeLockerHermesSession>());
         services.AddSingleton<MockSharedMemoryMarketDataReader>();
         services.AddSingleton<ISignalEngine, SimpleSignalEngine>();
         services.AddHttpClient();

@@ -19,6 +19,7 @@ using TradeDesktop.Application.Services;
 using TradeDesktop.Application.Services.Portfolio;
 using TradeDesktop.Application.Services.CTrader;
 using TradeDesktop.Application.Services.PrimeXbt;
+using TradeDesktop.Application.Services.TradeLocker;
 using TradeDesktop.Domain.Models;
 
 namespace TradeDesktop.App.ViewModels;
@@ -867,9 +868,11 @@ public sealed class DashboardViewModel : ObservableObject
 
     // PrimeXBT (đặt lệnh qua WebSocket) cũng không có cửa sổ MT → HWND B không bắt buộc. Dùng cho các cửa chặn HWND
     // và kiểm lot cặp đầu (CheckFirstPairLotOnce).
+    // TradeLocker (docs/plans/tradelocker) cũng đặt lệnh qua WebSocket — cùng nhóm.
     private bool IsExchangeBWithoutHwnd()
         => IsExchangeBCTrader()
-           || string.Equals(_runtimeConfigState.CurrentPlatformB, PrimeXbtRoutingRules.PlatformName, StringComparison.Ordinal);
+           || string.Equals(_runtimeConfigState.CurrentPlatformB, PrimeXbtRoutingRules.PlatformName, StringComparison.Ordinal)
+           || string.Equals(_runtimeConfigState.CurrentPlatformB, TradeLockerRoutingRules.PlatformName, StringComparison.Ordinal);
 
     private void RunHwndHealthCheck(string source)
     {
@@ -3651,6 +3654,7 @@ public sealed class DashboardViewModel : ObservableObject
             "mt5" => TradeLegPlatform.Mt5,
             "ctrader" => TradeLegPlatform.CTrader,
             "primexbt" => TradeLegPlatform.PrimeXbt,
+            "tradelocker" => TradeLegPlatform.TradeLocker,
             _ => throw new InvalidOperationException($"Unsupported platform: '{platformRaw}'")
         };
     }
@@ -4543,19 +4547,22 @@ public sealed class DashboardViewModel : ObservableObject
     private void LogLatencyAnomalyIfNeeded(DashboardMetrics metrics)
     {
         var nowUtc = DateTime.UtcNow;
-        var loggedA = LogLatencySpikeForExchange("A", metrics.ExchangeA.LatencyMs, ref _lastLoggedLatencyA, nowUtc);
-        var loggedB = LogLatencySpikeForExchange("B", metrics.ExchangeB.LatencyMs, ref _lastLoggedLatencyB, nowUtc);
+        var loggedA = LogLatencySpikeForExchange("A", metrics.ExchangeA.LatencyMs, ref _lastLoggedLatencyA, nowUtc, LatencySpikeThresholdMs);
+        // Chân B socket (cTrader/PrimeXBT/TradeLocker): LatencyMs là tuổi tick ⇒ so với ngưỡng guard của chân B.
+        var thresholdB = LatencySpikeThresholdResolver.Resolve(
+            IsExchangeBWithoutHwnd(), _runtimeConfigState.CurrentConfirmLatencyMsBEffective, LatencySpikeThresholdMs);
+        var loggedB = LogLatencySpikeForExchange("B", metrics.ExchangeB.LatencyMs, ref _lastLoggedLatencyB, nowUtc, thresholdB);
         if (loggedA || loggedB)
         {
             _lastLatencyLogAtUtc = nowUtc;
         }
     }
 
-    private bool LogLatencySpikeForExchange(string exchange, decimal? latencyMs, ref double? lastLatencyMs, DateTime nowUtc)
+    private bool LogLatencySpikeForExchange(string exchange, decimal? latencyMs, ref double? lastLatencyMs, DateTime nowUtc, double thresholdMs)
     {
         var currentLatency = latencyMs.HasValue ? (double?)latencyMs.Value : null;
-        var wasHigh = lastLatencyMs.HasValue && lastLatencyMs.Value >= LatencySpikeThresholdMs;
-        var isHigh = currentLatency.HasValue && currentLatency.Value >= LatencySpikeThresholdMs;
+        var wasHigh = lastLatencyMs.HasValue && lastLatencyMs.Value >= thresholdMs;
+        var isHigh = currentLatency.HasValue && currentLatency.Value >= thresholdMs;
         lastLatencyMs = currentLatency;
 
         if (!isHigh)
@@ -4566,7 +4573,7 @@ public sealed class DashboardViewModel : ObservableObject
         var canRepeat = (nowUtc - _lastLatencyLogAtUtc) >= TimeSpan.FromSeconds(LatencyLogMinIntervalSeconds);
         if (!wasHigh || canRepeat)
         {
-            SafeVmLog($"[MARKET][WARN] Latency spike: exchange={exchange} latencyMs={currentLatency:0.##} thresholdMs={LatencySpikeThresholdMs:0.##}");
+            SafeVmLog($"[MARKET][WARN] Latency spike: exchange={exchange} latencyMs={currentLatency:0.##} thresholdMs={thresholdMs:0.##}");
             return true;
         }
 
@@ -5316,14 +5323,14 @@ public sealed class DashboardViewModel : ObservableObject
         return actions;
     }
 
-    // Leg B: cTrader / PrimeXBT đóng theo ticket, HWND B không bắt buộc ở cấu hình ⇒ không được đòi HWND để retry
+    // Leg B: cTrader / PrimeXBT / TradeLocker đóng theo ticket, HWND B không bắt buộc ở cấu hình ⇒ không được đòi HWND để retry
     // (trước đây HWND B trống thì leg B không bao giờ được retry, im lặng). MT4/MT5 vẫn bắt buộc có HWND như cũ.
     private static bool CanRetryCloseLegB(PendingClosePairState state)
         => PendingCloseRetryEligibility.CanRetry(
             hasTradeMap: !string.IsNullOrWhiteSpace(state.TradeMapNameB),
             hasPlatform: state.PlatformB.HasValue,
             hasTradeHwnd: !string.IsNullOrWhiteSpace(state.TradeHwndB),
-            platformUsesHwnd: state.PlatformB is not (TradeLegPlatform.CTrader or TradeLegPlatform.PrimeXbt));
+            platformUsesHwnd: state.PlatformB is not (TradeLegPlatform.CTrader or TradeLegPlatform.PrimeXbt or TradeLegPlatform.TradeLocker));
 
     private void TryBeginWaitAfterCloseFromPending(PendingClosePairState state)
     {
@@ -7642,6 +7649,7 @@ public sealed class DashboardViewModel : ObservableObject
                 _runtimeConfigState.UpdateManualTradeHwnd(result.ManualHwndColumns);
                 _runtimeConfigState.UpdateCTraderFix(result.CTraderFix);
                 _runtimeConfigState.UpdatePrimeXbt(result.PrimeXbt);
+                _runtimeConfigState.UpdateTradeLocker(result.TradeLocker);
                 _runtimeConfigState.UpdateBPriceOffsets(result.BBidOffsetPts, result.BAskOffsetPts);
                 SafeVmLog(
                     $"[CONFIG] b_bid_offset_pts={result.BBidOffsetPts} b_ask_offset_pts={result.BAskOffsetPts} " +
@@ -10077,6 +10085,31 @@ public sealed class DashboardViewModel : ObservableObject
     // nhất khiến điều đó nhìn thấy được — công thức profit KHÔNG được sửa ở đây.
     private void LogHedgeVolumeConsistency()
     {
+        // TradeLocker (docs/plans/tradelocker Phase 5): khối lượng B cấu hình bằng LOT ⇒ đổi ra đơn vị cơ sở (× contract)
+        // để dùng chung checker. Các nhánh PrimeXBT/cTrader bên dưới giữ nguyên.
+        if (TradeLockerRoutingRules.IsTradeLockerPlatform(_runtimeConfigState.CurrentPlatformB))
+        {
+            var tradeLocker = _runtimeConfigState.CurrentTradeLockerConfig;
+            var tradeLockerCheck = HedgeVolumeConsistencyChecker.Check(
+                (double)tradeLocker.VolumeALots,
+                (double)(tradeLocker.VolumeBLots * tradeLocker.ContractSizeB),
+                (double)tradeLocker.ContractSizeB);
+            var tradeLockerLevel = tradeLockerCheck.Level switch
+            {
+                HedgeVolumeLevel.Ok => "INFO",
+                HedgeVolumeLevel.Warn => "WARN",
+                _ => "ERROR",
+            };
+
+            _tradeSessionFileLogger.Log($"[HEDGE_VOLUME][{tradeLockerLevel}] TradeLocker: {tradeLockerCheck.Message}");
+            if (tradeLockerCheck.Level == HedgeVolumeLevel.Alert)
+            {
+                _ = _telegramNotifier.NotifyAsync("TRADELOCKER_HEDGE_VOLUME_MISMATCH", "ERROR", tradeLockerCheck.Message);
+            }
+
+            return;
+        }
+
         // PrimeXBT (docs/plans/primexbt Phase 5): cùng phép kiểm, khối lượng B tính bằng oz. Nhánh cTrader bên dưới giữ nguyên.
         if (PrimeXbtRoutingRules.IsPrimeXbtPlatform(_runtimeConfigState.CurrentPlatformB))
         {

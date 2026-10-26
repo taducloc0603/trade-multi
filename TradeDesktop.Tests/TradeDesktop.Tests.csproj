@@ -33,4 +33,11 @@
     <ProjectReference Include="..\TradeDesktop.Infrastructure\TradeDesktop.Infrastructure.csproj" />
   </ItemGroup>
 
+  <!-- TradeLocker Phase 3: frame thật OPEN_DEMO (nguồn: docs/plans/tradelocker/fixtures). -->
+  <ItemGroup>
+    <None Update="TradeLocker\Fixtures\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

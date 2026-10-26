@@ -1,4 +1,5 @@
 using TradeDesktop.Application.Services.PrimeXbt;
+using TradeDesktop.Application.Services.TradeLocker;
 
 namespace TradeDesktop.Application.Services.CTrader;
 
@@ -20,8 +21,11 @@ public static class PlatformBSwitchGuard
         // PrimeXBT cũng mã hoá ticket B theo namespace riêng → cùng lý do chặn như cTrader.
         var involvesPrimeXbt =
             PrimeXbtRoutingRules.IsPrimeXbtPlatform(running) || PrimeXbtRoutingRules.IsPrimeXbtPlatform(next);
+        // TradeLocker cũng mã hoá ticket B theo namespace riêng (bit 63) → cùng lý do chặn.
+        var involvesTradeLocker =
+            TradeLockerRoutingRules.IsTradeLockerPlatform(running) || TradeLockerRoutingRules.IsTradeLockerPlatform(next);
 
-        return changed && (involvesCTrader || involvesPrimeXbt) && openSlots > 0
+        return changed && (involvesCTrader || involvesPrimeXbt || involvesTradeLocker) && openSlots > 0
             ? new PlatformBSwitchDecision(false, $"Đang có {openSlots} slot mở — đóng hết trước khi đổi nền tảng sàn B.")
             : new PlatformBSwitchDecision(true, null);
     }

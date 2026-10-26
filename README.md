@@ -434,6 +434,23 @@ Khuyến nghị cấu hình khi B = primexbt: `close_pending_time_ms` **≥ 2500
 ack đóng; nhỏ hơn thì retry đóng thừa, sàn trả `POSITION_NOT_FOUND` — vô hại nhưng nhiễu), `open_pending_time_ms` ≥ 3000.
 Chi tiết và kill switch: `docs/plans/primexbt/` (`KILL-SWITCH.md`).
 
+**Sàn B = TradeLocker (`platform_b = tradelocker`)** — cấu hình nằm trong khối `tradelocker` của cột `sans` (không có cột
+DB mới). Refresh token Keycloak KHÔNG bao giờ lên DB — lưu DPAPI tại `%LOCALAPPDATA%\TradeDesktop\tradelocker\{host}.bin`.
+Đăng nhập 2 bước trong Config: **Đăng nhập** (Chrome thường) ⇒ đóng Chrome ⇒ **Mở TradeLocker (Chrome)** (Google chặn
+Chrome có cổng debug). Giao thức là bản dò ngược web `app.tradelocker.com` (engine APOLLO), không chính thức.
+
+| Khoá `sans.tradelocker` | Ý nghĩa |
+|---|---|
+| `accountId` | accId dạng số (vd `1791342294192995800`). Trống = account đầu tiên của profile |
+| `brand` | `X-ODA-Brand` khi liệt kê account (demo TradeLocker: `PRDTL`) |
+| `symbol` | Tên instrument, vd `XAUUSD` (khớp chính xác) |
+| `volumeBLots` | Khối lượng chân B bằng **lot** (bội `lot_step`, XAUUSD 0.01) |
+| `contractSizeB` | `lot_size` của ticker (XAUUSD: 100) — chỉ để cảnh báo hedge ratio |
+| `volumeALots` | Khai báo để cảnh báo hedge ratio, không cưỡng chế chân A |
+| `confirmLatencyB` | Ngưỡng guard latency B (tuổi tick, ms). Phase 0 đo p95 ~1.2–1.7 s, p99 ~2.5–4 s ⇒ đề xuất `2500` |
+
+Chi tiết, kill switch và runbook live: `docs/plans/tradelocker/` (`KILL-SWITCH.md`, `phase-9-live-runbook.md`).
+
 ### 7.2 Routing thực thi lệnh
 
 File: `TradeDesktop.App/Services/TradeExecutionRouter.cs`
@@ -457,6 +474,12 @@ File: `TradeDesktop.App/Services/TradeExecutionRouter.cs`
 > `PRIMEXBT_B_Trades` (snapshot `positions`) và History map ảo `PRIMEXBT_B_History` (`report/orders2`) qua hai decorator
 > `PrimeXbtAware*Reader` bọc ngoài decorator cTrader; lệnh đi qua `PrimeXbtTradeExecutor` → `SendOrderAsync`. Ticket =
 > sub-position id gắn **bit 61** (`PrimeXbtTicketCodec`). Log riêng `Desktop\trade-log\{yyyyMMdd}-primexbt.log`.
+>
+> **`platform_b = tradelocker`** cũng cùng khuôn: một socket RSocket `hermes` (`TradeLockerHermesSession`) cấp giá, Trades
+> map ảo `TRADELOCKER_B_Trades` (`v3.position-aggregates`) và History map ảo `TRADELOCKER_B_History` (REST hera) qua hai
+> decorator `TradeLockerAware*Reader` bọc NGOÀI CÙNG chuỗi PrimeXBT → cTrader → MMF; lệnh đi qua
+> `TradeLockerTradeExecutor` → `SendOrderAsync`. Ticket = position id gắn **bit 63** (`TradeLockerTicketCodec`). Log riêng
+> `Desktop\trade-log\{yyyyMMdd}-tradelocker.log`.
 >
 > Ba khác biệt phải nhớ khi đọc dữ liệu chân B cTrader:
 >

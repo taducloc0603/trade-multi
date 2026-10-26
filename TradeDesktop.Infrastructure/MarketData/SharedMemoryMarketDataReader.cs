@@ -25,6 +25,7 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
     private const int MaxSymbolBytesToRead = 64;
     private const string CTraderPlatformName = "ctrader";
     private const string PrimeXbtPlatformName = "primexbt";
+    private const string TradeLockerPlatformName = "tradelocker";
 
     private readonly object _syncRoot = new();
     private readonly IRuntimeConfigProvider _runtimeConfigProvider;
@@ -37,15 +38,18 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
     private Task? _worker;
     private readonly ICTraderQuoteSession? _ctraderQuoteSession;
     private readonly IPrimeXbtQuoteSession? _primeXbtQuoteSession;
+    private readonly ITradeLockerQuoteSession? _tradeLockerQuoteSession;
 
     public SharedMemoryMarketDataReader(
         IRuntimeConfigProvider runtimeConfigProvider,
         ICTraderQuoteSession? ctraderQuoteSession = null,
-        IPrimeXbtQuoteSession? primeXbtQuoteSession = null)
+        IPrimeXbtQuoteSession? primeXbtQuoteSession = null,
+        ITradeLockerQuoteSession? tradeLockerQuoteSession = null)
     {
         _runtimeConfigProvider = runtimeConfigProvider;
         _ctraderQuoteSession = ctraderQuoteSession;
         _primeXbtQuoteSession = primeXbtQuoteSession;
+        _tradeLockerQuoteSession = tradeLockerQuoteSession;
     }
 
     public event EventHandler<SharedMemorySnapshot>? SnapshotReceived;
@@ -128,6 +132,10 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
             _primeXbtQuoteSession?.EnsureState(platformB, _runtimeConfigProvider.CurrentPrimeXbtConfig);
             var isPrimeXbtB = _primeXbtQuoteSession is not null
                 && string.Equals(platformB, PrimeXbtPlatformName, StringComparison.OrdinalIgnoreCase);
+            // TradeLocker (docs/plans/tradelocker Phase 4): cùng mô hình — session tự no-op khi B không phải tradelocker.
+            _tradeLockerQuoteSession?.EnsureState(platformB, _runtimeConfigProvider.CurrentTradeLockerConfig);
+            var isTradeLockerB = _tradeLockerQuoteSession is not null
+                && string.Equals(platformB, TradeLockerPlatformName, StringComparison.OrdinalIgnoreCase);
 
             var sanA = ReadExchangeMetrics(mapName1, "SanA");
             // Tham số latency ở đây CHỈ nuôi dòng [STATS] của session (`confirm_latency_ms=` và
@@ -138,7 +146,9 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
                 ? _ctraderQuoteSession!.Read(sanA, _runtimeConfigProvider.CurrentPoint, _runtimeConfigProvider.CurrentConfirmLatencyMsBEffective)
                 : isPrimeXbtB
                     ? _primeXbtQuoteSession!.Read(sanA, _runtimeConfigProvider.CurrentPoint, _runtimeConfigProvider.CurrentConfirmLatencyMsBEffective)
-                    : ReadExchangeMetrics(mapName2, "SanB");
+                    : isTradeLockerB
+                        ? _tradeLockerQuoteSession!.Read(sanA, _runtimeConfigProvider.CurrentPoint, _runtimeConfigProvider.CurrentConfirmLatencyMsBEffective)
+                        : ReadExchangeMetrics(mapName2, "SanB");
 
             // Offset point từ DB (b_bid_offset_pts / b_ask_offset_pts) áp cho MỌI nguồn B trước khi phát snapshot.
             // Dòng [STATS] bên trong session cTrader/PrimeXBT vẫn tính trên giá thô.

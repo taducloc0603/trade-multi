@@ -2,7 +2,7 @@ name: Build and Release Windows App
 
 on:
   push:
-    branches: [ dev, dev-5-gap-am-holding-ms, dev-5-release-111-ctrader, primexbt ]
+    branches: [ dev, dev-5-gap-am-holding-ms, dev-5-release-111-ctrader, primexbt, feature/tradelocker ]
   workflow_dispatch:
 
 permissions:
@@ -57,7 +57,7 @@ jobs:
           # Pipeline release dang chay on va repo co san test fail (no ky thuat da biet), nen buoc nay
           # KHONG chan release. Muc dich la co mot con so de doi chieu: neu so fail VUOT BASELINE thi thay
           # doi vua day len da gay regression -> dung lai, dung lay artifact.
-          # BASELINE hien tai (2026-09-24): 11 fail / 1009 test. Con so 19 truoc day da loi thoi.
+          # BASELINE hien tai (2026-10-26, nhanh feature/tradelocker): 11 fail / 1594 test. Con so 19 truoc day da loi thoi.
           # Truoc buoc nay CI khong chay test, va `dotnet publish` cung khong bien dich project Test.
           dotnet test TradeDesktop.Tests/TradeDesktop.Tests.csproj `
             -c Release `

@@ -19,6 +19,7 @@ public partial class ConfigWindow : Window
     {
         _viewModel.RequestClose -= OnRequestClose;
         _viewModel.DetachPrimeXbtBrowser();
+        _viewModel.DetachTradeLockerBrowser();
         base.OnClosed(e);
     }
 

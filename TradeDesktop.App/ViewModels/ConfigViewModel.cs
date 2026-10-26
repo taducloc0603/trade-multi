@@ -10,6 +10,7 @@ using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
 using TradeDesktop.Application.Services.CTrader;
 using TradeDesktop.Application.Services.PrimeXbt;
+using TradeDesktop.Application.Services.TradeLocker;
 using System.Globalization;
 
 namespace TradeDesktop.App.ViewModels;
@@ -59,6 +60,19 @@ public sealed class ConfigViewModel : ObservableObject
     private string _primeXbtVolumeALots = string.Empty;
     private string _primeXbtConfirmLatencyB = string.Empty;
     private string _primeXbtTokenStatus = "Chưa đăng nhập";
+    // Form TradeLocker (mode TradeLocker của khối Sàn B, docs/plans/tradelocker Phase 2). Refresh token KHÔNG nằm ở đây:
+    // lưu riêng qua ITradeLockerTokenStore (DPAPI), đồng bộ từ Chrome profile riêng.
+    private readonly ITradeLockerTokenStore? _tradeLockerTokenStore;
+    private readonly ITradeLockerBrowserService? _tradeLockerBrowserService;
+    private string _tradeLockerBrowserStatus = string.Empty;
+    private string _tradeLockerAccountId = string.Empty;
+    private string _tradeLockerBrand = TradeLockerConfig.DefaultBrand;
+    private string _tradeLockerSymbol = TradeLockerConfig.DefaultSymbol;
+    private string _tradeLockerVolumeBLots = string.Empty;
+    private string _tradeLockerContractSizeB = TradeLockerConfig.DefaultContractSizeB.ToString(CultureInfo.InvariantCulture);
+    private string _tradeLockerVolumeALots = string.Empty;
+    private string _tradeLockerConfirmLatencyB = string.Empty;
+    private string _tradeLockerTokenStatus = "Chưa đăng nhập";
 
     private string _mapName1 = string.Empty;
     private string _mapName2 = string.Empty;
@@ -87,7 +101,9 @@ public sealed class ConfigViewModel : ObservableObject
         ICTraderQuoteSession? ctraderQuoteSession = null,
         IPrimeXbtTokenStore? primeXbtTokenStore = null,
         IPrimeXbtLoginDialog? primeXbtLoginDialog = null,
-        IPrimeXbtBrowserService? primeXbtBrowserService = null)
+        IPrimeXbtBrowserService? primeXbtBrowserService = null,
+        ITradeLockerTokenStore? tradeLockerTokenStore = null,
+        ITradeLockerBrowserService? tradeLockerBrowserService = null)
     {
         _runtimeConfigState = runtimeConfigState;
         _configService = configService;
@@ -105,6 +121,19 @@ public sealed class ConfigViewModel : ObservableObject
         {
             _primeXbtBrowserStatus = _primeXbtBrowserService.Status;
             _primeXbtBrowserService.StatusChanged += OnPrimeXbtBrowserStatusChanged;
+        }
+
+        _tradeLockerTokenStore = tradeLockerTokenStore;
+        _tradeLockerBrowserService = tradeLockerBrowserService;
+        TradeLockerOpenBrowserCommand = new AsyncRelayCommand(TradeLockerOpenBrowserAsync, () => _tradeLockerBrowserService is not null);
+        TradeLockerSignInCommand = new AsyncRelayCommand(
+            () => _tradeLockerBrowserService?.OpenForSignInAsync() ?? Task.CompletedTask,
+            () => _tradeLockerBrowserService is not null);
+        TradeLockerLogoutCommand = new AsyncRelayCommand(TradeLockerLogoutAsync, () => _tradeLockerTokenStore is not null);
+        if (_tradeLockerBrowserService is not null)
+        {
+            _tradeLockerBrowserStatus = _tradeLockerBrowserService.Status;
+            _tradeLockerBrowserService.StatusChanged += OnTradeLockerBrowserStatusChanged;
         }
 
         CheckMap1Command = new AsyncRelayCommand(CheckMap1Async, CanCheckMap1);
@@ -125,6 +154,8 @@ public sealed class ConfigViewModel : ObservableObject
         ApplyCTraderFixToForm(runtimeConfigState.CurrentCTraderFixConfig);
         ApplyPrimeXbtToForm(runtimeConfigState.CurrentPrimeXbtConfig);
         RefreshPrimeXbtTokenStatus();
+        ApplyTradeLockerToForm(runtimeConfigState.CurrentTradeLockerConfig);
+        RefreshTradeLockerTokenStatus();
         CTraderSessionStatus = _ctraderQuoteSession?.StatusText ?? "Không có FIX session";
 
         var hasRuntimeState =
@@ -289,6 +320,7 @@ public sealed class ConfigViewModel : ObservableObject
             OnPropertyChanged(nameof(IsPlatformBMt5));
             OnPropertyChanged(nameof(IsPlatformBCTrader));
             OnPropertyChanged(nameof(IsPlatformBPrimeXbt));
+            OnPropertyChanged(nameof(IsPlatformBTradeLocker));
             OnPropertyChanged(nameof(IsPlatformBMtMode));
             RefreshButtons();
         }
@@ -379,11 +411,89 @@ public sealed class ConfigViewModel : ObservableObject
         }
     }
 
-    // Mode MT (Map Name 2 + HWND B) chỉ khi B không phải cTrader/PrimeXBT — hai nền tảng này không có cửa sổ MT.
-    public bool IsPlatformBMtMode => !IsPlatformBCTrader && !IsPlatformBPrimeXbt;
+    public bool IsPlatformBTradeLocker
+    {
+        get => TradeLockerRoutingRules.IsTradeLockerPlatform(PlatformB);
+        set
+        {
+            if (!value)
+            {
+                return;
+            }
+
+            PlatformB = TradeLockerRoutingRules.PlatformName;
+        }
+    }
+
+    // Mode MT (Map Name 2 + HWND B) chỉ khi B không phải cTrader/PrimeXBT/TradeLocker — các nền tảng này không có cửa sổ MT.
+    public bool IsPlatformBMtMode => !IsPlatformBCTrader && !IsPlatformBPrimeXbt && !IsPlatformBTradeLocker;
 
     // Sàn B không có cửa sổ MT để click → HWND B không bắt buộc khi Save.
-    private bool IsPlatformBWithoutHwnd => IsPlatformBCTrader || IsPlatformBPrimeXbt;
+    private bool IsPlatformBWithoutHwnd => IsPlatformBCTrader || IsPlatformBPrimeXbt || IsPlatformBTradeLocker;
+
+    public string TradeLockerChannelMapName => TradeLockerRoutingRules.ChannelMapName;
+
+    // Rỗng = account đầu tiên của profile TradeLocker. Chuỗi số accId, KHÔNG phải "PRDTL#O#…".
+    public string TradeLockerAccountId
+    {
+        get => _tradeLockerAccountId;
+        set => SetCTraderField(ref _tradeLockerAccountId, value);
+    }
+
+    public string TradeLockerBrand
+    {
+        get => _tradeLockerBrand;
+        set => SetCTraderField(ref _tradeLockerBrand, value);
+    }
+
+    public string TradeLockerSymbol
+    {
+        get => _tradeLockerSymbol;
+        set => SetCTraderField(ref _tradeLockerSymbol, value);
+    }
+
+    public string TradeLockerVolumeBLots
+    {
+        get => _tradeLockerVolumeBLots;
+        set => SetCTraderField(ref _tradeLockerVolumeBLots, value);
+    }
+
+    public string TradeLockerContractSizeB
+    {
+        get => _tradeLockerContractSizeB;
+        set => SetCTraderField(ref _tradeLockerContractSizeB, value);
+    }
+
+    public string TradeLockerVolumeALots
+    {
+        get => _tradeLockerVolumeALots;
+        set => SetCTraderField(ref _tradeLockerVolumeALots, value);
+    }
+
+    // Trống = dùng confirm_latency chung. Số (kể cả 0 = tắt guard latency riêng chân B) không clamp.
+    public string TradeLockerConfirmLatencyB
+    {
+        get => _tradeLockerConfirmLatencyB;
+        set => SetCTraderField(ref _tradeLockerConfirmLatencyB, value);
+    }
+
+    public string TradeLockerTokenStatus
+    {
+        get => _tradeLockerTokenStatus;
+        private set => SetProperty(ref _tradeLockerTokenStatus, value);
+    }
+
+    public string TradeLockerBrowserStatus
+    {
+        get => _tradeLockerBrowserStatus;
+        private set => SetProperty(ref _tradeLockerBrowserStatus, value);
+    }
+
+    public AsyncRelayCommand TradeLockerOpenBrowserCommand { get; }
+
+    public AsyncRelayCommand TradeLockerLogoutCommand { get; }
+
+    public AsyncRelayCommand TradeLockerSignInCommand { get; }
 
     public string PrimeXbtChannelMapName => PrimeXbtRoutingRules.ChannelMapName;
 
@@ -728,6 +838,7 @@ public sealed class ConfigViewModel : ObservableObject
             InitializeColumns(loadResult.ManualHwndColumns);
             ApplyCTraderFixToForm(loadResult.CTraderFix);
             ApplyPrimeXbtToForm(loadResult.PrimeXbt);
+            ApplyTradeLockerToForm(loadResult.TradeLocker);
 
             _runtimeConfigState.Update(
                 loadResult.MachineHostName,
@@ -797,6 +908,7 @@ public sealed class ConfigViewModel : ObservableObject
             _runtimeConfigState.UpdateManualTradeHwnd(BuildManualHwndColumns());
             _runtimeConfigState.UpdateCTraderFix(loadResult.CTraderFix);
             _runtimeConfigState.UpdatePrimeXbt(loadResult.PrimeXbt);
+            _runtimeConfigState.UpdateTradeLocker(loadResult.TradeLocker);
             _runtimeConfigState.UpdateBPriceOffsets(loadResult.BBidOffsetPts, loadResult.BAskOffsetPts);
 
             IsExistingRecordLoaded = true;
@@ -909,9 +1021,22 @@ public sealed class ConfigViewModel : ObservableObject
                 }
             }
 
-            // Save ghi CẢ mapNames[1] MT lẫn khối ctraderFix/primexbt (giữ dữ liệu các mode đang ẩn).
+            var tradeLocker = BuildTradeLockerFromForm();
+            if (IsPlatformBTradeLocker)
+            {
+                var missing = tradeLocker.GetMissingRequiredFields();
+                if (missing.Count > 0)
+                {
+                    LoadStatus = "✖ Save thất bại";
+                    ErrorMessage = "Thiếu thông số TradeLocker: " + string.Join(", ", missing);
+                    return;
+                }
+            }
+
+            // Save ghi CẢ mapNames[1] MT lẫn khối ctraderFix/primexbt/tradelocker (giữ dữ liệu các mode đang ẩn).
             var saveResult = await _configService.SaveByMachineHostNameAsync(
-                MapName1, MapName2, PlatformA, PlatformB, columns, ctraderFix: ctraderFix, primeXbt: primeXbt);
+                MapName1, MapName2, PlatformA, PlatformB, columns, ctraderFix: ctraderFix, primeXbt: primeXbt,
+                tradeLocker: tradeLocker);
             if (!saveResult.IsSuccess)
             {
                 LoadStatus = "✖ Save thất bại";
@@ -932,6 +1057,7 @@ public sealed class ConfigViewModel : ObservableObject
             _runtimeConfigState.UpdateManualTradeHwnd(columns);
             _runtimeConfigState.UpdateCTraderFix(ctraderFix);
             _runtimeConfigState.UpdatePrimeXbt(primeXbt);
+            _runtimeConfigState.UpdateTradeLocker(tradeLocker);
             _storedCTraderPassword = ctraderFix.Password;
             _pendingCTraderPassword = string.Empty;
             SafeConfigLog(
@@ -970,7 +1096,9 @@ public sealed class ConfigViewModel : ObservableObject
                 ? BuildCTraderFixFromForm() is var fix && fix.GetMissingRequiredFields(fix.HasPassword).Count == 0
                 : IsPlatformBPrimeXbt
                     ? BuildPrimeXbtFromForm().GetMissingRequiredFields().Count == 0
-                    : !string.IsNullOrWhiteSpace(MapName2)) &&
+                    : IsPlatformBTradeLocker
+                        ? BuildTradeLockerFromForm().GetMissingRequiredFields().Count == 0
+                        : !string.IsNullOrWhiteSpace(MapName2)) &&
             ManualHwndColumns.Count > 0;
     }
 
@@ -1070,6 +1198,96 @@ public sealed class ConfigViewModel : ObservableObject
         SafeConfigLog("[PRIMEXBT][INFO] Local session cleared");
         RefreshPrimeXbtTokenStatus();
         return Task.CompletedTask;
+    }
+
+    private void ApplyTradeLockerToForm(TradeLockerConfig? source)
+    {
+        var tl = (source ?? TradeLockerConfig.Empty).Normalize();
+        TradeLockerAccountId = tl.AccountId;
+        // Máy chưa cấu hình TradeLocker: điền sẵn giá trị đã đo ở Phase 0 (PRDTL, XAUUSD, 1 lot = 100 oz).
+        TradeLockerBrand = string.IsNullOrWhiteSpace(tl.Brand) ? TradeLockerConfig.DefaultBrand : tl.Brand;
+        TradeLockerSymbol = string.IsNullOrWhiteSpace(tl.Symbol) ? TradeLockerConfig.DefaultSymbol : tl.Symbol;
+        TradeLockerVolumeBLots = FormatDecimal(tl.VolumeBLots);
+        TradeLockerContractSizeB = tl.ContractSizeB > 0m
+            ? FormatDecimal(tl.ContractSizeB)
+            : FormatDecimal(TradeLockerConfig.DefaultContractSizeB);
+        TradeLockerVolumeALots = FormatDecimal(tl.VolumeALots);
+        TradeLockerConfirmLatencyB = tl.ConfirmLatencyB?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+    }
+
+    private TradeLockerConfig BuildTradeLockerFromForm()
+    {
+        var latencyText = (TradeLockerConfirmLatencyB ?? string.Empty).Trim();
+        int? latency = int.TryParse(latencyText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+        var tl = new TradeLockerConfig(
+            TradeLockerAccountId,
+            TradeLockerBrand,
+            TradeLockerSymbol,
+            ParseDecimal(TradeLockerVolumeBLots),
+            ParseDecimal(TradeLockerContractSizeB),
+            ParseDecimal(TradeLockerVolumeALots),
+            latency).Normalize();
+
+        // Chỉ điền mặc định mà chưa nhập gì khác ⇒ coi như chưa cấu hình, để máy khác không bị ghi khối tradelocker.
+        return string.IsNullOrEmpty(tl.AccountId) && tl.VolumeBLots == 0m && tl.VolumeALots == 0m && tl.ConfirmLatencyB is null
+            ? TradeLockerConfig.Empty
+            : tl;
+    }
+
+    private Task TradeLockerOpenBrowserAsync()
+        => _tradeLockerBrowserService?.OpenOrFocusAsync() ?? Task.CompletedTask;
+
+    // Gọi từ thread nền của vòng sync ⇒ đẩy về UI thread.
+    private void OnTradeLockerBrowserStatusChanged()
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null)
+        {
+            return;
+        }
+
+        dispatcher.BeginInvoke(() =>
+        {
+            TradeLockerBrowserStatus = _tradeLockerBrowserService?.Status ?? string.Empty;
+            RefreshTradeLockerTokenStatus();
+        });
+    }
+
+    // ConfigWindow là transient: gỡ handler khỏi service singleton để không giữ ViewModel.
+    public void DetachTradeLockerBrowser()
+    {
+        if (_tradeLockerBrowserService is not null)
+        {
+            _tradeLockerBrowserService.StatusChanged -= OnTradeLockerBrowserStatusChanged;
+        }
+    }
+
+    private Task TradeLockerLogoutAsync()
+    {
+        // Dừng sync TRƯỚC khi xoá: nếu không, nhịp sync kế tiếp đọc lại phiên từ Chrome và ghi lại ngay.
+        _tradeLockerBrowserService?.StopSync();
+        _tradeLockerTokenStore?.Clear();
+        SafeConfigLog("[TRADELOCKER][INFO] Local session cleared");
+        RefreshTradeLockerTokenStatus();
+        return Task.CompletedTask;
+    }
+
+    private void RefreshTradeLockerTokenStatus()
+    {
+        if (_tradeLockerTokenStore is null)
+        {
+            TradeLockerTokenStatus = "Không có kho token";
+            return;
+        }
+
+        var session = _tradeLockerTokenStore.Load();
+        TradeLockerTokenStatus = session is null
+            ? "Chưa đăng nhập"
+            : session.IsUsableAt(DateTime.UtcNow)
+                ? $"✔ Đã đăng nhập — refresh token hết hạn {session.RefreshExpiresUtc!.Value.ToLocalTime():dd/MM HH:mm}"
+                : "✖ Refresh token hết hạn — đăng nhập lại";
     }
 
     private void RefreshPrimeXbtTokenStatus()
@@ -1298,7 +1516,7 @@ public sealed class ConfigViewModel : ObservableObject
     private static string NormalizePlatform(string? platform)
     {
         var normalized = (platform ?? string.Empty).Trim().ToLower();
-        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" ? normalized : "mt5";
+        return normalized is "mt4" or "mt5" or "ctrader" or "primexbt" or "tradelocker" ? normalized : "mt5";
     }
 
     private void SafeConfigLog(string message)

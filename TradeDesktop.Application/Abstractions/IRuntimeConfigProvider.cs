@@ -57,6 +57,7 @@ public interface IRuntimeConfigProvider
     string CurrentPlatformB => "mt5";
     CTraderFixConfig CurrentCTraderFixConfig => CTraderFixConfig.Empty;
     PrimeXbtConfig CurrentPrimeXbtConfig => PrimeXbtConfig.Empty;
+    TradeLockerConfig CurrentTradeLockerConfig => TradeLockerConfig.Empty;
 
     // Offset (point) cộng vào giá Bid/Ask sàn B sau khi đổi sang point. Default 0 = không dịch.
     int CurrentBBidOffsetPts => 0;

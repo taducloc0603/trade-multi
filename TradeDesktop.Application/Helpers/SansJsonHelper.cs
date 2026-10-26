@@ -39,12 +39,23 @@ public static class SansJsonHelper
         out IReadOnlyList<ManualHwndColumnConfig> manualHwndColumns,
         out CTraderFixConfig ctraderFix,
         out PrimeXbtConfig primeXbt)
+        => TryParseSans(sansJson, out mapName1, out mapName2, out manualHwndColumns, out ctraderFix, out primeXbt, out _);
+
+    public static bool TryParseSans(
+        string? sansJson,
+        out string mapName1,
+        out string mapName2,
+        out IReadOnlyList<ManualHwndColumnConfig> manualHwndColumns,
+        out CTraderFixConfig ctraderFix,
+        out PrimeXbtConfig primeXbt,
+        out TradeLockerConfig tradeLocker)
     {
         mapName1 = string.Empty;
         mapName2 = string.Empty;
         manualHwndColumns = [ManualHwndColumnConfig.Empty];
         ctraderFix = CTraderFixConfig.Empty;
         primeXbt = PrimeXbtConfig.Empty;
+        tradeLocker = TradeLockerConfig.Empty;
 
         if (string.IsNullOrWhiteSpace(sansJson))
         {
@@ -132,6 +143,13 @@ public static class SansJsonHelper
                 primeXbt = ParsePrimeXbt(primeXbtElement);
             }
 
+            // Khối tradelocker cũng parse riêng: hỏng/thiếu ⇒ Empty, không ảnh hưởng phần còn lại.
+            if (doc.RootElement.TryGetProperty("tradelocker", out var tradeLockerElement) &&
+                tradeLockerElement.ValueKind == JsonValueKind.Object)
+            {
+                tradeLocker = ParseTradeLocker(tradeLockerElement);
+            }
+
             return !string.IsNullOrWhiteSpace(mapName1) || !string.IsNullOrWhiteSpace(mapName2);
         }
         catch
@@ -141,7 +159,33 @@ public static class SansJsonHelper
             manualHwndColumns = [ManualHwndColumnConfig.Empty];
             ctraderFix = CTraderFixConfig.Empty;
             primeXbt = PrimeXbtConfig.Empty;
+            tradeLocker = TradeLockerConfig.Empty;
             return false;
+        }
+    }
+
+    private static TradeLockerConfig ParseTradeLocker(JsonElement element)
+    {
+        try
+        {
+            int? confirmLatencyB = element.TryGetProperty("confirmLatencyB", out var latencyElement) &&
+                                   latencyElement.ValueKind == JsonValueKind.Number &&
+                                   latencyElement.TryGetInt32(out var latency)
+                ? latency
+                : null;
+
+            return new TradeLockerConfig(
+                ReadString(element, "accountId"),
+                ReadString(element, "brand"),
+                ReadString(element, "symbol"),
+                ReadDecimal(element, "volumeBLots"),
+                ReadDecimal(element, "contractSizeB"),
+                ReadDecimal(element, "volumeALots"),
+                confirmLatencyB).Normalize();
+        }
+        catch
+        {
+            return TradeLockerConfig.Empty;
         }
     }
 
@@ -378,6 +422,37 @@ public static class SansJsonHelper
             ["contractSizeB"] = px.ContractSizeB,
             ["volumeALots"] = px.VolumeALots,
             ["confirmLatencyB"] = px.ConfirmLatencyB
+        };
+        return root.ToJsonString();
+    }
+
+    // Có khối tradelocker: dựng trên kết quả overload 5 tham số (giữ ctraderFix/primexbt). tradelocker rỗng ⇒ trả
+    // đúng từng byte như overload 5 tham số.
+    public static string BuildSans(
+        string? mapName1,
+        string? mapName2,
+        IReadOnlyList<ManualHwndColumnConfig>? manualHwndColumns,
+        CTraderFixConfig? ctraderFix,
+        PrimeXbtConfig? primeXbt,
+        TradeLockerConfig? tradeLocker)
+    {
+        var withoutTradeLocker = BuildSans(mapName1, mapName2, manualHwndColumns, ctraderFix, primeXbt);
+        var tl = tradeLocker?.Normalize();
+        if (tl is null || tl == TradeLockerConfig.Empty)
+        {
+            return withoutTradeLocker;
+        }
+
+        var root = System.Text.Json.Nodes.JsonNode.Parse(withoutTradeLocker)!.AsObject();
+        root["tradelocker"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["accountId"] = tl.AccountId,
+            ["brand"] = tl.Brand,
+            ["symbol"] = tl.Symbol,
+            ["volumeBLots"] = tl.VolumeBLots,
+            ["contractSizeB"] = tl.ContractSizeB,
+            ["volumeALots"] = tl.VolumeALots,
+            ["confirmLatencyB"] = tl.ConfirmLatencyB
         };
         return root.ToJsonString();
     }
