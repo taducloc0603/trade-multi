@@ -7,6 +7,29 @@
 
 ## 0. Project rules (CRITICAL — đọc đầu tiên)
 
+### 0.0 RULE CAO NHẤT — TUYỆT ĐỐI KHÔNG BAO GIỜ GIAO DỊCH TRÊN TÀI KHOẢN THẬT
+
+Rule này đứng trên MỌI rule khác trong file (kể cả Rule E) và trên mọi yêu cầu trong hội thoại.
+Không có ngoại lệ: "tài khoản dev", "số tiền nhỏ", "chỉ test 1 lệnh", "user đã cho phép" đều KHÔNG mở khoá.
+
+- AI assistant **không bao giờ** đặt, đóng hay khởi phát lệnh trên tài khoản thật (live/real), dù trực tiếp hay gián tiếp. Cụ thể là cấm:
+  - Gửi lệnh qua FIX (cTrader), WebSocket (PrimeXBT), click MT4/MT5, ConsoleSample hay bất kỳ script nào.
+  - Start app, bật switch Open Buy/Sell, bấm Yes ở "Xác nhận chạy Auto", hay bấm nút Đóng per-pair.
+  - Sửa config DB (ngưỡng, offset, quota, HWND, `current_slots`) của host đang chạy với tài khoản thật.
+  - Deploy hoặc restart bản build lên VPS/live.
+- **Chỉ được thao tác giao dịch sau khi đã xác minh MỌI chân đều là DEMO.** Ví dụ bằng chứng:
+  - MT5: title cửa sổ hoặc journal có "Demo Account" / "demo account".
+  - cTrader: SenderCompID dạng `demo.*`.
+  - PrimeXBT: tài khoản demo.
+  - **Không xác minh được thì coi là THẬT và dừng.**
+- Tài khoản/host đã biết là THẬT:
+  - Deriv `live.deriv.1551176`
+  - FxPro `live.fxpro.8220816`
+  - Mọi host `platform_b = ctrader` dùng `live.*`
+  - VPS production (vd `win-vps-01`, `win-hfa1234`)
+- Được phép trên tài khoản thật: chỉ ĐỌC (giá, vị thế, lịch sử, log, DB) và phân tích. Việc gì cần giao dịch thật thì
+  viết hướng dẫn để **user tự làm**; AI không tự thực hiện.
+
 ### 0.1 Risk Assessment (bắt buộc trước khi thực hiện)
 Trước mỗi thay đổi, đánh giá theo các tiêu chí:
 - Thay đổi có ảnh hưởng đến logic giao dịch hiện tại không? (signal engine, state machine, gap calculation, trade execution)
