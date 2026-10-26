@@ -58,6 +58,10 @@ public interface IRuntimeConfigProvider
     CTraderFixConfig CurrentCTraderFixConfig => CTraderFixConfig.Empty;
     PrimeXbtConfig CurrentPrimeXbtConfig => PrimeXbtConfig.Empty;
 
+    // Offset (point) cộng vào giá Bid/Ask sàn B sau khi đổi sang point. Default 0 = không dịch.
+    int CurrentBBidOffsetPts => 0;
+    int CurrentBAskOffsetPts => 0;
+
     // Thời điểm ứng dụng quan sát thấy Bid/Ask thực sự thay đổi trên từng sàn.
     // Default null giữ tương thích với các provider tối giản; production provider
     // phải cập nhật các giá trị này trên mỗi dashboard snapshot.

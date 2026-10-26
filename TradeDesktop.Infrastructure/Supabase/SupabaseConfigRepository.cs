@@ -100,6 +100,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CloseRdStartSameActionLockSeconds: row.CloseRdStartSameActionLockSeconds,
             CloseRdEndSameActionLockSeconds: row.CloseRdEndSameActionLockSeconds,
             CTraderConfirmLatencyB: row.CTraderConfirmLatencyB,
+            // Signed, không clamp: offset âm hợp lệ.
+            BBidOffsetPts: row.BBidOffsetPts,
+            BAskOffsetPts: row.BAskOffsetPts,
             RdStartPostCloseLockSeconds: row.RdStartPostCloseLockSeconds,
             RdEndPostCloseLockSeconds: row.RdEndPostCloseLockSeconds,
             RdStartPostOpenLockSeconds: row.RdStartPostOpenLockSeconds,
@@ -357,6 +360,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("close_rd_start_same_action_lock_seconds", out var closeRdStartSameActionLockSecondsElement);
         first.TryGetProperty("close_rd_end_same_action_lock_seconds", out var closeRdEndSameActionLockSecondsElement);
         first.TryGetProperty("ctrader_confirm_latency_b", out var ctraderConfirmLatencyBElement);
+        first.TryGetProperty("b_bid_offset_pts", out var bBidOffsetPtsElement);
+        first.TryGetProperty("b_ask_offset_pts", out var bAskOffsetPtsElement);
         first.TryGetProperty("rd_start_post_close_lock_seconds", out var rdStartPostCloseLockSecondsElement);
         first.TryGetProperty("rd_end_post_close_lock_seconds", out var rdEndPostCloseLockSecondsElement);
         first.TryGetProperty("rd_start_post_open_lock_seconds", out var rdStartPostOpenLockSecondsElement);
@@ -437,6 +442,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CloseRdStartSameActionLockSeconds = closeRdStartSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && closeRdStartSameActionLockSecondsElement.TryGetInt32(out var closeRdStartSameActionLockSeconds) ? closeRdStartSameActionLockSeconds : (int?)null,
             CloseRdEndSameActionLockSeconds = closeRdEndSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && closeRdEndSameActionLockSecondsElement.TryGetInt32(out var closeRdEndSameActionLockSeconds) ? closeRdEndSameActionLockSeconds : (int?)null,
             CTraderConfirmLatencyB = ctraderConfirmLatencyBElement.ValueKind == JsonValueKind.Number && ctraderConfirmLatencyBElement.TryGetInt32(out var ctraderConfirmLatencyB) ? ctraderConfirmLatencyB : (int?)null,
+            BBidOffsetPts = bBidOffsetPtsElement.ValueKind == JsonValueKind.Number && bBidOffsetPtsElement.TryGetInt32(out var bBidOffsetPts) ? bBidOffsetPts : 0,
+            BAskOffsetPts = bAskOffsetPtsElement.ValueKind == JsonValueKind.Number && bAskOffsetPtsElement.TryGetInt32(out var bAskOffsetPts) ? bAskOffsetPts : 0,
             RdStartPostCloseLockSeconds = rdStartPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostCloseLockSecondsElement.TryGetInt32(out var rdStartPostCloseLockSeconds) ? rdStartPostCloseLockSeconds : 300,
             RdEndPostCloseLockSeconds = rdEndPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostCloseLockSecondsElement.TryGetInt32(out var rdEndPostCloseLockSeconds) ? rdEndPostCloseLockSeconds : 300,
             RdStartPostOpenLockSeconds = rdStartPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostOpenLockSecondsElement.TryGetInt32(out var rdStartPostOpenLockSeconds) ? rdStartPostOpenLockSeconds : 0,
@@ -545,6 +552,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("close_rd_start_same_action_lock_seconds", out var closeRdStartSameActionLockSecondsElement);
         first.TryGetProperty("close_rd_end_same_action_lock_seconds", out var closeRdEndSameActionLockSecondsElement);
         first.TryGetProperty("ctrader_confirm_latency_b", out var ctraderConfirmLatencyBElement);
+        first.TryGetProperty("b_bid_offset_pts", out var bBidOffsetPtsElement);
+        first.TryGetProperty("b_ask_offset_pts", out var bAskOffsetPtsElement);
         first.TryGetProperty("rd_start_post_close_lock_seconds", out var rdStartPostCloseLockSecondsElement);
         first.TryGetProperty("rd_end_post_close_lock_seconds", out var rdEndPostCloseLockSecondsElement);
         first.TryGetProperty("rd_start_post_open_lock_seconds", out var rdStartPostOpenLockSecondsElement);
@@ -623,6 +632,8 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CloseRdStartSameActionLockSeconds = closeRdStartSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && closeRdStartSameActionLockSecondsElement.TryGetInt32(out var closeRdStartSameActionLockSeconds) ? closeRdStartSameActionLockSeconds : (int?)null,
             CloseRdEndSameActionLockSeconds = closeRdEndSameActionLockSecondsElement.ValueKind == JsonValueKind.Number && closeRdEndSameActionLockSecondsElement.TryGetInt32(out var closeRdEndSameActionLockSeconds) ? closeRdEndSameActionLockSeconds : (int?)null,
             CTraderConfirmLatencyB = ctraderConfirmLatencyBElement.ValueKind == JsonValueKind.Number && ctraderConfirmLatencyBElement.TryGetInt32(out var ctraderConfirmLatencyB) ? ctraderConfirmLatencyB : (int?)null,
+            BBidOffsetPts = bBidOffsetPtsElement.ValueKind == JsonValueKind.Number && bBidOffsetPtsElement.TryGetInt32(out var bBidOffsetPts) ? bBidOffsetPts : 0,
+            BAskOffsetPts = bAskOffsetPtsElement.ValueKind == JsonValueKind.Number && bAskOffsetPtsElement.TryGetInt32(out var bAskOffsetPts) ? bAskOffsetPts : 0,
             RdStartPostCloseLockSeconds = rdStartPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostCloseLockSecondsElement.TryGetInt32(out var rdStartPostCloseLockSeconds) ? rdStartPostCloseLockSeconds : 300,
             RdEndPostCloseLockSeconds = rdEndPostCloseLockSecondsElement.ValueKind == JsonValueKind.Number && rdEndPostCloseLockSecondsElement.TryGetInt32(out var rdEndPostCloseLockSeconds) ? rdEndPostCloseLockSeconds : 300,
             RdStartPostOpenLockSeconds = rdStartPostOpenLockSecondsElement.ValueKind == JsonValueKind.Number && rdStartPostOpenLockSecondsElement.TryGetInt32(out var rdStartPostOpenLockSeconds) ? rdStartPostOpenLockSeconds : 0,
@@ -958,6 +969,13 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         // CHỈ dùng khi platform_b = ctrader. null (hoặc B là MT) = dùng chung confirm_latency như trước task R8-B.
         [JsonPropertyName("ctrader_confirm_latency_b")]
         public int? CTraderConfirmLatencyB { get; set; }
+
+        // Offset (point, có thể âm) cộng vào giá Bid/Ask sàn B sau khi đổi sang point. 0 = không dịch.
+        [JsonPropertyName("b_bid_offset_pts")]
+        public int BBidOffsetPts { get; set; }
+
+        [JsonPropertyName("b_ask_offset_pts")]
+        public int BAskOffsetPts { get; set; }
 
         [JsonPropertyName("rd_start_post_close_lock_seconds")]
         public int RdStartPostCloseLockSeconds { get; set; } = 300;

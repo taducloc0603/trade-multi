@@ -4,6 +4,7 @@ using System.IO.MemoryMappedFiles;
 using System.Text;
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
+using TradeDesktop.Application.Services;
 
 namespace TradeDesktop.Infrastructure.MarketData;
 
@@ -138,6 +139,14 @@ public sealed class SharedMemoryMarketDataReader : ISharedMemoryReader
                 : isPrimeXbtB
                     ? _primeXbtQuoteSession!.Read(sanA, _runtimeConfigProvider.CurrentPoint, _runtimeConfigProvider.CurrentConfirmLatencyMsBEffective)
                     : ReadExchangeMetrics(mapName2, "SanB");
+
+            // Offset point từ DB (b_bid_offset_pts / b_ask_offset_pts) áp cho MỌI nguồn B trước khi phát snapshot.
+            // Dòng [STATS] bên trong session cTrader/PrimeXBT vẫn tính trên giá thô.
+            sanB = BPriceOffsetApplier.Apply(
+                sanB,
+                _runtimeConfigProvider.CurrentBBidOffsetPts,
+                _runtimeConfigProvider.CurrentBAskOffsetPts,
+                _runtimeConfigProvider.CurrentPoint);
 
             SnapshotReceived?.Invoke(this, new SharedMemorySnapshot(sanA, sanB, DateTime.UtcNow));
         }

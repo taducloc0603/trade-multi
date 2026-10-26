@@ -79,4 +79,7 @@ public sealed record ConfigRecord(
     GapStabilityConfig? CloseGapStability = null,
     int SignalCycleSize = 10,
     // Trần cho GAP CUỐI của Open Cycle. null = tắt gate; 0 và số âm vẫn hiệu lực.
-    int? OpenMaxLastGapPts = null);
+    int? OpenMaxLastGapPts = null,
+    // Offset (point) cộng vào giá Bid/Ask sàn B sau khi đổi sang point. 0 = không dịch; số âm hợp lệ, KHÔNG clamp.
+    int BBidOffsetPts = 0,
+    int BAskOffsetPts = 0);

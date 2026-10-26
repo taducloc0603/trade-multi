@@ -797,6 +797,7 @@ public sealed class ConfigViewModel : ObservableObject
             _runtimeConfigState.UpdateManualTradeHwnd(BuildManualHwndColumns());
             _runtimeConfigState.UpdateCTraderFix(loadResult.CTraderFix);
             _runtimeConfigState.UpdatePrimeXbt(loadResult.PrimeXbt);
+            _runtimeConfigState.UpdateBPriceOffsets(loadResult.BBidOffsetPts, loadResult.BAskOffsetPts);
 
             IsExistingRecordLoaded = true;
             AreMapNamesEnabled = true;

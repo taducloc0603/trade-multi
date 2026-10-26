@@ -151,7 +151,9 @@ public sealed class ConfigService(
             scheduleSleepingJson: record.ScheduleSleepingJson,
             openGapStability: record.OpenGapStability,
             closeGapStability: record.CloseGapStability,
-            openMaxLastGapPts: record.OpenMaxLastGapPts) with { CTraderFix = ctraderFix, PrimeXbt = primeXbt };
+            openMaxLastGapPts: record.OpenMaxLastGapPts,
+            bBidOffsetPts: record.BBidOffsetPts,
+            bAskOffsetPts: record.BAskOffsetPts) with { CTraderFix = ctraderFix, PrimeXbt = primeXbt };
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -316,7 +318,11 @@ public sealed record ConfigLoadResult(
     // Đặt CUỐI danh sách để không làm lệch các tham số positional mà Success(...) đang truyền.
     int? CTraderConfirmLatencyB = null,
     // Khối primexbt trong sans_json (kể cả ngưỡng latency B riêng); Empty khi máy chưa cấu hình PrimeXBT.
-    PrimeXbtConfig? PrimeXbt = null)
+    PrimeXbtConfig? PrimeXbt = null,
+    // Offset (point) cộng vào giá Bid/Ask sàn B sau khi đổi sang point, áp ở reader trước mọi xử lý.
+    // 0 = không dịch; số âm hợp lệ, KHÔNG clamp. Đặt CUỐI để không lệch tham số positional.
+    int BBidOffsetPts = 0,
+    int BAskOffsetPts = 0)
 {
     public static ConfigLoadResult Success(
         string machineHostName,
@@ -386,7 +392,9 @@ public sealed record ConfigLoadResult(
         GapStabilityConfig? closeGapStability = null,
         int signalCycleSize = 10,
         int? openMaxLastGapPts = null,
-        int? ctraderConfirmLatencyB = null) =>
+        int? ctraderConfirmLatencyB = null,
+        int bBidOffsetPts = 0,
+        int bAskOffsetPts = 0) =>
         new(
             true,
             true,
@@ -462,7 +470,10 @@ public sealed record ConfigLoadResult(
             signalCycleSize,
             // Signed, không clamp: null = tắt gate, 0 và số âm vẫn hiệu lực.
             openMaxLastGapPts,
-            CTraderConfirmLatencyB: ctraderConfirmLatencyB);
+            CTraderConfirmLatencyB: ctraderConfirmLatencyB,
+            // Signed, không clamp.
+            BBidOffsetPts: bBidOffsetPts,
+            BAskOffsetPts: bAskOffsetPts);
 
     public static ConfigLoadResult NotFound(string machineHostName) =>
         new(

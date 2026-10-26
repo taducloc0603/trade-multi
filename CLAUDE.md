@@ -529,6 +529,19 @@ TradeDesktop.Tests/            # xUnit tests
   (chỉ ghi WARN vào `startup.log`). Lỗi khác vẫn hiện hộp thoại nhưng qua `Dispatcher.BeginInvoke`.
   **Đừng gọi `MessageBox.Show` đồng bộ trong handler đó** — chặn finalizer thread của cả process.
 
+### Offset giá sàn B (`b_bid_offset_pts` / `b_ask_offset_pts`)
+
+- Offset point (có thể âm, riêng Bid/Ask) cộng vào giá B tại `SharedMemoryMarketDataReader` qua
+  `BPriceOffsetApplier` — điểm hội tụ DUY NHẤT của mọi nguồn B (MMF, cTrader, PrimeXBT) trước `SnapshotReceived`.
+  User chốt dịch **giá B thô**, không chỉ gap: profit chân B (`CalculateTradeProfit`) → `LastProfitSnapshot` → TP và
+  priority close (Rule D), cùng slippage chân B, đều lệch theo offset so với giá khớp thật. Đó là CỐ Ý.
+  Gate `min_profit_to_close` không bị ảnh hưởng vì chỉ dùng chân A.
+- Spread B KHÔNG dịch (field `Spread` lấy từ nguồn) → guard spread vẫn đo spread thị trường. Dòng `[STATS]`
+  trong session cTrader/PrimeXBT tính trên giá thô nên `gap_buy_pts` ở đó lệch gap của app đúng bằng offset.
+- Cập nhật qua `RuntimeConfigState.UpdateBPriceOffsets`, **không** qua `Update(...)`: số âm hợp lệ nên sentinel `-1`
+  không dùng được. Không thêm `Math.Max`/`Abs` ở bất kỳ tầng nào. Test khoá: `BPriceOffsetApplierTests`,
+  `Config/BPriceOffsetConfigMappingTests`.
+
 ### Latency hai chân KHÔNG cùng ngữ nghĩa
 
 - Chân A (MMF): `LatencyMs` là ĐỘ TRỄ TRUYỀN tick, chỉ đổi khi có tick mới.

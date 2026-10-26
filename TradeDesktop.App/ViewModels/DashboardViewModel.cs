@@ -404,6 +404,7 @@ public sealed class DashboardViewModel : ObservableObject
     private string _exchangeBBid = "-";
     private string _exchangeBAsk = "-";
     private string _exchangeBSpread = "-";
+    private string _exchangeBOffsetText = "Bid 0 / Ask 0";
     private string _exchangeBLatencyMs = "-";
     private string _exchangeBTps = "-";
     private string _exchangeBTime = "-";
@@ -599,6 +600,8 @@ public sealed class DashboardViewModel : ObservableObject
     public string ExchangeBBid { get => _exchangeBBid; private set => SetProperty(ref _exchangeBBid, value); }
     public string ExchangeBAsk { get => _exchangeBAsk; private set => SetProperty(ref _exchangeBAsk, value); }
     public string ExchangeBSpread { get => _exchangeBSpread; private set => SetProperty(ref _exchangeBSpread, value); }
+    // Offset point (b_bid_offset_pts / b_ask_offset_pts) đang cộng vào giá B; Bid/Ask B hiển thị đã gồm offset.
+    public string ExchangeBOffsetText { get => _exchangeBOffsetText; private set => SetProperty(ref _exchangeBOffsetText, value); }
     public string ExchangeBLatencyMs { get => _exchangeBLatencyMs; private set => SetProperty(ref _exchangeBLatencyMs, value); }
     public string ExchangeBTps { get => _exchangeBTps; private set => SetProperty(ref _exchangeBTps, value); }
     public string ExchangeBTime { get => _exchangeBTime; private set => SetProperty(ref _exchangeBTime, value); }
@@ -4189,6 +4192,9 @@ public sealed class DashboardViewModel : ObservableObject
             ? "Sàn B"
             : $"Sàn B ({_runtimeConfigState.MapName2})";
 
+        ExchangeBOffsetText = FormattableString.Invariant(
+            $"Bid {_runtimeConfigState.CurrentBBidOffsetPts:+0;-0;0} / Ask {_runtimeConfigState.CurrentBAskOffsetPts:+0;-0;0}");
+
         RuntimeSummary =
             $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  MinProfitToClose: {_runtimeConfigState.CurrentMinProfitToClose}  |  MaxLifeTime: {_runtimeConfigState.CurrentMaxLifeTimeBySecond}s  |  SOS A Distance: {_runtimeConfigState.CurrentSosTriggerAOpenDistancePts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  CTraderConfirmLatencyB: {(_runtimeConfigState.CurrentCTraderConfirmLatencyB is { } latencyB ? latencyB.ToString(CultureInfo.InvariantCulture) : "SHARED")} (effective {_runtimeConfigState.CurrentConfirmLatencyMsBEffective})  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
 
@@ -7636,6 +7642,10 @@ public sealed class DashboardViewModel : ObservableObject
                 _runtimeConfigState.UpdateManualTradeHwnd(result.ManualHwndColumns);
                 _runtimeConfigState.UpdateCTraderFix(result.CTraderFix);
                 _runtimeConfigState.UpdatePrimeXbt(result.PrimeXbt);
+                _runtimeConfigState.UpdateBPriceOffsets(result.BBidOffsetPts, result.BAskOffsetPts);
+                SafeVmLog(
+                    $"[CONFIG] b_bid_offset_pts={result.BBidOffsetPts} b_ask_offset_pts={result.BAskOffsetPts} " +
+                    "(cong vao gia B sau khi doi sang point; 0 = khong dich)");
                 IsShowConfigVisible = result.IsShowConfig == 1;
                 OnPropertyChanged(nameof(IsPlatformBPrimeXbt));
                 ResetTradingLogicState();
@@ -7652,7 +7662,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
                     DbInlineData =
-                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | signal_cycle_size={result.SignalCycleSize} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={FormatSameActionRange(result.RdStartSameActionLockSeconds, result.RdEndSameActionLockSeconds)} | close_rd_same_action={FormatSameActionRange(result.CloseRdStartSameActionLockSeconds, result.CloseRdEndSameActionLockSeconds)} |open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | open_max_last_gap_pts={result.OpenMaxLastGapPts?.ToString() ?? "null"} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | sos_trigger_a_open_distance_pts={result.SosTriggerAOpenDistancePts} | sos_trigger_after_seconds={result.SosTriggerAfterSeconds} | sos_close_confirm_gap_pts={result.SosCloseConfirmGapPts} | sos_close_gap_pts={result.SosCloseGapPts} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={SansJsonHelper.Redact(result.SansJson)}";
+                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | signal_cycle_size={result.SignalCycleSize} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={FormatSameActionRange(result.RdStartSameActionLockSeconds, result.RdEndSameActionLockSeconds)} | close_rd_same_action={FormatSameActionRange(result.CloseRdStartSameActionLockSeconds, result.CloseRdEndSameActionLockSeconds)} |open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | open_max_last_gap_pts={result.OpenMaxLastGapPts?.ToString() ?? "null"} | b_bid_offset_pts={result.BBidOffsetPts} | b_ask_offset_pts={result.BAskOffsetPts} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | sos_trigger_a_open_distance_pts={result.SosTriggerAOpenDistancePts} | sos_trigger_after_seconds={result.SosTriggerAfterSeconds} | sos_close_confirm_gap_pts={result.SosCloseConfirmGapPts} | sos_close_gap_pts={result.SosCloseGapPts} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={SansJsonHelper.Redact(result.SansJson)}";
                     IsDbInlineDataVisible = true;
                 }
                 else

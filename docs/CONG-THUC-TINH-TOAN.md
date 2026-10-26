@@ -49,6 +49,11 @@ gapSell = bAskPts - aBidPts;
 - `B` = sàn B, `A` = sàn A. `Bid`/`Ask` là giá realtime (decimal).
 - GapBuy dương = cơ hội mua (mua B / bán A). GapSell âm = cơ hội bán.
 - Điều kiện: cả 2 giá phải `HasValue`, nếu không gap = `null`.
+- **Offset giá B (`b_bid_offset_pts` / `b_ask_offset_pts`):** `B.Bid`/`B.Ask` ở trên là giá ĐÃ cộng offset
+  (point, có thể âm) tại reader: `B' = (B × Point + offset) / Point` (`BPriceOffsetApplier`). Vì vậy
+  `GapBuy = (int)(B.Bid_thô × Point) + b_bid_offset_pts − (int)(A.Ask × Point)` và
+  `GapSell = (int)(B.Ask_thô × Point) + b_ask_offset_pts − (int)(A.Bid × Point)`.
+  Offset cũng đi vào profit chân B và slippage chân B; Spread B giữ giá trị thật. `0` = không dịch.
 
 > ⚠️ **Lưu ý quan trọng (khác với cách viết thông thường):** code **ép `int` từng vế TRƯỚC khi trừ**
 > (`(int)(B.Bid×Point) − (int)(A.Ask×Point)`), **KHÔNG** phải `(int)((B.Bid − A.Ask) × Point)`.

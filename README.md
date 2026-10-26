@@ -355,6 +355,7 @@ những limit còn lại dùng `0` để disable):
 | `rd_start_post_close_lock_seconds` / `rd_end_post_close_lock_seconds` | Runtime post-close range | `int` | Random một lần cho mỗi Auto Close; chặn Auto Open cho tới hết deadline |
 | `rd_start_same_action_lock_seconds` / `rd_end_same_action_lock_seconds` | Runtime same-action range (Open) | `int?` | Random tại Auto Open dispatch, dùng cho Open cùng chiều→Open cùng chiều và Open→Close. Start hoặc end `NULL` = tắt |
 | `close_rd_start_same_action_lock_seconds` / `close_rd_end_same_action_lock_seconds` | Runtime same-action range (Close) | `int?` | Random tại Auto Close dispatch, dùng cho Close→Close. Start hoặc end `NULL` = tắt. Migration: `docs/CLOSE-SAME-ACTION-LOCK-MIGRATION.sql` |
+| `b_bid_offset_pts` / `b_ask_offset_pts` | `CurrentBBidOffsetPts` / `CurrentBAskOffsetPts` | `int` | Offset (point, **được phép âm**, không clamp) cộng vào giá Bid / Ask sàn B sau khi đổi sang point: `B' = (B × point + offset) / point`. Áp tại `SharedMemoryMarketDataReader` cho mọi nguồn B **trước** mọi xử lý → gap/signal/router, **profit chân B (TP, priority close), slippage chân B**, UI và log đều thấy giá đã dịch. Spread B giữ giá trị thật. `0` (default, hoặc DB chưa có cột) = không dịch. Có hiệu lực sau Reconnect. Migration: `docs/B-PRICE-OFFSET-MIGRATION.sql` |
 
 **Signal cycle và price-freeze:**
 

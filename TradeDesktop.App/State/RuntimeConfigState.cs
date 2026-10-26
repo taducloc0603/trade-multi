@@ -123,6 +123,10 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public CTraderFixConfig CurrentCTraderFixConfig { get; private set; } = CTraderFixConfig.Empty;
     // Khối sans_json.primexbt. Cập nhật qua UpdatePrimeXbt (KHÔNG qua Update(...)) nên không dính bẫy sentinel.
     public PrimeXbtConfig CurrentPrimeXbtConfig { get; private set; } = PrimeXbtConfig.Empty;
+    // Offset (point) cộng vào giá Bid/Ask sàn B sau khi đổi sang point (b_bid_offset_pts / b_ask_offset_pts).
+    // Số âm hợp lệ nên KHÔNG đi qua Update(...) (sentinel -1 không dùng được) — chỉ cập nhật qua UpdateBPriceOffsets.
+    public int CurrentBBidOffsetPts { get; private set; }
+    public int CurrentBAskOffsetPts { get; private set; }
     public string CurrentPlatformA { get; private set; } = "mt5";
     public string CurrentPlatformB { get; private set; } = "mt5";
     public string CurrentChartHwndA { get; private set; } = string.Empty;
@@ -685,6 +689,13 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public void UpdatePrimeXbt(PrimeXbtConfig? primeXbt)
     {
         CurrentPrimeXbtConfig = (primeXbt ?? PrimeXbtConfig.Empty).Normalize();
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void UpdateBPriceOffsets(int bidOffsetPts, int askOffsetPts)
+    {
+        CurrentBBidOffsetPts = bidOffsetPts;
+        CurrentBAskOffsetPts = askOffsetPts;
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
