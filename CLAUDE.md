@@ -134,6 +134,9 @@ hiện tại là tổng `5`, cận trên Buy `3`, cận trên Sell `3`. `Portfol
 - **SOS vẫn bị gate đầy đủ** — chỉ *cooldown* của SOS được bypass, không phải min_profit.
   Manual per-pair và recovery bỏ qua gate hoàn toàn (không đi qua vòng lặp auto-close).
 - Slot bị chặn chỉ `continue`; cửa sổ close engine KHÔNG bị reset nên tick sau thử lại.
+- **Lệch chấp nhận với sàn C (Fast Leg):** lúc C báo TooFast mà `applyToExit` bật thì mọi Normal Close/TP cùng bị hoãn
+  (verdict chung cho cả tick ⇒ thứ tự ưu tiên khi thả vẫn đúng), nhưng SOS bỏ qua C. Nên trong lúc đó một slot SOS lợi
+  nhuận thấp có thể đóng trước slot Normal lợi nhuận cao. Cố ý, đã chủ dự án chốt (D5) — đừng "sửa" bằng cách gate SOS.
 
 ### Rule E — Signal-only mandate (HIGHEST — đứng trên tất cả)
 - **Quy tắc cao nhất**: MỌI điều kiện OPEN/CLOSE một vị thế cân bằng PHẢI bắt nguồn từ signal engine.
@@ -165,6 +168,9 @@ hiện tại là tổng `5`, cận trên Buy `3`, cận trên Sell `3`. `Portfol
      và throttle `WatchdogSelfHealMinIntervalSeconds`. Decision thuần ở `WatchdogSelfHealDecision.Decide`.
 - **Khi thêm path mở/đóng mới**: nếu KHÔNG qua signal engine thì BẮT BUỘC phải là recovery/integrity
   rõ ràng, có guard chống đóng/mở nhầm, và phải document thêm vào danh sách exception ở trên.
+- **Sàn C (Fast Leg) KHÔNG phải nguồn signal**: nó chỉ CHẶN Open hoặc HOÃN một signal engine đã tạo (trong engine và ở
+  router), không bao giờ tự tạo open/close và không bao giờ đặt lệnh. Code `*FastLeg*` không được gọi đường đặt lệnh nào
+  (recheck A6 grep `OpenPairAsync`, `SendOrderAsync`, `TryMarkCloseTriggered`, `AllocatePendingOpenSlot`, ...).
 
 ### Rule F — Close ownership contract (KHÔNG ĐƯỢC THAY ĐỔI NGẦM)
 
@@ -570,6 +576,41 @@ TradeDesktop.Tests/            # xUnit tests
 - Hera `closed-positions-history`: mới nhất trước, 20 dòng/trang, `links.next` là **object `{cursorId}`** chứ không phải URL;
   `pnl` là TIỀN (move × lot × lot_size). Session chỉ đọc trang đầu (đủ cho các lần đóng gần đây).
 
+### Sàn C "Fast Leg" (`fast_leg`, docs/plans/fast-leg)
+
+- Terminal MT5 THỨ BA chỉ để lấy giá (EA `DataExporter`, `EA_CHANNEL_ID="C"` ⇒ `Local\MT_C_Tick` + heartbeat
+  `Local\MT_C_Trades`). Quy tắc **quiet**: giá giữa C đi `|move| >= maxMovePts` trong `windowMs` ⇒ TooFast. Tài khoản C
+  được là tài khoản THẬT vì không bao giờ có lệnh đi sang C — nhưng terminal C vẫn để `AllowLiveTrading=0` + Algo off.
+- **Cài EA kênh C nhầm "A"/"B" sẽ GHI ĐÈ giá chân đang giao dịch** (`CreateFileMappingW` mở lại map có sẵn). Terminal C
+  phải chạy cùng Windows session với app (`Local\`). Start chỉ WARN khi symbol + giá C trùng A/B — không chặn.
+- Cấu hình là cột JSONB RIÊNG `fast_leg` (không nhét vào `sans`: Config dựng lại `sans` mỗi lần lưu và xoá key lạ).
+  `null` / `enabled=false` ⇒ `snapshot.FastLeg = null` ⇒ engine Y HỆT bản cũ (test khoá). JSON hỏng hoặc không phải
+  object ⇒ C TẮT + `[FAST_LEG][ERROR]`, phần config còn lại vẫn chạy. Runtime cập nhật qua
+  `RuntimeConfigState.UpdateFastLeg`, KHÔNG qua `Update(...)` (bẫy sentinel). Config UI chỉ ghi cột khi mục Sàn C bị sửa
+  (`FastLegFormLogic.Decide`) — mở Config rồi Save không được đụng `fast_leg`. Số thập phân chỉ nhận dấu chấm.
+- Verdict tính MỘT lần mỗi tick (`EvaluateFastLegSafely` ngay sau `Map`, có try/catch) rồi dùng chung cho gap-tick, dải
+  UI, STATS, health và snapshot. Thứ tự: Down → Stale → TooFast → Confirmed.
+  `BlocksOpen = filter ∧ Kind≠Confirmed ∧ ¬(failOpen ∧ Down/Stale)`; `BlocksClose = filter ∧ applyToExit ∧ TooFast`.
+  **Close không bao giờ chờ C hỏng** (D6): Down/Stale luôn cho đóng.
+- **Gate trong engine KHÔNG reset cycle** (D4): chặn ⇒ trả `null`, tick sau hỏi lại. Đó là lý do có trần
+  `maxDeferMs` (500..10000, mặc định 3000): quá trần ⇒ `state.Reset` + `[FAST_LEG][ABANDON] reason=defer_timeout`. Bỏ
+  trần là quay lại lỗi `_gaps` phình vô hạn (pitfall treo UI). Mọi điểm reset (`Reset()`, cycle đổi/vỡ, `max_last_gap`,
+  `max_times_tick`, `ResetGapState`, `ResetTpCycle`) PHẢI bỏ trạng thái hoãn (`FastLegDeferState.Abandon`) — thêm điểm
+  reset mới mà quên là defer cũ lẫn sang cycle mới. Gate Open đặt SAU `open_max_times_tick`; `TriggeredAtUtc` = tick thả.
+- SOS Close bỏ qua C hoàn toàn (D5); `NORMAL_FALLBACK` (SOS active nhưng dùng ngưỡng Normal) VẪN bị lọc.
+  Manual per-pair / Recovery không đi qua engine nên không bị C ảnh hưởng.
+- Router re-check chỉ cho Open (`FastLegOpenPolicy`), mã `FAST_LEG_TOO_FAST` / `FAST_LEG_STALE` / `FAST_LEG_DOWN` —
+  cố ý KHÔNG đặt dạng `LATEST_*_INVALID`. Chỉ lượt SAU mutex ghi `[ROUTER][WARN] Open blocked by fast leg`. Router
+  chặn ⇒ signal MẤT (engine đã reset), giống các khối `LATEST_*`.
+- Gap-tick: `c_bid= c_ask= c_age= c_move= c_verdict=` chèn TRƯỚC ` point=` (test khoá `EndsWith(" point=100")`); C tắt
+  ⇒ dòng giống hệt từng byte. Log hoãn `[FAST_LEG][DEFER|RELEASE|ABANDON]` đi `LogVerbose`, mỗi cycle 1 DEFER + đúng 1
+  RELEASE hoặc ABANDON.
+- Telegram `FAST_LEG_DOWN` chỉ sau Down/Stale LIÊN TỤC ≥ 30 s (Stale chập chờn của feed thưa là bình thường), một lần mỗi
+  đợt; `FAST_LEG_RECOVERED` khi có verdict lại; chỉ khi `IsTradingLogicEnabled`. Tắt terminal C KHÔNG phải kill switch:
+  với `failOpen=false` nó chặn mọi Open — kill switch là `docs/plans/fast-leg/KILL-SWITCH.md`.
+- Ngưỡng Long (`maxMovePts=5`) đo trên cặp THINK–GTC. Với feed Exness đo 2026-11-03: `|move|` p90 ~16 pt, Stale ~9 % ⇒
+  chặn Open ~33 % thời gian. Chọn ngưỡng bằng `observe` + `docs/plans/fast-leg/tools/fast-leg-report.py`, đừng đoán.
+
 ### Unobserved task exception từ socket FIX
 
 - QuickFIX/n 1.10 đọc socket bằng `BeginRead` + `WaitOne`; khi phiên FIX ngắt, nó đóng stream lúc lệnh đọc
@@ -745,6 +786,9 @@ New code MUST NOT introduce new failures.
 - **TradeLocker `hermes`** (`wss://api.<cluster>.tradelocker.com/hermes`, RSocket + protobuf, KHÔNG chính thức) + REST hera +
   Keycloak/kerber: nguồn dữ liệu VÀ đường đặt lệnh sàn B khi `platform_b = tradelocker`. Refresh token Keycloak lưu DPAPI
   cục bộ. Tắt nhanh: `docs/plans/tradelocker/KILL-SWITCH.md`.
+- **Sàn C Fast Leg — terminal MT5 thứ ba** (EA `DataExporter` kênh `"C"`, MMF `Local\MT_C_Tick` + `Local\MT_C_Trades`):
+  nguồn giá CHỈ để lọc lệnh, không bao giờ đặt lệnh. Bật/tắt bằng cột `fast_leg` (JSONB) hoặc mục "Sàn C" trong Config.
+  Tắt nhanh: `docs/plans/fast-leg/KILL-SWITCH.md`.
 - **cTrader FIX API** (QuickFIX/n 1.10.0): nguồn dữ liệu VÀ đường đặt lệnh của sàn B khi `platform_b = ctrader`.
   Sàn B production là Deriv `live.deriv.1551176` — FxPro chặn đặt lệnh qua FIX (`CHANNEL_IS_BLOCKED`).
   Chỉ `QuickFixCTraderTransport` chạm kiểu QuickFIX; `CTraderTradeSession.SendMarketOrderAsync` là đường DUY

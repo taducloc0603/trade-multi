@@ -451,6 +451,31 @@ Chrome có cổng debug). Giao thức là bản dò ngược web `app.tradelocke
 
 Chi tiết, kill switch và runbook live: `docs/plans/tradelocker/` (`KILL-SWITCH.md`, `phase-9-live-runbook.md`).
 
+**Sàn C "Fast Leg" (cột `fast_leg`, JSONB, tuỳ chọn)** — nguồn giá thứ ba (terminal MT5 riêng, EA `DataExporter` kênh
+`"C"`) CHỈ để lọc lệnh theo quy tắc *quiet*: giá giữa sàn C đi `|move| >= maxMovePts` trong `windowMs` ⇒ không mở lệnh
+(và hoãn Normal Close / TP nếu `applyToExit`). Sàn C **không bao giờ đặt lệnh**. `null` hoặc `enabled=false` ⇒ hành vi
+giống hệt bản chưa có sàn C. Sửa được trong cửa sổ Config, mục **Sàn C** (bỏ tick = tắt; nút **Check** đọc map và tự
+điền Symbol). Migration: `docs/FAST-LEG-MIGRATION.sql`.
+
+| Khoá `fast_leg` | Mặc định khi thiếu | Ý nghĩa |
+|---|---|---|
+| `enabled` | `false` | Bật sàn C |
+| `mapName` | `Local\MT_C_Tick` | Map tick của EA kênh C; KHÔNG được trùng map A/B |
+| `heartbeatMapName` | suy từ `mapName` (`_Tick` ⇒ `_Trades`) | Heartbeat 50 ms để tách Down (terminal chết/mất kết nối) khỏi Stale |
+| `symbol` | `""` (không kiểm) | Symbol phải khớp record tick của EA |
+| `mode` | `observe` | `observe` = chỉ ghi verdict; `filter` = chặn/hoãn |
+| `rule` | `quiet` | Chỉ hỗ trợ `quiet` |
+| `maxMovePts` | `10` | \|move\| ≥ ngưỡng ⇒ TooFast (point theo cột `point`). Long dùng `5` |
+| `windowMs` | `200` | Cửa sổ đo, 1..5000 |
+| `maxAgeMs` | `1000` | Tick C cũ hơn ⇒ Stale |
+| `maxDeferMs` | `3000` | Trần hoãn một signal trong engine, 500..10000; quá trần ⇒ bỏ signal, chờ cycle mới |
+| `failOpen` | `false` | `true` = tha Down/Stale cho Open |
+| `applyToExit` | `false` | Hoãn cả Normal Close / TP khi TooFast. SOS luôn bỏ qua sàn C; Close không bao giờ chờ C hỏng |
+
+Khoá sai kiểu / ngoài khoảng ⇒ sàn C TẮT + `[FAST_LEG][ERROR]`, phần config còn lại vẫn chạy. Chi tiết, kill switch,
+công cụ chọn ngưỡng và runbook live: `docs/plans/fast-leg/` (`README.md`, `KILL-SWITCH.md`, `phase-8-live-runbook.md`,
+`tools/fast-leg-report.py`).
+
 ### 7.2 Routing thực thi lệnh
 
 File: `TradeDesktop.App/Services/TradeExecutionRouter.cs`
@@ -625,6 +650,23 @@ Timestamp chỉ có giờ `HH:mm:ss.fff` (ngày của phiên nằm ở dòng `Da
 Giá trị không sẵn sàng tại tick ghi là `-`. Dòng được dựng bởi
 `TradeDesktop.Application/Services/GapTickLineFormatter.cs` (hàm thuần, dùng `InvariantCulture`
 nên dấu thập phân luôn là dấu chấm bất kể locale máy).
+
+Khi sàn C (`fast_leg`) bật, dòng có thêm 5 trường **chèn ngay trước `point=`** (để `point=` vẫn là trường cuối):
+
+```
+... b_lat=11 c_bid=3925.056 c_ask=3925.224 c_age=141 c_move=3.6 c_verdict=Confirmed point=100
+```
+
+| Trường | Ý nghĩa |
+|---|---|
+| `c_bid` / `c_ask` | Giá thô sàn C |
+| `c_age` | Tuổi tick C (ms) tại tick này |
+| `c_move` | Biên độ giá giữa C trong `windowMs` (point, có dấu) |
+| `c_verdict` | `Confirmed` / `TooFast` / `Stale` / `Down` |
+
+Sàn C tắt ⇒ dòng giống hệt từng byte định dạng cũ. Dòng `[SIGNAL]` trong `-signal-outcome.log` có thêm
+`fast_verdict= fast_move_pts= fast_age_ms= fast_deferred_ms=` (chỉ khi sàn C bật). Phân tích ngưỡng từ 3 file của
+phiên: `python -I docs/plans/fast-leg/tools/fast-leg-report.py <prefix phiên>`.
 
 ### 11.3 Level filter
 

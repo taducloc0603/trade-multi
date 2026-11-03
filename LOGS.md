@@ -45,7 +45,8 @@
 18. [[MMF_TRADES] / [MMF_HISTORY]](#mmf_trades--mmf_history--shared-memory-change-detection)
 19. [[MANUAL]](#manual--manual-trade-operations)
 20. [[SIGNAL_OUTCOME]](#signal_outcome--gap-sau-signal-file-rieng)
-21. [Debug by scenario](#debug-by-scenario)
+21. [[FAST_LEG]](#fast_leg--sàn-c-fast-leg)
+22. [Debug by scenario](#debug-by-scenario)
 
 ---
 
@@ -605,6 +606,56 @@ giới hạn cố ý (tick engine = đổi state machine, vi phạm Rule E), kh�
 
 ---
 
+## [FAST_LEG] — Sàn C Fast Leg
+
+**File:** `TradeDesktop.App/ViewModels/DashboardViewModel.cs`, `TradeDesktop.Application/Services/FastLeg/*`,
+`TradeDesktop.Infrastructure/MarketData/FastLegMmfSampler.cs`, `TradeDesktop.App/Services/TradeExecutionRouter.cs`
+
+**Dùng để làm gì:** sàn C (terminal MT5 thứ ba, EA kênh `"C"`) chỉ lọc lệnh theo quy tắc *quiet*. Nhóm log này cho
+biết cấu hình đang dùng, sức khoẻ feed C, và mọi lần C hoãn / bỏ / chặn một signal. Không có dòng nào nghĩa là sàn C
+tắt (`fast_leg=disabled` trong `[DB]` / `[CONFIG]`). Chi tiết: `docs/plans/fast-leg/README.md`.
+
+**Ví dụ:**
+```
+[FAST_LEG][INFO] config=filter|quiet|move5|win200|age1000|defer3000|failOpen0|exit1|map=Local\MT_C_Tick|hb=Local\MT_C_Trades|sym=XAUUSD
+[FAST_LEG][INFO] start verdict: verdict=Confirmed move_pts=0 velocity_pts_s=0 span_ms=0 age_ms=968 c_bid=3925.02 c_ask=3925.188 hb=alive down=-
+[FAST_LEG][STATS] ticks=219 samples=1201 p50_age=203 max_age=1281 p50_abs_move=0 p90_abs_move=23.3 toofast_pct=40.9 stale_pct=0.7 stale_hb_alive_pct=0.7 down_pct=0
+[FAST_LEG][DEFER] action=OPEN side=Buy slot=- cycle=<id> verdict=TooFast move_pts=6 age_ms=150 max_defer_ms=3000
+[FAST_LEG][RELEASE] action=OPEN side=Buy slot=- cycle=<id> verdict=Confirmed move_pts=1 deferred_ticks=3 deferred_ms=150
+[FAST_LEG][ABANDON] action=CLOSE side=Buy slot=1 cycle=<id> reason=cycle_reset deferred_ticks=2 deferred_ms=100
+[FAST_LEG][WARN] san C Down reason=terminal_disconnected
+[FAST_LEG][ERROR] FAST_LEG_DOWN ...                       (Telegram, sau Down/Stale liên tục >= 30 s)
+[FAST_LEG][INFO] FAST_LEG_RECOVERED san C hoat dong lai   (Telegram)
+[FAST_LEG][ERROR] FAST_LEG_NOT_READY_AT_START ...         (Telegram; filter bật mà C Down lúc Start)
+[FAST_LEG][ERROR] config invalid, fast leg DISABLED: ...
+[ROUTER][WARN] Open blocked by fast leg: code=FAST_LEG_TOO_FAST verdict=TooFast ...
+```
+
+| Dòng | Khi nào | Ghi chú |
+|---|---|---|
+| `[INFO] config=` / `start verdict:` | Mỗi lần Start | Kèm WARN nếu symbol + giá C trùng A/B (nghi EA gắn nhầm kênh) |
+| `[STATS]` | Mỗi 60 s, chạy cả khi chưa Start | `stale_hb_alive_pct` = Stale do feed thưa (terminal vẫn sống) — dữ liệu quyết lại D9 |
+| `[DEFER]` / `[RELEASE]` / `[ABANDON]` | Engine hoãn một signal (chỉ `mode=filter`) | File-only (`LogVerbose`); mỗi cycle 1 DEFER rồi đúng 1 RELEASE hoặc ABANDON |
+| `[WARN] san C Down` / `[INFO] san C hoat dong lai` | `DownReason` đổi (Down ⇄ có lại, hoặc đổi lý do) | File-only, chỉ ghi lúc đổi; chưa phải Telegram |
+| `[ERROR] FAST_LEG_DOWN` / `[INFO] FAST_LEG_RECOVERED` | Hỏng liên tục >= 30 s / có lại | Chỉ khi đang Start; một lần mỗi đợt |
+| `[ERROR] evaluate failed` | Exception khi tính verdict | Tick đó coi như C tắt; throttle 60 s |
+
+`reason=` của ABANDON: Open/Close dùng `cycle_reset`, `engine_reset`, `max_times_tick`, `max_last_gap` (chỉ Open),
+`defer_timeout`. TP dùng tên lý do reset cửa sổ TP viết thường: `target_not_reached`, `below_confirm`,
+`close_max_times_tick_exceeded`, `fast_leg_defer_timeout`, `engine_reset`, ...
+
+**Case đặc biệt:**
+- Router chặn Open ⇒ `SIGNAL_OPEN_BLOCKED reasonCode=FAST_LEG_TOO_FAST|FAST_LEG_STALE|FAST_LEG_DOWN`; signal đó mất
+  (engine đã reset cycle). Hiếm vì engine vừa xét cùng verdict vài ms trước.
+- Nhiều `ABANDON reason=defer_timeout` ⇒ C TooFast/Stale kéo dài hơn `maxDeferMs`; xem `[STATS]` và chạy
+  `docs/plans/fast-leg/tools/fast-leg-report.py`.
+- `down=heartbeat_stale` ⇒ EA C ngừng ghi heartbeat (terminal treo/đóng); `down=terminal_disconnected` ⇒ terminal C
+  mất kết nối server. Với `failOpen=false` cả hai chặn mọi Open, Close vẫn chạy.
+- Gap-tick có `c_*` trước `point=`; `-signal-outcome` có `fast_*` trên dòng `[SIGNAL]`; lifecycle có
+  `fastVerdict` / `fastMovePts` / `fastAgeMs` / `fastDeferredMs` (và `fastOpenVerdict` trên `SIGNAL_CLOSE_CONFIRMED`).
+
+---
+
 ## Debug by scenario
 
 | Vấn đề | Log cần xem |
@@ -617,6 +668,7 @@ giới hạn cố ý (tick engine = đổi state machine, vi phạm Rule E), kh�
 | Hệ thống bị pause | `[WATCHDOG]`, `[MARKET]` |
 | Cooldown không clear | `[SLOT][COOLDOWN][BLOCK]` + `[SLOT][COOLDOWN][CLEAR]` |
 | Telegram không nhận | `[NOTIFY]` |
+| Lệnh không mở dù có signal (sàn C bật) | `[FAST_LEG][DEFER]` / `[ABANDON]`, `[FAST_LEG][STATS]`, `[ROUTER][WARN] Open blocked by fast leg` |
 | Half-open (1 leg thành công, 1 leg thất bại) | `[ROUTER][WARN]`, `[MT4][WARN]`, `[MT5][WARN]`, `[CYCLE][ERROR]` |
 | Orphan slot sau restart | `[RECOVERY][WARN] foundA=false`, `[PERSIST]` |
 | Signal đúng hay sai (đánh giá chất lượng) | file `-signal-outcome.log`: `[SIGNAL_OUTCOME][END]`, lọc theo `stt` |
