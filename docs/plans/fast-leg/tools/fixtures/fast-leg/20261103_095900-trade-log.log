@@ -1,0 +1,17 @@
+[2026-11-03 09:59:00.010] [FAST_LEG][INFO] config=observe|quiet|move5|win200|age1000|defer3000|failOpen0|exit1|map=Local\MT_C_Tick|hb=Local\MT_C_Trades|sym=XAUUSD
+[2026-11-03 09:59:00.011] [FAST_LEG][INFO] start verdict: verdict=Confirmed move_pts=0 velocity_pts_s=0 span_ms=0 age_ms=120 c_bid=3925.02 c_ask=3925.188 hb=alive down=-
+[2026-11-03 10:00:00.500] [FAST_LEG][DEFER] action=OPEN side=Buy slot=- cycle=c1 verdict=TooFast move_pts=6 age_ms=150 max_defer_ms=3000
+[2026-11-03 10:00:00.650] [FAST_LEG][RELEASE] action=OPEN side=Buy slot=- cycle=c1 verdict=Confirmed move_pts=1 deferred_ticks=3 deferred_ms=150
+[2026-11-03 10:00:00.700] [FAST_LEG][DEFER] action=OPEN side=Sell slot=- cycle=c9 verdict=Stale move_pts=0 age_ms=1500 max_defer_ms=3000
+[2026-11-03 10:00:03.700] [FAST_LEG][ABANDON] action=OPEN side=Sell slot=- cycle=c9 reason=defer_timeout deferred_ticks=60 deferred_ms=3000
+[2026-11-03 10:00:03.800] [FAST_LEG][DEFER] action=CLOSE side=Buy slot=1 cycle=c7 verdict=TooFast move_pts=7 age_ms=80 max_defer_ms=3000
+[2026-11-03 10:00:03.900] [FAST_LEG][ABANDON] action=CLOSE side=Buy slot=1 cycle=c7 reason=cycle_reset deferred_ticks=2 deferred_ms=100
+[2026-11-03 10:00:01.050] [2026-11-03 10:00:01.050] [SIGNAL_OPEN_CONFIRMED][INFO] signalId=s1 cycleId=c1 pairId=AUTO-0000-1 slot=1 side=Buy signalAgeMs=400 aSlippagePts=1 aExecutionMs=250 bSlippagePts=-3 bExecutionMs=260 ticketA=1 ticketB=2 description="Hai chân A/B đã mở thành công"
+[2026-11-03 10:00:05.000] [2026-11-03 10:00:05.000] [SIGNAL_OPEN_CONFIRMED][INFO] signalId=s4 cycleId=c4 pairId=AUTO-0001-2 slot=2 side=Sell signalAgeMs=380 aSlippagePts=-2 bSlippagePts=-4 ticketA=3 ticketB=4 fastVerdict=TooFast fastMovePts=-7 fastAgeMs=60 fastDeferredMs=0 description="Hai chân A/B đã mở thành công"
+[2026-11-03 10:00:06.000] [ROUTER][WARN] Open blocked by fast leg: code=FAST_LEG_TOO_FAST verdict=TooFast move_pts=6.5 age_ms=70
+[2026-11-03 10:00:06.001] [2026-11-03 10:00:06.001] [SIGNAL_OPEN_BLOCKED][WARN] signalId=s5 reasonCode=FAST_LEG_TOO_FAST description="Không mở vì giá sàn C đang chạy quá nhanh"
+[2026-11-03 10:00:07.000] [2026-11-03 10:00:07.000] [SIGNAL_OPEN_BLOCKED][WARN] signalId=s6 reasonCode=QUOTA_BUY_FULL description="quota"
+[2026-11-03 10:00:30.000] [FAST_LEG][STATS] ticks=100 samples=1000 p50_age=400 max_age=1800 p50_abs_move=0 p90_abs_move=9 toofast_pct=20 stale_pct=10 stale_hb_alive_pct=10 down_pct=0
+[2026-11-03 10:01:30.000] [FAST_LEG][STATS] ticks=300 samples=3000 p50_age=200 max_age=1200 p50_abs_move=1 p90_abs_move=12 toofast_pct=40 stale_pct=2 stale_hb_alive_pct=2 down_pct=1
+[2026-11-03 10:02:00.000] [FAST_LEG][ERROR] FAST_LEG_DOWN san C hong 31s reason=heartbeat_stale
+[2026-11-03 10:03:00.000] [FAST_LEG][INFO] FAST_LEG_RECOVERED san C hoat dong lai

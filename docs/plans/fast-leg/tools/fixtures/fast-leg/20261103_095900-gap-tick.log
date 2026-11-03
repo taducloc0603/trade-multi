@@ -1,0 +1,11 @@
+[09:59:00.000] ===== GAP TICK START =====
+[09:59:00.000] Date: 2026-11-03
+[09:59:00.000] Host: fixture
+[09:59:00.000] [GAP_TICK][LEGEND] fixture
+[09:59:59.850] [GAP_TICK] gap_buy=-16 gap_sell=26 a_sym=XAUUSD.s a_bid=3924.7 a_ask=3925.06 a_spread=0.36 a_lat=47 b_sym=XAUUSD.s b_bid=3924.9 b_ask=3924.96 b_spread=0.06 b_lat=47 point=100
+[09:59:59.900] [GAP_TICK] gap_buy=-16 gap_sell=26 a_sym=XAUUSD.s a_bid=3924.7 a_ask=3925.06 a_spread=0.36 a_lat=47 b_sym=XAUUSD.s b_bid=3924.9 b_ask=3924.96 b_spread=0.06 b_lat=47 c_bid=3925.05 c_ask=3925.22 c_age=100 c_move=1 c_verdict=Confirmed point=100
+[09:59:59.950] [GAP_TICK] gap_buy=-16 gap_sell=26 a_sym=XAUUSD.s a_bid=3924.7 a_ask=3925.06 a_spread=0.36 a_lat=47 b_sym=XAUUSD.s b_bid=3924.9 b_ask=3924.96 b_spread=0.06 b_lat=47 c_bid=3925.11 c_ask=3925.28 c_age=150 c_move=-6 c_verdict=TooFast point=100
+[10:00:00.000] [GAP_TICK] gap_buy=-16 gap_sell=26 a_sym=XAUUSD.s a_bid=3924.7 a_ask=3925.06 a_spread=0.36 a_lat=47 b_sym=XAUUSD.s b_bid=3924.9 b_ask=3924.96 b_spread=0.06 b_lat=47 c_bid=3925.11 c_ask=3925.28 c_age=1200 c_move=3 c_verdict=Stale point=100
+[10:00:00.050] [GAP_TICK] gap_buy=-16 gap_sell=26 a_sym=XAUUSD.s a_bid=3924.7 a_ask=3925.06 a_spread=0.36 a_lat=47 b_sym=XAUUSD.s b_bid=3924.9 b_ask=3924.96 b_spread=0.06 b_lat=47 c_bid=- c_ask=- c_age=- c_move=0 c_verdict=Down point=100
+[10:00:00.100] [GAP_TICK] gap_buy=-16 gap_sell=26 a_sym=XAUUSD.s a_bid=3924.7 a_ask=3925.06 a_spread=0.36 a_lat=47 b_sym=XAUUSD.s b_bid=3924.9 b_ask=3924.96 b_spread=0.06 b_lat=47 c_bid=3925.15 c_ask=3925.32 c_age=300 c_move=4.5 c_verdict=Confirmed point=100
+[10:00:00.150] [GAP_TICK] gap_buy=-16 gap_sell=26 a_sym=XAUUSD.s a_bid=3924.7 a_ask=3925.06 a_spread=0.36 a_lat=47 b_sym=XAUUSD.s b_bid=3924.9 b_ask=3924.96 b_spread=0.06 b_lat=47 c_bid=3925.23 c_ask=3925.4 c_age=400 c_move=8 c_verdict=TooFast point=100
