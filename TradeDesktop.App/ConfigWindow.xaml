@@ -45,6 +45,10 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="10" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="20" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="10" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <Grid Grid.Row="0">
@@ -694,6 +698,134 @@
                                  Text="{Binding TradeLockerConfirmLatencyB, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085" TextWrapping="Wrap"
                                    Text="Tuổi tick tối đa chân B. Trống = dùng confirm_latency chung; 0 = tắt. Đề xuất 2500 (đo Phase 0)" />
+                    </Grid>
+                </StackPanel>
+
+                <!-- Sàn C (Fast Leg, docs/plans/fast-leg): TUỲ CHỌN. Không tick ⇒ sàn C tắt, app chạy y như chưa có sàn C.
+                     Sàn C chỉ cung cấp giá để lọc signal, KHÔNG bao giờ đặt lệnh. Lưu riêng cột fast_leg. -->
+                <Grid Grid.Row="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0"
+                               Text="Sàn C"
+                               FontWeight="SemiBold"
+                               FontSize="14"
+                               Foreground="#101828"
+                               VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <CheckBox Content="Bật sàn C (Fast Leg) — lọc signal theo độ yên của giá sàn C"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding FastLegEnabled, Mode=TwoWay}" />
+                    </StackPanel>
+                </Grid>
+
+                <StackPanel Grid.Row="18"
+                            Visibility="{Binding FastLegEnabled, Converter={StaticResource BoolToVisibility}}">
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Map Name" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Margin="0,0,10,0" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding FastLegMapName, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="Map tick của EA DataExporter kênh C. Phải khác map của sàn A/B." />
+                        <Button Grid.Column="2" Content="Check" Width="78" Height="32"
+                                Command="{Binding CheckFastLegCommand}" />
+                        <TextBlock Grid.Column="3" Margin="10,0,0,0" MaxWidth="320" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" Foreground="#344054"
+                                   Text="{Binding FastLegCheckStatus}" />
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="200" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Symbol" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding FastLegSymbol, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085" TextWrapping="Wrap"
+                                   Text="Symbol EA kênh C đang xuất (vd XAUUSD, XAUUSD.lmx). Để trống rồi bấm Check để tự điền; trống khi Lưu = không kiểm" />
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Chế độ" FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <RadioButton Content="Observe (chỉ ghi log, không chặn)" GroupName="FastLegMode" Margin="0,0,22,0"
+                                         IsChecked="{Binding FastLegIsObserve, Mode=TwoWay}" />
+                            <RadioButton Content="Filter (chặn Open khi giá C chạy nhanh)" GroupName="FastLegMode"
+                                         IsChecked="{Binding FastLegIsFilter, Mode=TwoWay}" />
+                        </StackPanel>
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="92" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Max move (pt)" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding FastLegMaxMovePts, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085" TextWrapping="Wrap"
+                                   Text="|biên độ giá giữa C| trong cửa sổ ≥ ngưỡng ⇒ TooFast. Thông số Long: 5" />
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="92" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Window (ms)" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding FastLegWindowMs, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085" TextWrapping="Wrap"
+                                   Text="Cửa sổ đo biên độ, 1–5000. Thông số Long: 200" />
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="92" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Max age (ms)" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding FastLegMaxAgeMs, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085" TextWrapping="Wrap"
+                                   Text="Tick C cũ hơn ngưỡng ⇒ Stale. Thông số Long: 1000" />
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="92" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Max defer (ms)" FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1" Height="32" VerticalContentAlignment="Center"
+                                 Text="{Binding FastLegMaxDeferMs, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#667085" TextWrapping="Wrap"
+                                   Text="Trần thời gian hoãn một signal, 500–10000. Mặc định 3000" />
+                    </Grid>
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Tuỳ chọn" FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <CheckBox Content="Fail open (C hỏng vẫn cho Open)" Margin="0,0,22,0"
+                                      IsChecked="{Binding FastLegFailOpen, Mode=TwoWay}" />
+                            <CheckBox Content="Áp dụng cho Close thường / TP"
+                                      ToolTip="SOS Close luôn bỏ qua sàn C; Close không bao giờ chờ khi C hỏng (Down/Stale)."
+                                      IsChecked="{Binding FastLegApplyToExit, Mode=TwoWay}" />
+                        </StackPanel>
                     </Grid>
                 </StackPanel>
                 </Grid>

@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using TradeDesktop.App.Commands;
@@ -9,6 +9,7 @@ using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
 using TradeDesktop.Application.Services.CTrader;
+using TradeDesktop.Application.Services.FastLeg;
 using TradeDesktop.Application.Services.PrimeXbt;
 using TradeDesktop.Application.Services.TradeLocker;
 using System.Globalization;
@@ -73,6 +74,28 @@ public sealed class ConfigViewModel : ObservableObject
     private string _tradeLockerVolumeALots = string.Empty;
     private string _tradeLockerConfirmLatencyB = string.Empty;
     private string _tradeLockerTokenStatus = "Chưa đăng nhập";
+
+    // Form Sàn C (Fast Leg, docs/plans/fast-leg). Tuỳ chọn: không tick ⇒ sàn C tắt, app chạy y như chưa có sàn C.
+    // Lưu RIÊNG cột `fast_leg` (UpdateFastLegAsync); Save của A/B không bao giờ ghi cột này.
+    private bool _fastLegEnabled;
+    private string _fastLegMapName = FastLegConfig.DefaultMapName;
+    private string _fastLegSymbol = string.Empty;
+    private bool _fastLegIsFilter;
+    private string _fastLegMaxMovePts = string.Empty;
+    private string _fastLegWindowMs = string.Empty;
+    private string _fastLegMaxAgeMs = string.Empty;
+    private string _fastLegMaxDeferMs = string.Empty;
+    private bool _fastLegFailOpen;
+    private bool _fastLegApplyToExit;
+    private string _fastLegCheckStatus = "Chưa kiểm tra";
+    // JSON đã nạp từ DB: rỗng ⇒ máy chưa từng cấu hình sàn C, bỏ tick thì KHÔNG ghi gì (cột giữ NULL).
+    private string _loadedFastLegJson = string.Empty;
+    // Thông số đã nạp (đọc được kể cả khi đang tắt); giữ các khoá form không hiển thị như heartbeatMapName.
+    private FastLegConfig? _loadedFastLegDraft;
+    // Người dùng đã sửa mục Sàn C kể từ lần nạp/lưu gần nhất. false ⇒ Save không đụng cột fast_leg.
+    private bool _fastLegDirty;
+    // Đã nạp xong record DB. Trước đó form chỉ có giá trị runtime tạm, Save có thể ghi nhầm trạng thái sàn C.
+    private bool _isDbLoadCompleted;
 
     private string _mapName1 = string.Empty;
     private string _mapName2 = string.Empty;
@@ -139,6 +162,7 @@ public sealed class ConfigViewModel : ObservableObject
         CheckMap1Command = new AsyncRelayCommand(CheckMap1Async, CanCheckMap1);
         CheckMap2Command = new AsyncRelayCommand(CheckMap2Async, CanCheckMap2);
         CheckCTraderSessionCommand = new AsyncRelayCommand(CheckCTraderSessionAsync);
+        CheckFastLegCommand = new AsyncRelayCommand(CheckFastLegAsync);
         SaveCommand = new AsyncRelayCommand(SaveAsync, CanSaveCommand);
         CancelCommand = new AsyncRelayCommand(CancelAsync);
         AddHwndColumnCommand = new AsyncRelayCommand(AddHwndColumnAsync);
@@ -156,6 +180,10 @@ public sealed class ConfigViewModel : ObservableObject
         RefreshPrimeXbtTokenStatus();
         ApplyTradeLockerToForm(runtimeConfigState.CurrentTradeLockerConfig);
         RefreshTradeLockerTokenStatus();
+        // Tạm điền từ runtime cho tới khi load DB xong (load sẽ điền lại kể cả cấu hình đang tắt).
+        ApplyFastLegToForm(
+            runtimeConfigState.CurrentFastLegConfig.IsActive ? runtimeConfigState.CurrentFastLegConfig : null,
+            runtimeConfigState.CurrentFastLegConfig.IsActive);
         CTraderSessionStatus = _ctraderQuoteSession?.StatusText ?? "Không có FIX session";
 
         var hasRuntimeState =
@@ -754,6 +782,103 @@ public sealed class ConfigViewModel : ObservableObject
     public AsyncRelayCommand CheckMap1Command { get; }
     public AsyncRelayCommand CheckMap2Command { get; }
     public AsyncRelayCommand CheckCTraderSessionCommand { get; }
+    public AsyncRelayCommand CheckFastLegCommand { get; }
+
+    public bool FastLegEnabled
+    {
+        get => _fastLegEnabled;
+        set => SetFastLegField(ref _fastLegEnabled, value);
+    }
+
+    public string FastLegMapName
+    {
+        get => _fastLegMapName;
+        set
+        {
+            if (SetFastLegField(ref _fastLegMapName, value))
+            {
+                FastLegCheckStatus = "Chưa kiểm tra";
+            }
+        }
+    }
+
+    public string FastLegSymbol
+    {
+        get => _fastLegSymbol;
+        set => SetFastLegField(ref _fastLegSymbol, value);
+    }
+
+    public bool FastLegIsFilter
+    {
+        get => _fastLegIsFilter;
+        set
+        {
+            if (SetFastLegField(ref _fastLegIsFilter, value))
+            {
+                OnPropertyChanged(nameof(FastLegIsObserve));
+            }
+        }
+    }
+
+    public bool FastLegIsObserve
+    {
+        get => !_fastLegIsFilter;
+        set => FastLegIsFilter = !value;
+    }
+
+    public string FastLegMaxMovePts
+    {
+        get => _fastLegMaxMovePts;
+        set => SetFastLegField(ref _fastLegMaxMovePts, value);
+    }
+
+    public string FastLegWindowMs
+    {
+        get => _fastLegWindowMs;
+        set => SetFastLegField(ref _fastLegWindowMs, value);
+    }
+
+    public string FastLegMaxAgeMs
+    {
+        get => _fastLegMaxAgeMs;
+        set => SetFastLegField(ref _fastLegMaxAgeMs, value);
+    }
+
+    public string FastLegMaxDeferMs
+    {
+        get => _fastLegMaxDeferMs;
+        set => SetFastLegField(ref _fastLegMaxDeferMs, value);
+    }
+
+    public bool FastLegFailOpen
+    {
+        get => _fastLegFailOpen;
+        set => SetFastLegField(ref _fastLegFailOpen, value);
+    }
+
+    public bool FastLegApplyToExit
+    {
+        get => _fastLegApplyToExit;
+        set => SetFastLegField(ref _fastLegApplyToExit, value);
+    }
+
+    // Mọi ô của mục Sàn C đi qua đây để biết người dùng đã sửa gì chưa (Save chỉ ghi cột fast_leg khi có sửa).
+    private bool SetFastLegField<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? propertyName = null)
+    {
+        if (!SetProperty(ref field, value, propertyName))
+        {
+            return false;
+        }
+
+        _fastLegDirty = true;
+        return true;
+    }
+
+    public string FastLegCheckStatus
+    {
+        get => _fastLegCheckStatus;
+        private set => SetProperty(ref _fastLegCheckStatus, value);
+    }
     public AsyncRelayCommand PrimeXbtLoginCommand { get; }
     public AsyncRelayCommand PrimeXbtLogoutCommand { get; }
     public AsyncRelayCommand PrimeXbtOpenBrowserCommand { get; }
@@ -839,6 +964,15 @@ public sealed class ConfigViewModel : ObservableObject
             ApplyCTraderFixToForm(loadResult.CTraderFix);
             ApplyPrimeXbtToForm(loadResult.PrimeXbt);
             ApplyTradeLockerToForm(loadResult.TradeLocker);
+            _loadedFastLegJson = loadResult.FastLegJson ?? string.Empty;
+            // Cột đang bật nhưng hỏng ⇒ vẫn tick để người dùng thấy và sửa; Save sẽ báo lỗi cụ thể.
+            ApplyFastLegToForm(
+                FastLegConfig.ReadDraft(_loadedFastLegJson, loadResult.MapName1, loadResult.MapName2),
+                loadResult.FastLeg?.IsActive == true || !string.IsNullOrEmpty(loadResult.FastLegError));
+            if (!string.IsNullOrEmpty(loadResult.FastLegError))
+            {
+                FastLegCheckStatus = $"✖ Cấu hình đang lỗi: {loadResult.FastLegError}";
+            }
 
             _runtimeConfigState.Update(
                 loadResult.MachineHostName,
@@ -910,6 +1044,13 @@ public sealed class ConfigViewModel : ObservableObject
             _runtimeConfigState.UpdatePrimeXbt(loadResult.PrimeXbt);
             _runtimeConfigState.UpdateTradeLocker(loadResult.TradeLocker);
             _runtimeConfigState.UpdateBPriceOffsets(loadResult.BBidOffsetPts, loadResult.BAskOffsetPts);
+            // Đường load thứ hai (mở cửa sổ Config): phải forward fast_leg, nếu không mở Config sẽ âm thầm tắt F
+            // giống bẫy sentinel của min_profit_to_close (CLAUDE.md §5).
+            _runtimeConfigState.UpdateFastLeg(loadResult.FastLeg);
+            if (!string.IsNullOrEmpty(loadResult.FastLegError))
+            {
+                SafeConfigLog($"[FAST_LEG][ERROR] config invalid, fast leg DISABLED: {loadResult.FastLegError}");
+            }
 
             IsExistingRecordLoaded = true;
             AreMapNamesEnabled = true;
@@ -919,6 +1060,7 @@ public sealed class ConfigViewModel : ObservableObject
             Map1CheckStatus = "Chưa kiểm tra";
             Map2CheckStatus = "Chưa kiểm tra";
             LoadStatus = "✔ Đã tải config theo host name";
+            _isDbLoadCompleted = true;
             RefreshDerivedState();
         }
         catch (Exception ex)
@@ -949,6 +1091,143 @@ public sealed class ConfigViewModel : ObservableObject
         return Task.CompletedTask;
     }
 
+    private Task CheckFastLegAsync()
+    {
+        var result = FastLegMapProbe.Check(FastLegMapName, FastLegSymbol);
+        // Ô Symbol trống ⇒ điền symbol EA đang xuất để người dùng chỉ cần xác nhận rồi Lưu. Ô đã có giá trị thì
+        // KHÔNG ghi đè: lệch symbol là cảnh báo cần người dùng tự quyết (có thể EA đang gắn nhầm chart).
+        if (string.IsNullOrWhiteSpace(FastLegSymbol) && !string.IsNullOrEmpty(result.Symbol))
+        {
+            FastLegSymbol = result.Symbol;
+            FastLegCheckStatus = $"{result.Status} — đã tự điền Symbol, kiểm tra đúng mã vàng rồi Lưu";
+            return Task.CompletedTask;
+        }
+
+        FastLegCheckStatus = result.Status;
+        return Task.CompletedTask;
+    }
+
+    private void ApplyFastLegToForm(FastLegConfig? stored, bool enabled)
+    {
+        var source = stored ?? FastLegConfig.FormDefaults;
+        FastLegMapName = source.MapName;
+        FastLegSymbol = source.Symbol;
+        FastLegIsFilter = source.Mode == FastLegMode.Filter;
+        FastLegMaxMovePts = FormatDecimal(source.MaxMovePts);
+        FastLegWindowMs = source.WindowMs.ToString(CultureInfo.InvariantCulture);
+        FastLegMaxAgeMs = source.MaxAgeMs.ToString(CultureInfo.InvariantCulture);
+        FastLegMaxDeferMs = source.MaxDeferMs.ToString(CultureInfo.InvariantCulture);
+        FastLegFailOpen = source.FailOpen;
+        FastLegApplyToExit = source.ApplyToExit;
+        FastLegEnabled = enabled;
+        FastLegCheckStatus = "Chưa kiểm tra";
+        _loadedFastLegDraft = stored;
+        // Điền form từ dữ liệu đã lưu không phải là "người dùng sửa".
+        _fastLegDirty = false;
+    }
+
+    /// <summary>
+    /// Dựng việc cần ghi cho cột `fast_leg` (quyết định ở <see cref="FastLegFormLogic.Decide"/>). Không đụng mục Sàn C
+    /// ⇒ không ghi. Tick ⇒ JSON đầy đủ, phải qua đúng FastLegConfig.TryParse của runtime. Bỏ tick ⇒ enabled=false giữ
+    /// thông số (chỉ khi DB đã có cấu hình hoặc runtime đang chạy sàn C; máy chưa từng có thì cột giữ NULL).
+    /// </summary>
+    private bool TryBuildFastLegSave(
+        out bool shouldWrite,
+        out string? json,
+        out FastLegConfig runtimeConfig,
+        out string? error)
+    {
+        shouldWrite = false;
+        json = null;
+        runtimeConfig = FastLegConfig.Disabled;
+        error = null;
+
+        var kind = FastLegFormLogic.Decide(
+            FastLegEnabled,
+            _fastLegDirty,
+            hasStoredJson: !string.IsNullOrWhiteSpace(_loadedFastLegJson),
+            runtimeActive: _runtimeConfigState.CurrentFastLegConfig.IsActive);
+        if (kind == FastLegWriteKind.None)
+        {
+            return true;
+        }
+
+        var formParsed = TryReadFastLegForm(out var draft, out var formError);
+        if (kind == FastLegWriteKind.Disabled)
+        {
+            shouldWrite = true;
+            json = formParsed ? draft.ToJson(enabled: false) : "{\"enabled\":false}";
+            return true;
+        }
+
+        if (!formParsed)
+        {
+            error = formError;
+            return false;
+        }
+
+        json = draft.ToJson(enabled: true);
+        if (!FastLegConfig.TryParse(json, MapName1, MapName2, out runtimeConfig, out var parseError))
+        {
+            error = parseError;
+            return false;
+        }
+
+        shouldWrite = true;
+        return true;
+    }
+
+    private bool TryReadFastLegForm(out FastLegConfig draft, out string? error)
+    {
+        draft = FastLegConfig.FormDefaults;
+        var problems = new List<string>();
+        if (!FastLegFormLogic.TryParseDecimal(FastLegMaxMovePts, out var maxMove))
+        {
+            problems.Add("Max move phải là số dương, dùng dấu chấm cho phần thập phân (vd 5.5, không gõ 5,5)");
+        }
+
+        var windowMs = ReadFastLegInt(FastLegWindowMs, "Window", problems);
+        var maxAgeMs = ReadFastLegInt(FastLegMaxAgeMs, "Max age", problems);
+        var maxDeferMs = ReadFastLegInt(FastLegMaxDeferMs, "Max defer", problems);
+        if (problems.Count > 0)
+        {
+            error = string.Join("; ", problems);
+            return false;
+        }
+
+        var mapName = (FastLegMapName ?? string.Empty).Trim();
+        // Form không có ô heartbeat: giữ giá trị đã lưu nếu map tick không đổi, chỉ suy lại khi người dùng đổi map.
+        var heartbeatMapName = _loadedFastLegDraft is { } loaded
+            && string.Equals(loaded.MapName, mapName, StringComparison.OrdinalIgnoreCase)
+                ? loaded.HeartbeatMapName
+                : FastLegConfig.DeriveHeartbeatMapName(mapName);
+        draft = new FastLegConfig(
+            Enabled: true,
+            MapName: mapName,
+            HeartbeatMapName: heartbeatMapName,
+            Symbol: (FastLegSymbol ?? string.Empty).Trim(),
+            Mode: FastLegIsFilter ? FastLegMode.Filter : FastLegMode.Observe,
+            MaxMovePts: maxMove,
+            WindowMs: windowMs,
+            MaxAgeMs: maxAgeMs,
+            MaxDeferMs: maxDeferMs,
+            FailOpen: FastLegFailOpen,
+            ApplyToExit: FastLegApplyToExit);
+        error = null;
+        return true;
+    }
+
+    private static int ReadFastLegInt(string? text, string label, List<string> problems)
+    {
+        if (FastLegFormLogic.TryParseInt(text, out var value))
+        {
+            return value;
+        }
+
+        problems.Add($"{label} phải là số nguyên");
+        return 0;
+    }
+
     private Task CheckMap2Async()
     {
         ClearError();
@@ -964,6 +1243,13 @@ public sealed class ConfigViewModel : ObservableObject
         if (!CanSaveCommand() || !IsExistingRecordLoaded)
         {
             ErrorMessage = "Không thể lưu: dữ liệu chưa hợp lệ hoặc chưa load record.";
+            return;
+        }
+
+        if (!_isDbLoadCompleted)
+        {
+            // Form vẫn đang mang giá trị runtime tạm (vd Sàn C chưa có JSON đã lưu): Lưu lúc này có thể ghi sai trạng thái.
+            ErrorMessage = "Đang tải config từ DB, vui lòng đợi rồi bấm Lưu lại.";
             return;
         }
 
@@ -1033,6 +1319,14 @@ public sealed class ConfigViewModel : ObservableObject
                 }
             }
 
+            // Kiểm Sàn C TRƯỚC khi ghi bất cứ gì: lỗi ở đây không được để A/B đã lưu còn sàn C thì không.
+            if (!TryBuildFastLegSave(out var fastLegShouldWrite, out var fastLegJson, out var fastLegRuntime, out var fastLegError))
+            {
+                LoadStatus = "✖ Save thất bại";
+                ErrorMessage = $"Sàn C không hợp lệ: {fastLegError}";
+                return;
+            }
+
             // Save ghi CẢ mapNames[1] MT lẫn khối ctraderFix/primexbt/tradelocker (giữ dữ liệu các mode đang ẩn).
             var saveResult = await _configService.SaveByMachineHostNameAsync(
                 MapName1, MapName2, PlatformA, PlatformB, columns, ctraderFix: ctraderFix, primeXbt: primeXbt,
@@ -1051,7 +1345,7 @@ public sealed class ConfigViewModel : ObservableObject
                 MachineHostName = saveResult.MachineHostName;
             }
 
-            LoadStatus = "✔ Lưu thành công";
+            // A/B đã nằm trên DB ⇒ áp runtime NGAY, trước phần Sàn C: Sàn C lỗi cũng không được để DB và runtime lệch nhau.
             _runtimeConfigState.Update(MachineHostName, MapName1, MapName2, _runtimeConfigState.CurrentPoint);
             _runtimeConfigState.UpdatePlatform(PlatformA, PlatformB);
             _runtimeConfigState.UpdateManualTradeHwnd(columns);
@@ -1064,6 +1358,13 @@ public sealed class ConfigViewModel : ObservableObject
                 $"[CONFIG][INFO] Runtime config updated: host={MachineHostName} " +
                 $"map1={MapName1} map2={MapName2} platformA={PlatformA} platformB={PlatformB} " +
                 $"manualColumns={columns.Count}");
+
+            if (fastLegShouldWrite && !await TrySaveFastLegAsync(fastLegJson, fastLegRuntime))
+            {
+                return;
+            }
+
+            LoadStatus = "✔ Lưu thành công";
             RequestClose?.Invoke(true);
         }
         catch (Exception ex)
@@ -1071,6 +1372,38 @@ public sealed class ConfigViewModel : ObservableObject
             LoadStatus = "✖ Save thất bại";
             ErrorMessage = $"Lỗi khi save: {GetErrorMessage(ex)}";
         }
+    }
+
+    // Lỗi riêng của Sàn C (kể cả exception, vd máy chưa chạy FAST-LEG-MIGRATION.sql nên thiếu cột) phải báo đúng là
+    // "A/B đã lưu", không rơi vào catch chung "Save thất bại". Cửa sổ giữ mở để người dùng sửa và Lưu lại.
+    private async Task<bool> TrySaveFastLegAsync(string? fastLegJson, FastLegConfig fastLegRuntime)
+    {
+        string? failure;
+        try
+        {
+            var fastLegSave = await _configService.SaveFastLegByMachineHostNameAsync(fastLegJson);
+            failure = fastLegSave.IsSuccess ? null : fastLegSave.Error ?? "không có bản ghi nào được cập nhật.";
+        }
+        catch (Exception ex)
+        {
+            failure = GetErrorMessage(ex);
+        }
+
+        if (failure is not null)
+        {
+            LoadStatus = "✖ Sàn A/B đã lưu, Sàn C lưu thất bại";
+            ErrorMessage = $"Lưu Sàn C thất bại: {failure}";
+            SafeConfigLog($"[FAST_LEG][ERROR] save from Config failed: {failure}");
+            return false;
+        }
+
+        _loadedFastLegJson = fastLegJson ?? string.Empty;
+        _loadedFastLegDraft = FastLegConfig.ReadDraft(_loadedFastLegJson, MapName1, MapName2);
+        _fastLegDirty = false;
+        // Áp ngay như các cấu hình khác của cửa sổ này; sampler tự mở/đóng map theo cấu hình mới.
+        _runtimeConfigState.UpdateFastLeg(fastLegRuntime);
+        SafeConfigLog($"[CONFIG][INFO] fast_leg saved from Config: {fastLegRuntime.ToSummary()}");
+        return true;
     }
 
     private Task CancelAsync()

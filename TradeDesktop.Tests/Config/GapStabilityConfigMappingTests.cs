@@ -243,6 +243,12 @@ public sealed class GapStabilityConfigMappingTests
             string currentSlotsJson,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(true);
+
+        public Task<bool> UpdateFastLegAsync(
+            string hostName,
+            string? fastLegJson,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
     }
 
     private sealed class StaticJsonHandler(string json) : HttpMessageHandler

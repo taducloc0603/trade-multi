@@ -53,7 +53,9 @@ public sealed record GapSignalSnapshot(
     decimal? ExchangeBAsk,
     int? GapBuy,
     int? GapSell,
-    int PointMultiplier);
+    int PointMultiplier,
+    // Phán quyết sàn C của chính tick này. null = sàn C tắt ⇒ hành vi y hệt khi chưa có sàn C.
+    FastLegVerdict? FastLeg = null);
 
 /// <summary>
 /// Các giới hạn dùng để phân loại một chu kỳ Gap là ổn định.
@@ -180,7 +182,11 @@ public sealed record GapSignalTriggerResult(
     int? EffectiveCloseGapPts = null,
     int? EffectiveCloseHoldMs = null,
     string DiagnosticCycleId = "",
-    string DiagnosticSignalId = "");
+    string DiagnosticSignalId = "",
+    // Phán quyết sàn C tại tick phát trigger (chỉ để log/đối chiếu). Deferred* dành cho gate hoãn ở Phase 4.
+    FastLegVerdict? FastLeg = null,
+    int FastLegDeferredTicks = 0,
+    long FastLegDeferredMs = 0);
 
 public enum GapSignalTriggerType
 {

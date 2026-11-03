@@ -59,6 +59,10 @@ public interface IRuntimeConfigProvider
     PrimeXbtConfig CurrentPrimeXbtConfig => PrimeXbtConfig.Empty;
     TradeLockerConfig CurrentTradeLockerConfig => TradeLockerConfig.Empty;
 
+    // Sàn C Fast Leg (cột JSONB `fast_leg`, docs/plans/fast-leg). Default = tắt ⇒ engine y hệt khi chưa có F.
+    // Được đọc từ thread sampler nên implementation phải trả tham chiếu an toàn đa luồng (record bất biến).
+    FastLegConfig CurrentFastLegConfig => FastLegConfig.Disabled;
+
     // Offset (point) cộng vào giá Bid/Ask sàn B sau khi đổi sang point. Default 0 = không dịch.
     int CurrentBBidOffsetPts => 0;
     int CurrentBAskOffsetPts => 0;

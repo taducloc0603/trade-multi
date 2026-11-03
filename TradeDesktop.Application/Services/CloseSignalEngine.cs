@@ -1,5 +1,6 @@
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
+using TradeDesktop.Application.Services.FastLeg;
 
 namespace TradeDesktop.Application.Services;
 
@@ -32,6 +33,10 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
     private readonly ISlotLogger? _logger;
     private int? _slotId;
     private GapCycleDiagnostics.PolicyContext? _lastDiagnosticPolicy;
+    // Sàn C (Phase 4): hoãn Normal Close / TP khi giá C chạy quá nhanh. SOS Close KHÔNG bao giờ bị hoãn (quyết định D5).
+    private readonly FastLegDeferState _closeBuyFastDefer = new();
+    private readonly FastLegDeferState _closeSellFastDefer = new();
+    private readonly FastLegDeferState _tpFastDefer = new();
 
     public CloseSignalEngine(ISlotLogger? logger = null)
     {
@@ -162,6 +167,9 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
 
     public void ResetGapState()
     {
+        // Cả Reset() lẫn lật Normal ↔ SOS đi qua đây: cycle bị bỏ thì trạng thái hoãn của nó cũng phải bỏ.
+        _closeBuyFastDefer.Abandon(_logger, "CLOSE", "BUY", _slotId, "engine_reset");
+        _closeSellFastDefer.Abandon(_logger, "CLOSE", "SELL", _slotId, "engine_reset");
         _buyState.Reset();
         _sellState.Reset();
         var minimumSamples = _lastDiagnosticPolicy?.Stability.MinStableSamples ?? 3;
@@ -310,6 +318,16 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             diagnosticPolicy,
             action: usesSos ? "SOS_CLOSE" : "CLOSE");
         var cycle = update.CurrentCycle;
+        // SOS không có trạng thái hoãn. Normal: cycle đang hoãn mà vỡ / bị thay ⇒ bỏ hoãn.
+        var fastDefer = usesSos
+            ? null
+            : positionSide == GapSignalSide.Buy ? _closeBuyFastDefer : _closeSellFastDefer;
+        if (fastDefer is { IsActive: true }
+            && (fastDefer.CycleId != cycle.CycleId || cycle.Status != GapCycleStatus.Stable))
+        {
+            fastDefer.Abandon(_logger, "CLOSE", sideName, _slotId, "cycle_reset", snapshot.TimestampUtc);
+        }
+
         if (cycle.Status != GapCycleStatus.Stable || cycle.Gaps.Count == 0)
         {
             return null;
@@ -326,11 +344,35 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         var normalizedMaxTimesTick = Math.Max(0, config.CloseMaxTimesTick);
         if (normalizedMaxTimesTick > 0 && cycle.Gaps.Count > normalizedMaxTimesTick)
         {
+            fastDefer?.Abandon(_logger, "CLOSE", sideName, _slotId, "max_times_tick", snapshot.TimestampUtc);
             state.Reset(usesSos
                 ? "SOS Close Cycle vượt close_max_times_tick."
                 : "Normal Close Cycle vượt close_max_times_tick.");
             return null;
         }
+
+        // Sàn C (Phase 4): chỉ Normal Close (kể cả NORMAL_FALLBACK lúc SOS active) bị hoãn, và chỉ khi TooFast
+        // (BlocksClose — quyết định D6: Close không bao giờ chờ sàn C hỏng). Slot giữ nguyên Live, không bị claim.
+        if (fastDefer is not null && snapshot.FastLeg is { BlocksClose: true } verdict)
+        {
+            if (fastDefer.Defer(cycle.CycleId, snapshot.TimestampUtc))
+            {
+                FastLegDeferState.LogDefer(_logger, "CLOSE", sideName, _slotId, cycle.CycleId, verdict);
+            }
+
+            if (fastDefer.IsExpired(verdict.MaxDeferMs, snapshot.TimestampUtc))
+            {
+                fastDefer.Abandon(_logger, "CLOSE", sideName, _slotId, "defer_timeout", snapshot.TimestampUtc);
+                state.Reset("Sàn C hoãn Normal Close quá max_defer_ms; mở Cycle mới.");
+            }
+
+            return null;
+        }
+
+        var deferredTicks = fastDefer?.Ticks ?? 0;
+        var deferredMs = fastDefer is { IsActive: true } ? fastDefer.ElapsedMs(snapshot.TimestampUtc) : 0L;
+        fastDefer?.LogRelease(_logger, "CLOSE", sideName, _slotId, snapshot.FastLeg, snapshot.TimestampUtc);
+        fastDefer?.Clear();
 
         var closesByGapSell = triggerType == GapSignalTriggerType.CloseByGapSell;
         var diagnosticSignalId = Guid.NewGuid().ToString("N");
@@ -358,7 +400,10 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             EffectiveCloseGapPts: effectiveClose,
             EffectiveCloseHoldMs: normalizedHoldMs,
             DiagnosticCycleId: cycle.CycleId,
-            DiagnosticSignalId: diagnosticSignalId);
+            DiagnosticSignalId: diagnosticSignalId,
+            FastLeg: snapshot.FastLeg,
+            FastLegDeferredTicks: deferredTicks,
+            FastLegDeferredMs: deferredMs);
 
         GapCycleDiagnostics.LogTrigger(
             _logger,
@@ -572,6 +617,29 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         }
 
         var isClosingBuyPosition = openMode == TradingOpenMode.GapBuy;
+        var tpSideName = isClosingBuyPosition ? "BUY" : "SELL";
+
+        // Sàn C (Phase 4): TP đạt target nhưng giá C đang chạy quá nhanh ⇒ hoãn, KHÔNG reset cửa sổ TP. Tick sau còn
+        // đạt target và C đã yên thì phát ngay; profit rớt dưới target ⇒ ResetTpCycle bỏ hoãn (TARGET_NOT_REACHED).
+        if (snapshot.FastLeg is { BlocksClose: true } verdict)
+        {
+            if (_tpFastDefer.Defer(cycleId, snapshot.TimestampUtc))
+            {
+                FastLegDeferState.LogDefer(_logger, "TP", tpSideName, _slotId, cycleId, verdict);
+            }
+
+            if (_tpFastDefer.IsExpired(verdict.MaxDeferMs, snapshot.TimestampUtc))
+            {
+                ResetTpCycle("FAST_LEG_DEFER_TIMEOUT");
+            }
+
+            return null;
+        }
+
+        var tpDeferredTicks = _tpFastDefer.Ticks;
+        var tpDeferredMs = _tpFastDefer.IsActive ? _tpFastDefer.ElapsedMs(snapshot.TimestampUtc) : 0L;
+        _tpFastDefer.LogRelease(_logger, "TP", tpSideName, _slotId, snapshot.FastLeg, snapshot.TimestampUtc);
+        _tpFastDefer.Clear();
         // Chi cap phat khi that su tao result. Truoc day ToArray() nam ngay sau khi cua so du hold,
         // tuc TRUOC ba lenh return som ben tren -> nhanh CLOSE_MAX_TP_EXCEEDED von co y KHONG reset
         // cua so se cap phat toi 1024 double (~8 KB) MOI TICK MOI SLOT (~1,3 MB/s o 8 slot).
@@ -603,7 +671,10 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             CloseTpTarget: targetProfit,
             CloseTpProfits: diagnosticProfits,
             DiagnosticCycleId: cycleId,
-            DiagnosticSignalId: diagnosticSignalId);
+            DiagnosticSignalId: diagnosticSignalId,
+            FastLeg: snapshot.FastLeg,
+            FastLegDeferredTicks: tpDeferredTicks,
+            FastLegDeferredMs: tpDeferredMs);
 
         LogTpCycle("COMPLETED", lastProfit, "TARGET_REACHED", diagnosticSignalId, elapsedMs, normalizedHoldMs);
         LogTpCycle("TRIGGERED", lastProfit, "TRIGGERED", diagnosticSignalId, elapsedMs, normalizedHoldMs);
@@ -633,6 +704,8 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
 
     private void ResetTpCycle(string reason, bool log = true)
     {
+        // Mọi điểm bỏ cửa sổ TP (rớt target, dưới confirm, quá trần hoãn, reset engine...) đều bỏ luôn trạng thái hoãn.
+        _tpFastDefer.Abandon(_logger, "TP", "-", _slotId, reason.ToLowerInvariant(), _tpState.LastTickUtc);
         var count = _tpState.TickCount;
         if (log && count > 0)
         {

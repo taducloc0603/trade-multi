@@ -131,6 +131,10 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public PrimeXbtConfig CurrentPrimeXbtConfig { get; private set; } = PrimeXbtConfig.Empty;
     // Khối sans_json.tradelocker. Cập nhật qua UpdateTradeLocker (KHÔNG qua Update(...)) nên không dính bẫy sentinel.
     public TradeLockerConfig CurrentTradeLockerConfig { get; private set; } = TradeLockerConfig.Empty;
+    // Cột JSONB `fast_leg` (sàn C). Cập nhật qua UpdateFastLeg (KHÔNG qua Update(...)) nên không dính bẫy sentinel.
+    // volatile: thread sampler sàn C đọc mỗi nhịp, còn UI thread ghi khi load config.
+    private volatile FastLegConfig _currentFastLegConfig = FastLegConfig.Disabled;
+    public FastLegConfig CurrentFastLegConfig => _currentFastLegConfig;
     // Offset (point) cộng vào giá Bid/Ask sàn B sau khi đổi sang point (b_bid_offset_pts / b_ask_offset_pts).
     // Số âm hợp lệ nên KHÔNG đi qua Update(...) (sentinel -1 không dùng được) — chỉ cập nhật qua UpdateBPriceOffsets.
     public int CurrentBBidOffsetPts { get; private set; }
@@ -703,6 +707,12 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     public void UpdateTradeLocker(TradeLockerConfig? tradeLocker)
     {
         CurrentTradeLockerConfig = (tradeLocker ?? TradeLockerConfig.Empty).Normalize();
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void UpdateFastLeg(FastLegConfig? fastLeg)
+    {
+        _currentFastLegConfig = fastLeg ?? FastLegConfig.Disabled;
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 

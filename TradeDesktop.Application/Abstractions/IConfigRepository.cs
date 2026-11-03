@@ -20,4 +20,9 @@ public interface IConfigRepository
         string hostName,
         string currentSlotsJson,
         CancellationToken cancellationToken = default);
+    // Ghi RIÊNG cột `fast_leg` (sàn C). null ⇒ cột NULL. Không đụng sans/platform hay cột nào khác.
+    Task<bool> UpdateFastLegAsync(
+        string hostName,
+        string? fastLegJson,
+        CancellationToken cancellationToken = default);
 }

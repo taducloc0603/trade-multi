@@ -42,7 +42,10 @@ public sealed record SignalOutcomeSignal(
     // Nhánh TIME: hai giá trị quyết định chu kỳ. SignalCycleSize ở trên chỉ để đối chiếu
     // với log của nhánh TICK.
     int HoldConfirmMs = 0,
-    int CloseHoldConfirmMs = 0);
+    int CloseHoldConfirmMs = 0,
+    // Phán quyết sàn C tại tick signal. null = sàn C tắt ⇒ dòng [SIGNAL] không có trường fast_*.
+    FastLegVerdict? FastLeg = null,
+    long FastLegDeferredMs = 0);
 
 /// <summary>
 /// Ghi lại gap tại thời điểm signal kèm dãy gap của N tick kế tiếp, phục vụ đánh giá
@@ -560,6 +563,14 @@ public sealed class SignalGapOutcomeTracker
           .Append(" gaps_order=oldest_to_newest gaps_unit=point signal_gaps=\"");
         AppendGaps(sb, s.SignalGaps);
         sb.Append("\" future_ticks_planned=").Append(Value(_futureTickCount));
+        if (s.FastLeg is { } c)
+        {
+            sb.Append(" fast_verdict=").Append(c.Kind)
+              .Append(" fast_move_pts=").Append(c.MovePts.ToString("0.##", CultureInfo.InvariantCulture))
+              .Append(" fast_age_ms=").Append(c.AgeMs?.ToString(CultureInfo.InvariantCulture) ?? "-")
+              .Append(" fast_deferred_ms=").Append(s.FastLegDeferredMs.ToString(CultureInfo.InvariantCulture));
+        }
+
         return sb.ToString();
     }
 

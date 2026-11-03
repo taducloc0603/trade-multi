@@ -62,6 +62,9 @@ public sealed class SignalLifecycleLogFormatterTests
     [InlineData("SAME_SIDE_OPEN_RANDOM_LOCK", "vị thế cùng chiều")]
     [InlineData("OPEN_TO_CLOSE_RANDOM_LOCK", "sau Auto Open gần nhất")]
     [InlineData("GLOBAL_ACTION_COOLDOWN", "cooldown toàn cục")]
+    [InlineData("FAST_LEG_TOO_FAST", "sàn C đang chạy quá nhanh")]
+    [InlineData("FAST_LEG_STALE", "giá sàn C đã cũ")]
+    [InlineData("FAST_LEG_DOWN", "sàn C không hoạt động")]
     public void DescriptionForReason_ReturnsReadableVietnamese(string reasonCode, string expected)
     {
         Assert.Contains(expected, SignalLifecycleLogFormatter.DescriptionForReason(reasonCode));

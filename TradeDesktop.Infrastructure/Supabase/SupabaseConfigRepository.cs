@@ -108,6 +108,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             RdStartPostOpenLockSeconds: row.RdStartPostOpenLockSeconds,
             RdEndPostOpenLockSeconds: row.RdEndPostOpenLockSeconds,
             ScheduleSleepingJson: row.ScheduleSleepingJson,
+            FastLegJson: row.FastLegJson,
             SignalCycleSize: row.SignalCycleSize,
             OpenGapStability: new GapStabilityConfig(
                 row.OpenGapAbsoluteFloor,
@@ -216,6 +217,62 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
             throw new HttpRequestException(
                 $"Supabase UpdateCurrentSlotsAsync thất bại. Status={(int)response.StatusCode}, Body={errorBody}");
+        }
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        using var doc = JsonDocument.Parse(body);
+        return doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0;
+    }
+
+    public async Task<bool> UpdateFastLegAsync(
+        string hostName,
+        string? fastLegJson,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured())
+        {
+            throw new InvalidOperationException("Thiếu SUPABASE_URL hoặc SUPABASE_KEY/SUPABASE_ANON_KEY.");
+        }
+
+        if (string.IsNullOrWhiteSpace(hostName))
+        {
+            return false;
+        }
+
+        var normalizedHostName = NormalizeHostName(hostName);
+        // Chỉ một khoá trong payload ⇒ PATCH chỉ đụng cột fast_leg, các cột khác giữ nguyên.
+        string payload;
+        if (string.IsNullOrWhiteSpace(fastLegJson))
+        {
+            payload = "{\"fast_leg\":null}";
+        }
+        else
+        {
+            using var fastLegDoc = JsonDocument.Parse(fastLegJson);
+            payload = JsonSerializer.Serialize(new { fast_leg = fastLegDoc.RootElement });
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Patch,
+            $"{_supabaseUrl}/rest/v1/configs?hostname=eq.{Uri.EscapeDataString(normalizedHostName)}")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+
+        AddAuthHeaders(request);
+        request.Headers.TryAddWithoutValidation("Prefer", "return=representation");
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException(
+                $"Supabase UpdateFastLegAsync thất bại. Status={(int)response.StatusCode}, Body={errorBody}");
         }
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -368,6 +425,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("rd_end_post_open_lock_seconds", out var rdEndPostOpenLockSecondsElement);
         ReadGapStabilityElements(first, out var openGapElements, out var closeGapElements);
         first.TryGetProperty("schedule_sleeping", out var scheduleSleepingElement);
+        first.TryGetProperty("fast_leg", out var fastLegElement);
 
         // DB column name is lowercase: hostname
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
@@ -462,6 +520,11 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CloseGapMaxDrift = ReadDouble(closeGapElements.MaxDrift),
             ScheduleSleeping = scheduleSleepingElement.ValueKind == JsonValueKind.Object
                 ? scheduleSleepingElement.Clone()
+                : default,
+            // Mọi kiểu khác null đều giữ lại để FastLegConfig.TryParse báo lỗi rõ (vd chuỗi JSON nhập nhầm trong editor),
+            // thay vì coi như chưa cấu hình rồi tắt sàn C im lặng.
+            FastLeg = fastLegElement.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null)
+                ? fastLegElement.Clone()
                 : default
         };
     }
@@ -560,6 +623,7 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         first.TryGetProperty("rd_end_post_open_lock_seconds", out var rdEndPostOpenLockSecondsElement);
         ReadGapStabilityElements(first, out var openGapElements, out var closeGapElements);
         first.TryGetProperty("schedule_sleeping", out var scheduleSleepingElement);
+        first.TryGetProperty("fast_leg", out var fastLegElement);
 
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
         if (!hasHostName)
@@ -652,6 +716,11 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             CloseGapMaxDrift = ReadDouble(closeGapElements.MaxDrift),
             ScheduleSleeping = scheduleSleepingElement.ValueKind == JsonValueKind.Object
                 ? scheduleSleepingElement.Clone()
+                : default,
+            // Mọi kiểu khác null đều giữ lại để FastLegConfig.TryParse báo lỗi rõ (vd chuỗi JSON nhập nhầm trong editor),
+            // thay vì coi như chưa cấu hình rồi tắt sàn C im lặng.
+            FastLeg = fastLegElement.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null)
+                ? fastLegElement.Clone()
                 : default
         };
     }
@@ -998,6 +1067,15 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
 
         public string ScheduleSleepingJson => ScheduleSleeping.ValueKind == JsonValueKind.Object
             ? ScheduleSleeping.GetRawText()
+            : string.Empty;
+
+        // Sàn C Fast Leg (docs/plans/fast-leg). JSONB riêng, không nằm trong `sans` vì BuildSans dựng lại `sans`
+        // mỗi lần lưu Config và sẽ xoá key lạ. Thiếu cột / null / không phải object ⇒ chuỗi rỗng ⇒ F tắt.
+        [JsonPropertyName("fast_leg")]
+        public JsonElement FastLeg { get; set; }
+
+        public string FastLegJson => FastLeg.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null)
+            ? FastLeg.GetRawText()
             : string.Empty;
     }
 }

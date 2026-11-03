@@ -207,6 +207,7 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
                                 <Border Grid.Row="0" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Symbol" Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeASymbol}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBSymbol}" HorizontalAlignment="Center"/></Grid></Border>
@@ -219,6 +220,34 @@
                                 <Border Grid.Row="7" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Max Lat(ms)" ToolTip="Sàn A: độ trễ truyền lớn nhất.&#10;Sàn B: khoảng cách lớn nhất giữa hai tick kể từ đầu phiên FIX — tức mức ôi nhất mà dữ liệu từng đạt tới." Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeAMaxLatMs}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBMaxLatMs}" HorizontalAlignment="Center"/></Grid></Border>
                                 <Border Grid.Row="8" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Avg Lat(ms)" ToolTip="Sàn A: độ trễ truyền trung bình.&#10;Sàn B: khoảng cách trung bình giữa hai tick (lấy mẫu theo TICK, không theo nhịp đọc 50 ms)." Foreground="#344054"/><TextBlock Grid.Column="1" Text="{Binding ExchangeAAvgLatMs}" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBAvgLatMs}" HorizontalAlignment="Center"/></Grid></Border>
                                 <Border Grid.Row="9" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Offset(pt)" ToolTip="Offset point từ DB (b_bid_offset_pts / b_ask_offset_pts) cộng vào giá sàn B sau khi đổi sang point.&#10;Bid/Ask sàn B hiển thị ở trên ĐÃ gồm offset; Spread giữ giá trị thật của nguồn." Foreground="#344054"/><TextBlock Grid.Column="1" Text="—" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding ExchangeBOffsetText}" HorizontalAlignment="Center"/></Grid></Border>
+                                <!-- Sàn C Fast Leg: dải riêng, chỉ để quan sát; ẩn khi fast_leg tắt. -->
+                                <Border Grid.Row="10" Padding="0,5" BorderBrush="#EEF1F5" BorderThickness="0,0,0,1"
+                                        Visibility="{Binding IsFastLegVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Sàn C" Foreground="#344054" Margin="0,0,8,0"
+                                                   ToolTip="Nguồn giá thứ ba, chỉ để lọc tín hiệu, không bao giờ đặt lệnh.&#10;Biên độ giá giữa sàn C trong cửa sổ đo ≥ maxMovePts ⇒ TooFast.&#10;Stale: terminal còn sống nhưng tick cũ hơn maxAgeMs. Down: mất map / heartbeat / kết nối."/>
+                                        <TextBlock Grid.Column="1" Text="{Binding FastLegStripText}" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding FastLegVerdictText}" FontWeight="SemiBold" Margin="8,0,0,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="VerticalAlignment" Value="Center"/>
+                                                    <Setter Property="Foreground" Value="#344054"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding FastLegVerdictKey}" Value="Confirmed"><Setter Property="Foreground" Value="#027A48"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding FastLegVerdictKey}" Value="TooFast"><Setter Property="Foreground" Value="#B42318"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding FastLegVerdictKey}" Value="Stale"><Setter Property="Foreground" Value="#B54708"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding FastLegVerdictKey}" Value="Down"><Setter Property="Foreground" Value="#B42318"/></DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                </Border>
                             </Grid>
                         </Grid>
 

@@ -19,6 +19,8 @@ public interface IConfigService
         TradeLockerConfig? tradeLocker = null);
     Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default);
     Task SaveCurrentSlotsAsync(string currentSlotsJson, CancellationToken cancellationToken = default);
+    // Ghi riêng cột `fast_leg`. fastLegJson null ⇒ NULL (sàn C tắt, hành vi như chưa có sàn C).
+    Task<ConfigSaveResult> SaveFastLegByMachineHostNameAsync(string? fastLegJson, CancellationToken cancellationToken = default);
 }
 
 public sealed class ConfigService(
@@ -84,6 +86,7 @@ public sealed class ConfigService(
         }
 
         SansJsonHelper.TryParseSans(record.SansJson, out var mapName1, out var mapName2, out var manualHwndColumns, out var ctraderFix, out var primeXbt, out var tradeLocker);
+        FastLegConfig.TryParse(record.FastLegJson, mapName1, mapName2, out var fastLeg, out var fastLegError);
         return ConfigLoadResult.Success(
             hostName,
             mapName1,
@@ -154,7 +157,15 @@ public sealed class ConfigService(
             closeGapStability: record.CloseGapStability,
             openMaxLastGapPts: record.OpenMaxLastGapPts,
             bBidOffsetPts: record.BBidOffsetPts,
-            bAskOffsetPts: record.BAskOffsetPts) with { CTraderFix = ctraderFix, PrimeXbt = primeXbt, TradeLocker = tradeLocker };
+            bAskOffsetPts: record.BAskOffsetPts) with
+            {
+                CTraderFix = ctraderFix,
+                PrimeXbt = primeXbt,
+                TradeLocker = tradeLocker,
+                FastLeg = fastLeg,
+                FastLegError = fastLegError,
+                FastLegJson = record.FastLegJson ?? string.Empty
+            };
     }
 
     public async Task SaveCurrentTicksAsync(string currentTickA, string currentTickB, CancellationToken cancellationToken = default)
@@ -177,6 +188,22 @@ public sealed class ConfigService(
         }
 
         await configRepository.UpdateCurrentSlotsAsync(hostName, currentSlotsJson, cancellationToken);
+    }
+
+    public async Task<ConfigSaveResult> SaveFastLegByMachineHostNameAsync(
+        string? fastLegJson,
+        CancellationToken cancellationToken = default)
+    {
+        var hostName = machineIdentityService.GetHostName();
+        if (string.IsNullOrWhiteSpace(hostName))
+        {
+            return ConfigSaveResult.Failed("Không lấy được host name máy hiện tại.");
+        }
+
+        var updated = await configRepository.UpdateFastLegAsync(hostName, fastLegJson, cancellationToken);
+        return updated
+            ? ConfigSaveResult.Success(hostName)
+            : ConfigSaveResult.Failed("Lưu Sàn C thất bại: không có bản ghi nào được cập nhật.");
     }
 
     public async Task<ConfigSaveResult> SaveByMachineHostNameAsync(
@@ -332,7 +359,13 @@ public sealed record ConfigLoadResult(
     int BAskOffsetPts = 0,
     // Khối tradelocker trong sans_json (docs/plans/tradelocker); Empty khi máy chưa cấu hình TradeLocker.
     // Đặt CUỐI để không lệch tham số positional.
-    TradeLockerConfig? TradeLocker = null)
+    TradeLockerConfig? TradeLocker = null,
+    // Cột JSONB `fast_leg` (sàn C, docs/plans/fast-leg). null/Disabled = F tắt. Cột hỏng KHÔNG làm hỏng cả config:
+    // FastLeg = Disabled và FastLegError mang lý do để log [FAST_LEG][ERROR]. Đặt CUỐI để không lệch tham số positional.
+    FastLegConfig? FastLeg = null,
+    string? FastLegError = null,
+    // JSON thô của cột, để cửa sổ Config điền lại cả cấu hình đang TẮT (FastLeg lúc đó là Disabled).
+    string FastLegJson = "")
 {
     public static ConfigLoadResult Success(
         string machineHostName,

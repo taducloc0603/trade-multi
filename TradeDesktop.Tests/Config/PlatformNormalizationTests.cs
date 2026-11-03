@@ -334,6 +334,19 @@ public sealed class PlatformNormalizationTests
             string currentSlotsJson,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(true);
+
+        public int FastLegUpdateCallCount { get; private set; }
+        public string? SavedFastLegJson { get; private set; }
+
+        public Task<bool> UpdateFastLegAsync(
+            string hostName,
+            string? fastLegJson,
+            CancellationToken cancellationToken = default)
+        {
+            FastLegUpdateCallCount++;
+            SavedFastLegJson = fastLegJson;
+            return Task.FromResult(true);
+        }
     }
 
     private sealed class CapturingHandler(string responseJson) : HttpMessageHandler

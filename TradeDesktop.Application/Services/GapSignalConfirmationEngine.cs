@@ -1,5 +1,6 @@
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
+using TradeDesktop.Application.Services.FastLeg;
 
 namespace TradeDesktop.Application.Services;
 
@@ -13,6 +14,9 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
     private SignalCycleEventSnapshot _buyObservation = new();
     private SignalCycleEventSnapshot _sellObservation = new();
     private GapCycleDiagnostics.PolicyContext? _lastDiagnosticPolicy;
+    // Sàn C (Phase 4): trạng thái hoãn theo từng chiều. Chỉ hoạt động khi snapshot.FastLeg chặn Open.
+    private readonly FastLegDeferState _buyFastDefer = new();
+    private readonly FastLegDeferState _sellFastDefer = new();
 
     public GapSignalConfirmationEngine(ISlotLogger? logger = null)
     {
@@ -95,6 +99,8 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
 
     public void Reset()
     {
+        _buyFastDefer.Abandon(_logger, "OPEN", "BUY", null, "engine_reset");
+        _sellFastDefer.Abandon(_logger, "OPEN", "SELL", null, "engine_reset");
         _buyState.Reset();
         _sellState.Reset();
         var minimumSamples = _lastDiagnosticPolicy?.Stability.MinStableSamples ?? 3;
@@ -145,6 +151,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             snapshot.GapBuy,
             stabilityConfig.MinStableSamples,
             diagnosticPolicy);
+        SyncFastDefer(_buyFastDefer, buyUpdate.CurrentCycle, "BUY", snapshot.TimestampUtc);
         var buyResult = TryCreateStableOpenResult(
             snapshot,
             config,
@@ -155,7 +162,8 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             _buyCycle,
             ref _buyObservation,
             _logger,
-            diagnosticPolicy);
+            diagnosticPolicy,
+            _buyFastDefer);
         if (buyResult is not null)
         {
             results.Add(buyResult);
@@ -179,6 +187,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             snapshot.GapSell,
             stabilityConfig.MinStableSamples,
             diagnosticPolicy);
+        SyncFastDefer(_sellFastDefer, sellUpdate.CurrentCycle, "SELL", snapshot.TimestampUtc);
         var sellResult = TryCreateStableOpenResult(
             snapshot,
             config,
@@ -189,13 +198,24 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             _sellCycle,
             ref _sellObservation,
             _logger,
-            diagnosticPolicy);
+            diagnosticPolicy,
+            _sellFastDefer);
         if (sellResult is not null)
         {
             results.Add(sellResult);
         }
 
         return results;
+    }
+
+    // Cycle đang hoãn mà bị vỡ / thay bằng cycle mới (Tolerance, Dispersion, Drift, confirm hỏng...) ⇒ bỏ hoãn.
+    // Signal kế tiếp phải đi lại từ đầu như mọi cycle khác.
+    private void SyncFastDefer(FastLegDeferState defer, GapCycleSnapshot cycle, string side, DateTime nowUtc)
+    {
+        if (defer.IsActive && (defer.CycleId != cycle.CycleId || cycle.Status != GapCycleStatus.Stable))
+        {
+            defer.Abandon(_logger, "OPEN", side, null, "cycle_reset", nowUtc);
+        }
     }
 
     private static GapSignalTriggerResult? TryCreateStableOpenResult(
@@ -208,12 +228,15 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
         GapCycleState state,
         ref SignalCycleEventSnapshot observation,
         ISlotLogger? logger,
-        GapCycleDiagnostics.PolicyContext diagnosticPolicy)
+        GapCycleDiagnostics.PolicyContext diagnosticPolicy,
+        FastLegDeferState fastDefer)
     {
         if (cycle.Status != GapCycleStatus.Stable || cycle.Gaps.Count == 0)
         {
             return null;
         }
+
+        var sideName = side == GapSignalSide.Buy ? "BUY" : "SELL";
 
         var lastGap = cycle.Gaps[^1];
         if (!isOpenSatisfied(lastGap))
@@ -232,6 +255,7 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
                 : lastGap > -maxLastGap;
             if (!withinCeiling)
             {
+                fastDefer.Abandon(logger, "OPEN", sideName, null, "max_last_gap", snapshot.TimestampUtc);
                 state.Reset("Gap cuối vượt open_max_last_gap_pts; mở Cycle mới.");
                 return null;
             }
@@ -240,9 +264,34 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
         var normalizedMaxTimesTick = Math.Max(0, config.OpenMaxTimesTick);
         if (normalizedMaxTimesTick > 0 && cycle.Gaps.Count > normalizedMaxTimesTick)
         {
+            fastDefer.Abandon(logger, "OPEN", sideName, null, "max_times_tick", snapshot.TimestampUtc);
             state.Reset("Open Cycle vượt open_max_times_tick.");
             return null;
         }
+
+        // Sàn C (Phase 4, D4): signal đã đủ điều kiện nhưng giá thật đang chạy (hoặc C không có ý kiến và fail_open tắt)
+        // ⇒ HOÃN: giữ nguyên cycle, không tạo GUID / trigger, tick sau hỏi lại sàn C. Quá MaxDeferMs ⇒ bỏ cycle (D8),
+        // chống giữ cycle quá lâu làm phình mẫu (CLAUDE.md §5, treo UI).
+        if (snapshot.FastLeg is { BlocksOpen: true } verdict)
+        {
+            if (fastDefer.Defer(cycle.CycleId, snapshot.TimestampUtc))
+            {
+                FastLegDeferState.LogDefer(logger, "OPEN", sideName, null, cycle.CycleId, verdict);
+            }
+
+            if (fastDefer.IsExpired(verdict.MaxDeferMs, snapshot.TimestampUtc))
+            {
+                fastDefer.Abandon(logger, "OPEN", sideName, null, "defer_timeout", snapshot.TimestampUtc);
+                state.Reset("Sàn C hoãn quá max_defer_ms; mở Cycle mới.");
+            }
+
+            return null;
+        }
+
+        var deferredTicks = fastDefer.Ticks;
+        var deferredMs = fastDefer.IsActive ? fastDefer.ElapsedMs(snapshot.TimestampUtc) : 0L;
+        fastDefer.LogRelease(logger, "OPEN", sideName, null, snapshot.FastLeg, snapshot.TimestampUtc);
+        fastDefer.Clear();
 
         var isBuy = side == GapSignalSide.Buy;
         var diagnosticSignalId = Guid.NewGuid().ToString("N");
@@ -266,9 +315,11 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             GapSellSourceABid: snapshot.ExchangeABid,
             PointMultiplier: snapshot.PointMultiplier,
             DiagnosticCycleId: cycle.CycleId,
-            DiagnosticSignalId: diagnosticSignalId);
+            DiagnosticSignalId: diagnosticSignalId,
+            FastLeg: snapshot.FastLeg,
+            FastLegDeferredTicks: deferredTicks,
+            FastLegDeferredMs: deferredMs);
 
-        var sideName = side == GapSignalSide.Buy ? "BUY" : "SELL";
         GapCycleDiagnostics.LogTrigger(
             logger,
             "OPEN",

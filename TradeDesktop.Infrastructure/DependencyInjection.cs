@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TradeDesktop.Application.Abstractions;
+using TradeDesktop.Application.Services.FastLeg;
 using TradeDesktop.Infrastructure.CTrader;
 using TradeDesktop.Infrastructure.MarketData;
 using TradeDesktop.Infrastructure.PrimeXbt;
@@ -64,6 +65,13 @@ public static class DependencyInjection
         services.AddSingleton(sp => TradeLockerHermesSession.CreateDefault(sp.GetRequiredService<TradeLockerAuthSession>()));
         services.AddSingleton<ITradeLockerQuoteSession>(sp => sp.GetRequiredService<TradeLockerHermesSession>());
         services.AddSingleton<ITradeLockerTradeSession>(sp => sp.GetRequiredService<TradeLockerHermesSession>());
+        // Sàn C Fast Leg (docs/plans/fast-leg): chỉ đọc MMF của terminal thứ 3 trên thread riêng, tự nghỉ khi `fast_leg` tắt.
+        // Không có đường nào tới đặt lệnh. Container dispose lúc thoát app → dừng thread.
+        services.AddSingleton<FastLegTickBuffer>();
+        services.AddSingleton<IFastLegGate>(sp => new FastLegGate(
+            sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<FastLegTickBuffer>()));
+        services.AddSingleton<IFastLegSampler>(sp => new FastLegMmfSampler(
+            sp.GetRequiredService<IRuntimeConfigProvider>(), sp.GetRequiredService<FastLegTickBuffer>()));
         services.AddSingleton<MockSharedMemoryMarketDataReader>();
         services.AddSingleton<ISignalEngine, SimpleSignalEngine>();
         services.AddHttpClient();

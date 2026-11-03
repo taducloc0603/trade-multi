@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
+using TradeDesktop.Application.Services.FastLeg;
 using TradeDesktop.Application.Services.Portfolio;
 
 namespace TradeDesktop.App.Services;
@@ -18,6 +19,8 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
     private readonly IPortfolioCoordinator _portfolioCoordinator;
     private readonly IRuntimeConfigProvider _runtimeConfig;
     private readonly ITradesSharedMemoryReader _tradesSharedMemoryReader;
+    // Sàn C (Phase 5): kiểm lại verdict ngay trước Open. null = không có sàn C (test cũ / DI thiếu) ⇒ bỏ qua.
+    private readonly IFastLegGate? _fastLegGate;
     private readonly SemaphoreSlim _physicalDispatchGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, byte> _consumedSignalIds = new();
     private const int SignalDispatchMaxAgeMs = 1000;
@@ -27,8 +30,10 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
         ITradeSessionFileLogger logger,
         IPortfolioCoordinator portfolioCoordinator,
         IRuntimeConfigProvider runtimeConfig,
-        ITradesSharedMemoryReader tradesSharedMemoryReader)
+        ITradesSharedMemoryReader tradesSharedMemoryReader,
+        IFastLegGate? fastLegGate = null)
     {
+        _fastLegGate = fastLegGate;
         _mt4Executor = executors.First(x => x.Platform == TradeLegPlatform.Mt4);
         _mt5Executor = executors.First(x => x.Platform == TradeLegPlatform.Mt5);
         _ctraderExecutor = executors.FirstOrDefault(x => x.Platform == TradeLegPlatform.CTrader);
@@ -472,6 +477,23 @@ public sealed class TradeExecutionRouter : ITradeExecutionRouter
             {
                 SafeLog($"[ROUTER][WARN] Open blocked: leg {leg.Exchange} ({leg.Platform}) chưa sẵn sàng — {notReady}");
                 return (false, $"LEG_{leg.Exchange}_NOT_READY");
+            }
+        }
+
+        // Sàn C (Phase 5): kiểm lại verdict mới nhất. Lượt trước mutex chặn im lặng, chỉ lượt sau mutex
+        // (logOppositeGuard) ghi log để một lần chặn không thành hai dòng WARN.
+        if (_fastLegGate is not null)
+        {
+            var verdict = _fastLegGate.EvaluateNow();
+            var fastLeg = FastLegOpenPolicy.Check(verdict);
+            if (!fastLeg.Allowed)
+            {
+                if (logOppositeGuard)
+                {
+                    SafeLog($"[ROUTER][WARN] Open blocked by fast leg: code={fastLeg.Code} {verdict!.ToLogFields()}");
+                }
+
+                return fastLeg;
             }
         }
 

@@ -16,6 +16,7 @@ using TradeDesktop.Application.Abstractions;
 using TradeDesktop.Application.Helpers;
 using TradeDesktop.Application.Models;
 using TradeDesktop.Application.Services;
+using TradeDesktop.Application.Services.FastLeg;
 using TradeDesktop.Application.Services.Portfolio;
 using TradeDesktop.Application.Services.CTrader;
 using TradeDesktop.Application.Services.PrimeXbt;
@@ -61,6 +62,12 @@ public sealed class DashboardViewModel : ObservableObject
     private readonly ITelegramNotifier _telegramNotifier;
     private readonly IHwndHealthChecker _hwndHealthChecker;
     private readonly SignalGapOutcomeTracker _signalGapOutcomeTracker;
+    // Sàn C Fast Leg (docs/plans/fast-leg). Stats + Down reason chỉ đụng từ UI thread trong OnSnapshotReceived.
+    private readonly IFastLegGate _fastLegGate;
+    private readonly FastLegStats _fastLegStats = new();
+    private readonly FastLegHealthTracker _fastLegHealth = new();
+    private string? _lastFastLegDownReason;
+    private long _lastFastLegErrorLogTickMs = long.MinValue / 2;
     private readonly string _normalizedHostName;
     private readonly CancellationTokenSource _orderInfoPollingCts = new();
     private readonly Dictionary<string, ulong> _lastTradeTimestampByMap = new(StringComparer.Ordinal);
@@ -93,6 +100,9 @@ public sealed class DashboardViewModel : ObservableObject
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, SignalLifecycleContext> _signalContextByPairId = new(StringComparer.Ordinal);
     private readonly Dictionary<int, SignalLifecycleContext> _closeSignalContextBySlot = [];
+    // Verdict sàn C lúc mở của từng pair, để dòng SIGNAL_CLOSE_CONFIRMED in kèm. Chỉ logging.
+    private readonly Dictionary<string, FastLegVerdict> _fastLegOpenVerdictByPairId = new(StringComparer.Ordinal);
+    private const int FastLegOpenVerdictPruneThreshold = 64;
     private int _nextStt = 1;
     private int _manualSlot;
     private int _autoSlot;
@@ -346,6 +356,9 @@ public sealed class DashboardViewModel : ObservableObject
         public SignalLegDiagnostic? LegA { get; set; }
         public SignalLegDiagnostic? LegB { get; set; }
         public bool FinalOutcomeLogged { get; set; }
+        // Phán quyết sàn C tại tick phát signal; null khi sàn C tắt. Chỉ để log.
+        public FastLegVerdict? FastLeg { get; init; }
+        public long FastLegDeferredMs { get; init; }
     }
 
     private sealed record PendingOpenTimeoutAction(
@@ -406,6 +419,10 @@ public sealed class DashboardViewModel : ObservableObject
     private string _exchangeBAsk = "-";
     private string _exchangeBSpread = "-";
     private string _exchangeBOffsetText = "Bid 0 / Ask 0";
+    private bool _isFastLegVisible;
+    private string _fastLegStripText = "-";
+    private string _fastLegVerdictText = "-";
+    private string _fastLegVerdictKey = string.Empty;
     private string _exchangeBLatencyMs = "-";
     private string _exchangeBTps = "-";
     private string _exchangeBTime = "-";
@@ -458,8 +475,11 @@ public sealed class DashboardViewModel : ObservableObject
         ITradeSessionFileLogger tradeSessionFileLogger,
         ITelegramNotifier telegramNotifier,
         IHwndHealthChecker hwndHealthChecker,
-        SignalGapOutcomeTracker signalGapOutcomeTracker)
+        SignalGapOutcomeTracker signalGapOutcomeTracker,
+        IFastLegGate fastLegGate,
+        IFastLegSampler fastLegSampler)
     {
+        _fastLegGate = fastLegGate;
         _serviceProvider = serviceProvider;
         _runtimeConfigState = runtimeConfigState;
         _configService = configService;
@@ -528,6 +548,7 @@ public sealed class DashboardViewModel : ObservableObject
 
         exchangePairReader.SnapshotReceived += OnSnapshotReceived;
         _ = StartExchangeReaderSafeAsync(exchangePairReader);
+        fastLegSampler.Start();
         _ = RunOrderInfoPollingAsync(_orderInfoPollingCts.Token);
     }
 
@@ -603,6 +624,10 @@ public sealed class DashboardViewModel : ObservableObject
     public string ExchangeBSpread { get => _exchangeBSpread; private set => SetProperty(ref _exchangeBSpread, value); }
     // Offset point (b_bid_offset_pts / b_ask_offset_pts) đang cộng vào giá B; Bid/Ask B hiển thị đã gồm offset.
     public string ExchangeBOffsetText { get => _exchangeBOffsetText; private set => SetProperty(ref _exchangeBOffsetText, value); }
+    public bool IsFastLegVisible { get => _isFastLegVisible; private set => SetProperty(ref _isFastLegVisible, value); }
+    public string FastLegStripText { get => _fastLegStripText; private set => SetProperty(ref _fastLegStripText, value); }
+    public string FastLegVerdictText { get => _fastLegVerdictText; private set => SetProperty(ref _fastLegVerdictText, value); }
+    public string FastLegVerdictKey { get => _fastLegVerdictKey; private set => SetProperty(ref _fastLegVerdictKey, value); }
     public string ExchangeBLatencyMs { get => _exchangeBLatencyMs; private set => SetProperty(ref _exchangeBLatencyMs, value); }
     public string ExchangeBTps { get => _exchangeBTps; private set => SetProperty(ref _exchangeBTps, value); }
     public string ExchangeBTime { get => _exchangeBTime; private set => SetProperty(ref _exchangeBTime, value); }
@@ -1423,6 +1448,7 @@ public sealed class DashboardViewModel : ObservableObject
         // biết sinh ra từ commit nào — không đối chiếu được "lỗi này đã sửa chưa".
         _tradeSessionFileLogger.Log($"[BUILD] version={GetAssemblyVersion()} platform_b={_runtimeConfigState.CurrentPlatformB}");
         LogHedgeVolumeConsistency();
+        LogFastLegConfiguration();
 
         ResetTradingLogicState();
         // Mỗi phiên Start kiểm tra lại lot của cặp Auto Open MỚI đầu tiên (slot resync không tính).
@@ -3937,6 +3963,7 @@ public sealed class DashboardViewModel : ObservableObject
         _signalContextByTrigger.Clear();
         _signalContextByPairId.Clear();
         _closeSignalContextBySlot.Clear();
+        _fastLegOpenVerdictByPairId.Clear();
         _closeBothFlatPollStreak = 0;
         _externalPartialCloseStreak = 0;
         _externalPartialCloseInFlight = false;
@@ -4200,7 +4227,7 @@ public sealed class DashboardViewModel : ObservableObject
             $"Bid {_runtimeConfigState.CurrentBBidOffsetPts:+0;-0;0} / Ask {_runtimeConfigState.CurrentBAskOffsetPts:+0;-0;0}");
 
         RuntimeSummary =
-            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  MinProfitToClose: {_runtimeConfigState.CurrentMinProfitToClose}  |  MaxLifeTime: {_runtimeConfigState.CurrentMaxLifeTimeBySecond}s  |  SOS A Distance: {_runtimeConfigState.CurrentSosTriggerAOpenDistancePts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  CTraderConfirmLatencyB: {(_runtimeConfigState.CurrentCTraderConfirmLatencyB is { } latencyB ? latencyB.ToString(CultureInfo.InvariantCulture) : "SHARED")} (effective {_runtimeConfigState.CurrentConfirmLatencyMsBEffective})  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}";
+            $"Host Name: {_runtimeConfigState.CurrentMachineHostName}  |  Point: {_runtimeConfigState.CurrentPoint}  |  OpenPts: {_runtimeConfigState.CurrentOpenPts}  |  ConfirmGapPts: {_runtimeConfigState.CurrentConfirmGapPts}  |  ClosePts: {_runtimeConfigState.CurrentClosePts}  |  CloseConfirmGapPts: {_runtimeConfigState.CurrentCloseConfirmGapPts}  |  MinProfitToClose: {_runtimeConfigState.CurrentMinProfitToClose}  |  MaxLifeTime: {_runtimeConfigState.CurrentMaxLifeTimeBySecond}s  |  SOS A Distance: {_runtimeConfigState.CurrentSosTriggerAOpenDistancePts}  |  SOS Time: {_runtimeConfigState.CurrentSosTriggerAfterSeconds}s  |  SOS ConfirmGap: {_runtimeConfigState.CurrentSosCloseConfirmGapPts}  |  SOS CloseGap: {_runtimeConfigState.CurrentSosCloseGapPts}  |  OppositeOpenDistance: {_runtimeConfigState.CurrentOppositeOpenMinDistancePts}pts  |  StartTimeHold: {_runtimeConfigState.CurrentStartTimeHold}  |  EndTimeHold: {_runtimeConfigState.CurrentEndTimeHold}  |  ConfirmLatencyMs: {_runtimeConfigState.CurrentConfirmLatencyMs}  |  CTraderConfirmLatencyB: {(_runtimeConfigState.CurrentCTraderConfirmLatencyB is { } latencyB ? latencyB.ToString(CultureInfo.InvariantCulture) : "SHARED")} (effective {_runtimeConfigState.CurrentConfirmLatencyMsBEffective})  |  MaxGap: {_runtimeConfigState.CurrentMaxGap}  |  LimitMaxGap: {_runtimeConfigState.CurrentLimitMaxGap}  |  LimitMaxTp: {_runtimeConfigState.CurrentLimitMaxTp}  |  MaxSpread: {_runtimeConfigState.CurrentMaxSpread}  |  Map 1: {_runtimeConfigState.CurrentMapName1}  |  Map 2: {_runtimeConfigState.CurrentMapName2}  |  FastLeg: {_runtimeConfigState.CurrentFastLegConfig.ToSummary()}";
 
         var requiresExchangeBHwnd = !IsExchangeBWithoutHwnd();
         HasManualTradeHwndConfig = _runtimeConfigState.CurrentManualHwndColumns.Any(x => x.IsCompleteFor(requiresExchangeBHwnd));
@@ -7654,6 +7681,13 @@ public sealed class DashboardViewModel : ObservableObject
                 SafeVmLog(
                     $"[CONFIG] b_bid_offset_pts={result.BBidOffsetPts} b_ask_offset_pts={result.BAskOffsetPts} " +
                     "(cong vao gia B sau khi doi sang point; 0 = khong dich)");
+                // Sàn C Fast Leg: cột hỏng ⇒ F tắt (Disabled) nhưng config còn lại vẫn chạy; phải để lại dấu vết rõ.
+                _runtimeConfigState.UpdateFastLeg(result.FastLeg);
+                SafeVmLog($"[CONFIG] fast_leg={_runtimeConfigState.CurrentFastLegConfig.ToSummary()}");
+                if (!string.IsNullOrEmpty(result.FastLegError))
+                {
+                    SafeVmLog($"[FAST_LEG][ERROR] config invalid, fast leg DISABLED: {result.FastLegError}");
+                }
                 IsShowConfigVisible = result.IsShowConfig == 1;
                 OnPropertyChanged(nameof(IsPlatformBPrimeXbt));
                 ResetTradingLogicState();
@@ -7670,7 +7704,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
                     DbInlineData =
-                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | signal_cycle_size={result.SignalCycleSize} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={FormatSameActionRange(result.RdStartSameActionLockSeconds, result.RdEndSameActionLockSeconds)} | close_rd_same_action={FormatSameActionRange(result.CloseRdStartSameActionLockSeconds, result.CloseRdEndSameActionLockSeconds)} |open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | open_max_last_gap_pts={result.OpenMaxLastGapPts?.ToString() ?? "null"} | b_bid_offset_pts={result.BBidOffsetPts} | b_ask_offset_pts={result.BAskOffsetPts} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | sos_trigger_a_open_distance_pts={result.SosTriggerAOpenDistancePts} | sos_trigger_after_seconds={result.SosTriggerAfterSeconds} | sos_close_confirm_gap_pts={result.SosCloseConfirmGapPts} | sos_close_gap_pts={result.SosCloseGapPts} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={SansJsonHelper.Redact(result.SansJson)}";
+                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | signal_cycle_size={result.SignalCycleSize} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={FormatSameActionRange(result.RdStartSameActionLockSeconds, result.RdEndSameActionLockSeconds)} | close_rd_same_action={FormatSameActionRange(result.CloseRdStartSameActionLockSeconds, result.CloseRdEndSameActionLockSeconds)} |open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | open_max_last_gap_pts={result.OpenMaxLastGapPts?.ToString() ?? "null"} | b_bid_offset_pts={result.BBidOffsetPts} | b_ask_offset_pts={result.BAskOffsetPts} | fast_leg={result.FastLeg?.ToSummary() ?? "disabled"} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | sos_trigger_a_open_distance_pts={result.SosTriggerAOpenDistancePts} | sos_trigger_after_seconds={result.SosTriggerAfterSeconds} | sos_close_confirm_gap_pts={result.SosCloseConfirmGapPts} | sos_close_gap_pts={result.SosCloseGapPts} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={SansJsonHelper.Redact(result.SansJson)}";
                     IsDbInlineDataVisible = true;
                 }
                 else
@@ -7749,9 +7783,12 @@ public sealed class DashboardViewModel : ObservableObject
             _runtimeConfigState.UpdateDashboardMetrics(metrics);
             IsLoading = false;
 
+            // Sàn C: tính MỘT lần mỗi tick rồi dùng chung. Đặt trước mọi return vì dải UI và STATS chạy cả khi chưa Start.
+            var fastLegVerdict = EvaluateFastLegSafely();
+
             // Ghi gap mỗi tick ra file riêng của phiên. Đặt TRƯỚC mọi throttle UI để file giữ
             // đủ nhịp tick, không bị thưa theo nhịp vẽ panel.
-            LogGapTick(metrics);
+            LogGapTick(metrics, fastLegVerdict);
 
             // Throttle UI-heavy work; diagnostics and logic still run every tick.
             var nowTickMs = Environment.TickCount64;
@@ -7760,6 +7797,7 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 _lastSnapshotUiRenderTickMs = nowTickMs;
                 BindDashboardMetrics(metrics);
+                BindFastLegStrip(fastLegVerdict);
             }
             LogLatencyAnomalyIfNeeded(metrics);
             LogStaleTickIfNeeded(metrics);
@@ -7804,7 +7842,8 @@ public sealed class DashboardViewModel : ObservableObject
                     metrics.ExchangeB.Ask,
                     metrics.GapBuy,
                     metrics.GapSell,
-                    _runtimeConfigState.CurrentPoint),
+                    _runtimeConfigState.CurrentPoint,
+                    fastLegVerdict),
                 new GapSignalConfirmationConfig(
                     ConfirmGapPts: _runtimeConfigState.CurrentConfirmGapPts,
                     OpenPts: _runtimeConfigState.CurrentOpenPts,
@@ -8394,6 +8433,99 @@ public sealed class DashboardViewModel : ObservableObject
     /// Hardcoded false; future toggle qua feature flag nếu cần debug.
     /// </summary>
     public bool IsManualTradeButtonsVisible => false;
+
+    // Sàn C chạy TRƯỚC ProcessSnapshot trong cùng tick: một lỗi ở đây không được làm mất tick giao dịch.
+    // Lỗi ⇒ coi như sàn C tắt cho tick này (null = hành vi như chưa có sàn C), log có throttle.
+    private FastLegVerdict? EvaluateFastLegSafely()
+    {
+        try
+        {
+            var verdict = _fastLegGate.EvaluateNow();
+            ObserveFastLegVerdict(verdict);
+            return verdict;
+        }
+        catch (Exception ex)
+        {
+            var nowMs = Environment.TickCount64;
+            if (nowMs - _lastFastLegErrorLogTickMs >= 60_000)
+            {
+                _lastFastLegErrorLogTickMs = nowMs;
+                SafeVmLog($"[FAST_LEG][ERROR] evaluate failed, bo qua san C o tick nay: {ex.Message}");
+            }
+
+            return null;
+        }
+    }
+
+    private void ObserveFastLegVerdict(FastLegVerdict? verdict)
+    {
+        if (verdict is null)
+        {
+            _fastLegStats.Reset();
+            _fastLegHealth.Reset();
+            _lastFastLegDownReason = null;
+            return;
+        }
+
+        if (!string.Equals(verdict.DownReason, _lastFastLegDownReason, StringComparison.Ordinal))
+        {
+            // Chỉ ghi lúc đổi trạng thái; LogFileOnly vì đây là đường chạy mỗi tick (CLAUDE.md §5).
+            _tradeSessionFileLogger.LogFileOnly(verdict.DownReason is null
+                ? $"[FAST_LEG][INFO] san C hoat dong lai (truoc do: {_lastFastLegDownReason})"
+                : $"[FAST_LEG][WARN] san C Down reason={verdict.DownReason}");
+            _lastFastLegDownReason = verdict.DownReason;
+        }
+
+        if (_fastLegStats.Observe(verdict, Environment.TickCount64, _fastLegGate.TotalTicks) is { } statsLine)
+        {
+            _tradeSessionFileLogger.LogFileOnly(statsLine);
+        }
+
+        ObserveFastLegHealth(verdict);
+    }
+
+    // Telegram khi sàn C hỏng liên tục > 30 s và khi có lại. Chỉ lúc đang chạy Auto: chưa Start thì không ai cần báo.
+    // Tracker vẫn chạy cả khi chưa Start để đếm đúng thời gian hỏng; Start lúc C đã hỏng sẵn thì kiểm tra lúc Start báo.
+    private void ObserveFastLegHealth(FastLegVerdict verdict)
+    {
+        var nowMs = Environment.TickCount64;
+        var healthEvent = _fastLegHealth.Observe(verdict, nowMs);
+        if (healthEvent == FastLegHealthEvent.None || !IsTradingLogicEnabled)
+        {
+            return;
+        }
+
+        var filter = _runtimeConfigState.CurrentFastLegConfig.IsFilter;
+        if (healthEvent == FastLegHealthEvent.Down)
+        {
+            var detail = $"Sàn C không có dữ liệu hợp lệ hơn {FastLegHealthTracker.DefaultThresholdMs / 1000} s " +
+                $"(lý do: {_fastLegHealth.LastBadReason ?? "-"}). " +
+                (filter ? "Đang CHẶN mọi lệnh Open (fail_open tắt); Close vẫn chạy." : "Chế độ observe: không chặn lệnh.");
+            SafeVmLog($"[FAST_LEG][ERROR] FAST_LEG_DOWN {detail}");
+            NotifyTelegram("FAST_LEG_DOWN", "ERROR", detail);
+            return;
+        }
+
+        SafeVmLog("[FAST_LEG][INFO] FAST_LEG_RECOVERED san C hoat dong lai");
+        NotifyTelegram("FAST_LEG_RECOVERED", "INFO", "Sàn C hoạt động lại, có phán quyết bình thường.");
+    }
+
+    private void BindFastLegStrip(FastLegVerdict? verdict)
+    {
+        IsFastLegVisible = verdict is not null;
+        if (verdict is null)
+        {
+            return;
+        }
+
+        var config = _runtimeConfigState.CurrentFastLegConfig;
+        var age = verdict.AgeMs is { } ageMs ? ageMs.ToString(CultureInfo.InvariantCulture) : "-";
+        FastLegStripText = FormattableString.Invariant(
+            $"{(string.IsNullOrEmpty(config.Symbol) ? "-" : config.Symbol)}  |  {FormatTrimmedNumberOrDash(verdict.CBid)} / {FormatTrimmedNumberOrDash(verdict.CAsk)}  |  {verdict.MovePts:+0.#;-0.#;0} pt/{config.WindowMs}ms  |  tuổi {age}ms");
+        FastLegVerdictKey = verdict.Kind.ToString();
+        var verdictText = verdict.DownReason is null ? verdict.Kind.ToString() : $"{verdict.Kind}: {verdict.DownReason}";
+        FastLegVerdictText = config.Mode == FastLegMode.Observe ? $"{verdictText} (observe)" : verdictText;
+    }
 
     private void BindDashboardMetrics(DashboardMetrics metrics)
     {
@@ -9297,7 +9429,9 @@ public sealed class DashboardViewModel : ObservableObject
             IsHedge = original is not null,
             OriginalSlot = original?.SlotId,
             OriginalPairId = original?.PairId,
-            OriginalSide = original?.Side ?? TradingPositionSide.None
+            OriginalSide = original?.Side ?? TradingPositionSide.None,
+            FastLeg = trigger.FastLeg,
+            FastLegDeferredMs = trigger.FastLegDeferredMs
         };
         _signalContextByTrigger[trigger] = context;
         return context;
@@ -9540,6 +9674,8 @@ public sealed class DashboardViewModel : ObservableObject
             AddFieldIfValue(fields, "positionAgeSeconds", positionAgeSeconds);
         }
 
+        AddFastLegOutcomeFields(fields, context, outcome, resolvedPairId);
+
         if (reasonCode is "QUOTA_TOTAL_FULL" or "QUOTA_BUY_FULL" or "QUOTA_SELL_FULL")
         {
             var quota = _portfolioCoordinator.RandomQuotaState;
@@ -9586,11 +9722,66 @@ public sealed class DashboardViewModel : ObservableObject
         CleanupSignalContext(context);
     }
 
+    // Sàn C: verdict lúc signal + (với Close) verdict lúc mở của chính pair. Chỉ logging, không chạm quyết định.
+    private void AddFastLegOutcomeFields(
+        List<(string Name, object? Value)> fields,
+        SignalLifecycleContext context,
+        string outcome,
+        string? pairId)
+    {
+        if (context.FastLeg is { } c)
+        {
+            fields.Add(("fastVerdict", c.Kind.ToString()));
+            fields.Add(("fastMovePts", c.MovePts.ToString("0.##", CultureInfo.InvariantCulture)));
+            fields.Add(("fastAgeMs", c.AgeMs?.ToString(CultureInfo.InvariantCulture) ?? "-"));
+            fields.Add(("fastDeferredMs", context.FastLegDeferredMs.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        if (outcome != "CONFIRMED" || string.IsNullOrWhiteSpace(pairId))
+        {
+            return;
+        }
+
+        if (context.Action == GapSignalAction.Open)
+        {
+            if (context.FastLeg is not null)
+            {
+                PruneFastLegOpenVerdicts();
+                _fastLegOpenVerdictByPairId[pairId] = context.FastLeg;
+            }
+
+            return;
+        }
+
+        if (_fastLegOpenVerdictByPairId.Remove(pairId, out var openVerdict))
+        {
+            fields.Add(("fastOpenVerdict", openVerdict.Kind.ToString()));
+            fields.Add(("fastOpenMovePts", openVerdict.MovePts.ToString("0.##", CultureInfo.InvariantCulture)));
+        }
+    }
+
+    // Pair đóng bằng tay/recovery không đi qua SIGNAL_CLOSE_CONFIRMED nên entry có thể sót lại:
+    // vượt trần thì bỏ các pair không còn slot.
+    private void PruneFastLegOpenVerdicts()
+    {
+        if (_fastLegOpenVerdictByPairId.Count < FastLegOpenVerdictPruneThreshold)
+        {
+            return;
+        }
+
+        foreach (var stalePairId in _fastLegOpenVerdictByPairId.Keys
+                     .Where(id => _portfolioCoordinator.GetSlotByPairId(id) is null)
+                     .ToList())
+        {
+            _fastLegOpenVerdictByPairId.Remove(stalePairId);
+        }
+    }
+
     /// <summary>
     /// Ghi gap của tick hiện tại vào file <c>*-gap-tick.log</c> của phiên (Start → Stop).
     /// Chỉ logging — mọi lỗi được nuốt để không bao giờ ảnh hưởng đường quyết định giao dịch.
     /// </summary>
-    private void LogGapTick(DashboardMetrics metrics)
+    private void LogGapTick(DashboardMetrics metrics, FastLegVerdict? fastLegVerdict)
     {
         try
         {
@@ -9605,7 +9796,7 @@ public sealed class DashboardViewModel : ObservableObject
             }
 
             _tradeSessionFileLogger.LogGapTickRaw(
-                GapTickLineFormatter.Format(metrics, _runtimeConfigState.CurrentPoint));
+                GapTickLineFormatter.Format(metrics, _runtimeConfigState.CurrentPoint, fastLegVerdict));
         }
         catch (Exception ex)
         {
@@ -9697,7 +9888,9 @@ public sealed class DashboardViewModel : ObservableObject
                 MaxGap: _runtimeConfigState.CurrentMaxGap,
                 SignalCycleSize: _runtimeConfigState.CurrentSignalCycleSize,
                 HoldConfirmMs: _runtimeConfigState.CurrentHoldConfirmMs,
-                CloseHoldConfirmMs: _runtimeConfigState.CurrentCloseHoldConfirmMs));
+                CloseHoldConfirmMs: _runtimeConfigState.CurrentCloseHoldConfirmMs,
+                FastLeg: trigger.FastLeg,
+                FastLegDeferredMs: trigger.FastLegDeferredMs));
 
             // KHÔNG gắn nhãn ở đây, kể cả khi CLOSE đã có sẵn pairId. Sau điểm này signal còn
             // qua nhiều gate có thể chặn. Nhãn EXEC gắn tại AutoBuy/AutoSell/AutoCloseOrderAsync
@@ -10077,6 +10270,53 @@ public sealed class DashboardViewModel : ObservableObject
                 // swallow by design
             }
         });
+    }
+
+    // Sàn C lúc Start (Phase 5): ghi cấu hình + verdict hiện tại vào log phiên. Chỉ cảnh báo, KHÔNG chặn Start.
+    // Filter mà C đang Down ⇒ mọi Open sẽ bị chặn tới khi C có lại, nên báo ERROR + Telegram ngay thay vì chờ 30 s.
+    private void LogFastLegConfiguration()
+    {
+        try
+        {
+            var config = _runtimeConfigState.CurrentFastLegConfig;
+            _tradeSessionFileLogger.Log($"[FAST_LEG][INFO] config={config.ToSummary()}");
+            if (!config.IsActive || _fastLegGate.EvaluateNow() is not { } verdict)
+            {
+                return;
+            }
+
+            _tradeSessionFileLogger.Log($"[FAST_LEG][INFO] start verdict: {verdict.ToLogFields()}");
+            if (config.IsFilter && verdict.Kind == FastLegVerdictKind.Down)
+            {
+                var detail = $"Sàn C chưa sẵn sàng lúc Start (lý do: {verdict.DownReason ?? "-"}). " +
+                    (config.FailOpen
+                        ? "fail_open bật: Open vẫn chạy nhưng không có lớp lọc sàn C."
+                        : "Chế độ filter, fail_open tắt: mọi lệnh Open sẽ bị chặn tới khi sàn C hoạt động.");
+                _tradeSessionFileLogger.Log($"[FAST_LEG][ERROR] FAST_LEG_NOT_READY_AT_START {detail}");
+                NotifyTelegram("FAST_LEG_NOT_READY_AT_START", "ERROR", detail);
+            }
+
+            // [R-F13] Sàn C phải là nhân chứng ĐỘC LẬP. Cùng symbol và cùng giá với A hoặc B thường là EA/terminal bị
+            // gắn nhầm (cùng nguồn) ⇒ lọc mất ý nghĩa. Một tick trùng là bằng chứng yếu nên chỉ WARN.
+            if (_runtimeConfigState.CurrentDashboardMetrics is { } metrics)
+            {
+                foreach (var (name, leg) in new[] { ("A", metrics.ExchangeA), ("B", metrics.ExchangeB) })
+                {
+                    if (!string.IsNullOrEmpty(config.Symbol)
+                        && string.Equals(leg.Symbol, config.Symbol, StringComparison.OrdinalIgnoreCase)
+                        && leg.Bid == verdict.CBid && leg.Ask == verdict.CAsk)
+                    {
+                        _tradeSessionFileLogger.Log(
+                            $"[FAST_LEG][WARN] san C trung symbol va gia voi san {name} ({leg.Symbol} {leg.Bid}/{leg.Ask}) — " +
+                            "kiem tra EA kenh C co gan nham terminal/chart cua san do khong");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            SafeVmLog($"[FAST_LEG][WARN] start check failed: {ex.Message}");
+        }
     }
 
     // Phase 8 — R5: `CalculateTradeProfit` = (Bid − openPrice) × point, BỎ QUA lot size. Nếu notional hai chân

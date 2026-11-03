@@ -247,6 +247,8 @@ public sealed class TradeSessionFileLogger : ITradeSessionFileLogger
                     "| timestamp=gio local cua tick (HH:mm:ss.fff) " +
                     "| gap_buy=(B.Bid-A.Ask) gap_sell=(B.Ask-A.Bid) gaps_unit=point " +
                     "| a_*=san A b_*=san B (bid/ask=gia tho, spread=point, lat=latency ms) " +
+                    "| c_*=san C Fast Leg, chi co khi fast_leg bat (bid/ask=gia tho, age=tuoi tick ms, " +
+                    "move=bien do mid trong cua so (point), verdict=Confirmed/TooFast/Stale/Down) " +
                     "| point=he so nhan point dang dung " +
                     "| '-' = gia tri khong san sang tai tick do");
                 if (gapTickOpenError is not null)

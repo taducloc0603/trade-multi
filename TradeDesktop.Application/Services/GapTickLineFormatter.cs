@@ -1,4 +1,5 @@
 using System.Globalization;
+using TradeDesktop.Application.Models;
 using TradeDesktop.Domain.Models;
 
 namespace TradeDesktop.Application.Services;
@@ -17,7 +18,11 @@ public static class GapTickLineFormatter
     /// </summary>
     /// <param name="metrics">Snapshot đã map, cùng nguồn với dữ liệu đưa vào signal engine.</param>
     /// <param name="point">Hệ số point runtime đang dùng.</param>
-    public static string Format(DashboardMetrics metrics, decimal point)
+    /// <param name="fastLeg">
+    /// Phán quyết sàn C của cùng tick. null (sàn C tắt) ⇒ dòng giữ nguyên từng byte như trước khi có sàn C.
+    /// Các trường <c>c_*</c> chèn TRƯỚC <c>point=</c> để <c>point=</c> vẫn là trường cuối dòng.
+    /// </param>
+    public static string Format(DashboardMetrics metrics, decimal point, FastLegVerdict? fastLeg = null)
     {
         ArgumentNullException.ThrowIfNull(metrics);
 
@@ -41,7 +46,23 @@ public static class GapTickLineFormatter
             " b_ask=", FormatDecimal(b.Ask),
             " b_spread=", FormatDecimal(b.Spread),
             " b_lat=", FormatDecimal(b.LatencyMs),
+            FormatFastLeg(fastLeg),
             " point=", point.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static string FormatFastLeg(FastLegVerdict? c)
+    {
+        if (c is null)
+        {
+            return string.Empty;
+        }
+
+        return string.Concat(
+            " c_bid=", FormatDecimal(c.CBid),
+            " c_ask=", FormatDecimal(c.CAsk),
+            " c_age=", c.AgeMs.HasValue ? c.AgeMs.Value.ToString(CultureInfo.InvariantCulture) : MissingValue,
+            " c_move=", c.MovePts.ToString("0.##", CultureInfo.InvariantCulture),
+            " c_verdict=", c.Kind.ToString());
     }
 
     private static string FormatInt(int? value) =>

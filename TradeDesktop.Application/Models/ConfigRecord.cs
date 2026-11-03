@@ -82,4 +82,6 @@ public sealed record ConfigRecord(
     int? OpenMaxLastGapPts = null,
     // Offset (point) cộng vào giá Bid/Ask sàn B sau khi đổi sang point. 0 = không dịch; số âm hợp lệ, KHÔNG clamp.
     int BBidOffsetPts = 0,
-    int BAskOffsetPts = 0);
+    int BAskOffsetPts = 0,
+    // Cột JSONB `fast_leg` (sàn C, docs/plans/fast-leg). Rỗng = F tắt. Parse ở ConfigService qua FastLegConfig.TryParse.
+    string FastLegJson = "");
