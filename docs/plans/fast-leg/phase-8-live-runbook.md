@@ -12,6 +12,15 @@
   Feed thưa (vd Exness ~1–2 lần đổi giá/s) làm Stale cao ⇒ chặn Open nhiều.
 - Biết rõ bản chất: ngưỡng Long (`maxMovePts=5`) đo trên cặp THINK–GTC. Với feed khác, cấu hình đó có thể chặn Open
   ~1/3 thời gian (đo 2026-11-03 với Exness). **Không bật `filter` trước khi chạy `observe` và đọc báo cáo ở bước 3.**
+- Số đo nghiệm thu demo (Phase 6, 2026-11-03, C = Exness, `filter` theo thông số Long, 1.5 h, 36 cặp):
+  - Open bị chặn **30 %** thời gian.
+  - Open bị hoãn p50 ~160 ms, tối đa ~1 s. Close thường bị hoãn 5 lần, mỗi lần 95–455 ms.
+  - Router chặn lại 1/37 lần (`FAST_LEG_STALE`, tick C vừa quá 1000 ms) ⇒ mất signal đó.
+  - RAM/thread/handle không tăng; 0 ERROR.
+  - Chưa đo được sàn C có giảm trượt hay không: A/B demo cùng broker nên gap gần như không đổi.
+- **Telegram có thể KHÔNG gửi gì.** Trong repo, `TelegramNotifier` để trống `BotToken`/`ChatId` (no-op cho MỌI cảnh báo
+  của app, không riêng sàn C). Nếu bản build trên VPS chưa điền token thì đừng trông vào Telegram ở bước 5: theo dõi
+  panel Signal của app / `trade-log` (các dòng `[FAST_LEG][ERROR] FAST_LEG_*` vẫn được ghi).
 
 ## 1. Cài terminal C trên VPS
 
@@ -32,6 +41,11 @@
      `start verdict: … hb=alive` ở bước 2.3 (`hb=n/a` = không thấy map heartbeat ⇒ không tách được Down khỏi Stale).
      Máy có repo thì chạy thêm `recheck.ps1 -Phase 2 -SkipBuild` và xem dòng **A7** (kiểm cả hai map).
    - Giá A/B trên app KHÔNG đổi sau khi gắn EA C. Nếu đổi thì gỡ EA C ngay (khả năng gắn nhầm kênh).
+5. Khi thao tác trên VPS, **đừng đụng cửa sổ MT5 của A/B** (bài học Phase 6):
+   - Đóng chart của A/B là gỡ luôn EA DataExporter trên chart đó ⇒ giá đứng ⇒ guard price-freeze chặn mọi Open.
+   - Toolbox của A/B phải để ở tab **Trade**. Nếu chuyển sang tab khác (vd Experts), lệnh đóng bằng click vẫn báo
+     thành công nhưng lệnh KHÔNG đóng ⇒ pending-close thử lại liên tục.
+   - Mở lại MT5 sẽ đổi HWND ⇒ phải cập nhật `manualHwndColumns` trước khi Start.
 
 ## 2. Migration + cấu hình (chế độ quan sát)
 
@@ -70,7 +84,7 @@
 
 1. Config ⇒ Sàn C ⇒ **Chế độ: Filter**, nhập ngưỡng đã chốt ⇒ **Save**. Runtime áp ngay, hoặc bấm Reconnect cho chắc.
 2. Log Start phải ghi `config=filter|…` đúng ngưỡng. Nếu C Down lúc Start sẽ có `FAST_LEG_NOT_READY_AT_START`
-   (ERROR + Telegram); khi đó mọi Open bị chặn cho tới khi C hoạt động.
+   (ERROR, kèm Telegram nếu đã cấu hình); khi đó mọi Open bị chặn cho tới khi C hoạt động.
 3. Ngày đầu theo dõi sát:
    - `[FAST_LEG][DEFER]` / `[RELEASE]` / `[ABANDON]`: nhiều `ABANDON reason=defer_timeout` nghĩa là C TooFast/Stale kéo dài
      ⇒ ngưỡng đang quá chặt.
@@ -80,7 +94,8 @@
 
 ## 5. Theo dõi & dừng khẩn cấp
 
-- Telegram cần phản ứng:
+- Cảnh báo cần phản ứng. Luôn có trong panel Signal và `trade-log` dạng `[FAST_LEG][ERROR] FAST_LEG_*`; qua Telegram
+  thì chỉ khi bản build đã điền token (xem §0):
   - `FAST_LEG_DOWN`: C hỏng ≥ 30 s. Với `failOpen=false`, **mọi Open bị chặn**; Close vẫn chạy.
     Mở terminal C, kiểm kết nối và EA. Không sửa được nhanh thì tắt C (kill switch).
   - `FAST_LEG_NOT_READY_AT_START`: như trên, xảy ra lúc Start.

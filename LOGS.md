@@ -624,9 +624,10 @@ tắt (`fast_leg=disabled` trong `[DB]` / `[CONFIG]`). Chi tiết: `docs/plans/f
 [FAST_LEG][RELEASE] action=OPEN side=Buy slot=- cycle=<id> verdict=Confirmed move_pts=1 deferred_ticks=3 deferred_ms=150
 [FAST_LEG][ABANDON] action=CLOSE side=Buy slot=1 cycle=<id> reason=cycle_reset deferred_ticks=2 deferred_ms=100
 [FAST_LEG][WARN] san C Down reason=terminal_disconnected
-[FAST_LEG][ERROR] FAST_LEG_DOWN ...                       (Telegram, sau Down/Stale liên tục >= 30 s)
-[FAST_LEG][INFO] FAST_LEG_RECOVERED san C hoat dong lai   (Telegram)
-[FAST_LEG][ERROR] FAST_LEG_NOT_READY_AT_START ...         (Telegram; filter bật mà C Down lúc Start)
+[FAST_LEG][ERROR] FAST_LEG_DOWN ...                       (+ Telegram*, sau Down/Stale liên tục >= 30 s)
+[FAST_LEG][INFO] FAST_LEG_RECOVERED san C hoat dong lai   (+ Telegram*)
+[FAST_LEG][ERROR] FAST_LEG_NOT_READY_AT_START ...         (+ Telegram*; filter bật mà C Down lúc Start)
+                                                          (* chỉ khi TelegramNotifier có token; repo để trống)
 [FAST_LEG][ERROR] config invalid, fast leg DISABLED: ...
 [ROUTER][WARN] Open blocked by fast leg: code=FAST_LEG_TOO_FAST verdict=TooFast ...
 ```

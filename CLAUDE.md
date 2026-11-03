@@ -612,6 +612,8 @@ TradeDesktop.Tests/            # xUnit tests
 - Telegram `FAST_LEG_DOWN` chỉ sau Down/Stale LIÊN TỤC ≥ 30 s (Stale chập chờn của feed thưa là bình thường), một lần mỗi
   đợt; `FAST_LEG_RECOVERED` khi có verdict lại; chỉ khi `IsTradingLogicEnabled`. Tắt terminal C KHÔNG phải kill switch:
   với `failOpen=false` nó chặn mọi Open — kill switch là `docs/plans/fast-leg/KILL-SWITCH.md`.
+  Lưu ý: `TelegramNotifier` trong repo để trống `BotToken`/`ChatId` ⇒ MỌI `NotifyTelegram` là no-op. Dòng
+  `[FAST_LEG][ERROR] FAST_LEG_*` trên panel/log mới là tín hiệu chắc chắn có.
 - Ngưỡng Long (`maxMovePts=5`) đo trên cặp THINK–GTC. Với feed Exness đo 2026-11-03: `|move|` p90 ~16 pt, Stale ~9 % ⇒
   chặn Open ~33 % thời gian. Chọn ngưỡng bằng `observe` + `docs/plans/fast-leg/tools/fast-leg-report.py`, đừng đoán.
 
@@ -697,6 +699,10 @@ TradeDesktop.Tests/            # xUnit tests
   **KHÔNG fallback row 0** nếu không tìm thấy → skip + log warn.
 - `AutoCloseOrderAsync(trigger, targetSlot)` nhận slot từ `DispatchCloseTriggerAsync`.
 - Legacy `SelectCloseCandidateForExchange` (`[Obsolete]`) chỉ cho manual close + recovery fallback.
+- **MT5 native close cần Toolbox đang ở tab Trade** (đo 2026-11-03). Close chọn dòng trong list tab Trade rồi gửi
+  `WM_COMMAND 33033` lên cửa sổ gốc. Toolbox ở tab khác (vd Experts) thì native vẫn trả `result=ok` nhưng lệnh KHÔNG
+  đóng ⇒ pending-close retry lặp vô hạn (đã thấy 378 lần). HWND `trade*` phải là chính list tab Trade (10 cột),
+  không phải khung Toolbox: native lấy SysListView32 con ĐẦU TIÊN, mà con đầu của khung là list 3 cột.
 
 ### Adapter wrap (Phase 0)
 - DI: `ITradingFlowEngine` → `PortfolioCoordinatorAdapter` (NOT `TradingFlowEngine`).

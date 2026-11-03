@@ -113,7 +113,7 @@ Router chỉ kiểm lại cho Open, với mã `FAST_LEG_TOO_FAST` / `FAST_LEG_ST
 | Rủi ro | Giảm thiểu |
 |---|---|
 | Cycle bị giữ lâu ⇒ `_gaps` phình (lỗi treo UI cũ) | Trần `maxDeferMs`; soak kiểm không có `long_cycle` |
-| C chết ⇒ không mở được lệnh | Đúng ý `fail_open=false`; Telegram `FAST_LEG_DOWN` sau 30 s; Close không bị ảnh hưởng (D6) |
+| C chết ⇒ không mở được lệnh | Đúng ý `fail_open=false`; `FAST_LEG_DOWN` sau 30 s (log + panel; Telegram chỉ khi có token); Close không bị ảnh hưởng (D6) |
 | Thị trường quá yên ⇒ C không tick > 1 s ⇒ Stale chặn Open | D9: đo `stale_hb_alive_pct` rồi quyết lại |
 | EA C cài nhầm kênh "A"/"B" ⇒ ghi đè giá chân đang giao dịch | Cảnh báo ở runbook; kiểm lúc Start (symbol + giá C trùng A/B ⇒ WARN — một tick trùng là bằng chứng yếu nên không ERROR, không chặn Start) |
 | Close bị hoãn trong lúc giá chạy | Chỉ khi TooFast; trần `maxDeferMs`; SOS vẫn đóng |
@@ -126,7 +126,8 @@ Router chỉ kiểm lại cho Open, với mã `FAST_LEG_TOO_FAST` / `FAST_LEG_ST
 - **Bật/tắt:** cửa sổ Config, mục **Sàn C**: tick **Bật sàn C (Fast Leg)** rồi **Save**; bỏ tick ⇒ ghi `enabled=false`.
   Nút **Check** đọc map tick (không đọc heartbeat) và tự điền Symbol nếu ô trống. Không sửa mục Sàn C ⇒ Save KHÔNG ghi cột `fast_leg`. Hoặc sửa cột trực tiếp
   ([FAST-LEG-MIGRATION.sql](../../FAST-LEG-MIGRATION.sql)) rồi Reconnect. Tắt khẩn cấp: [KILL-SWITCH.md](KILL-SWITCH.md).
-- **Theo dõi:** `[FAST_LEG][STATS]` mỗi phút; Telegram `FAST_LEG_DOWN` / `FAST_LEG_RECOVERED` / `FAST_LEG_NOT_READY_AT_START`.
+- **Theo dõi:** `[FAST_LEG][STATS]` mỗi phút; `FAST_LEG_DOWN` / `FAST_LEG_RECOVERED` / `FAST_LEG_NOT_READY_AT_START` trong
+  panel Signal + `trade-log`, và qua Telegram nếu `TelegramNotifier` có token (bản trong repo để trống ⇒ không gửi).
   Danh mục log: `LOGS.md` mục `[FAST_LEG]`.
 - **Chọn ngưỡng:** chạy `mode=observe` vài phiên rồi
   `python -I docs/plans/fast-leg/tools/fast-leg-report.py <prefix phiên> [...]` (xem docstring đầu file cho định nghĩa
