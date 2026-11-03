@@ -74,4 +74,68 @@ public sealed class BeginWaitAfterCloseMultiSlotTests
         // Cycle still finalizes its bookkeeping so the flow can transition to WaitingOpen.
         Assert.Equal(closedAt, adapter.ClosedAtUtc);
     }
+
+    // Rule C: the post-close lock must also be anchored at Close CONFIRM on the multi-slot
+    // (pairId) path. Pre-fix the adapter cleared LastCloseConfirmedAtUtc right after setting it,
+    // so a close that confirmed late (pending retries) allowed Auto Open immediately.
+    private static (PortfolioCoordinator coordinator, PortfolioCoordinatorAdapter adapter) CreateWithOneLiveSlot(
+        int postCloseLockSeconds)
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.UpdateQuotaConfig(maxTotal: 7, maxBuy: 4, maxSell: 4);
+        coordinator.UpdatePostCloseLockConfig(postCloseLockSeconds, postCloseLockSeconds);
+        coordinator.AllocatePendingOpenSlot("AUTO-0000-aaa", OpenTrigger(GapSignalSide.Buy));
+        coordinator.MarkSlotOpenConfirmed("AUTO-0000-aaa", 100, 200, DateTime.UtcNow);
+        return (coordinator, new PortfolioCoordinatorAdapter(coordinator));
+    }
+
+    [Fact]
+    public void BeginWaitAfterClose_WithPairId_AutoClose_KeepsPostCloseAnchorAndBlocksOpen()
+    {
+        var (coordinator, adapter) = CreateWithOneLiveSlot(postCloseLockSeconds: 20);
+        Assert.True(coordinator.TryClaimSlotClose("AUTO-0000-aaa", CloseExecutionOwner.Auto, DateTime.UtcNow));
+        var confirmedAt = DateTime.UtcNow;
+
+        adapter.BeginWaitAfterClose(confirmedAt, startWaitSeconds: 0, endWaitSeconds: 0, closingPairId: "AUTO-0000-aaa");
+
+        Assert.Equal(confirmedAt, coordinator.LastCloseConfirmedAtUtc);
+        Assert.False(coordinator.CanOpenNewSlot(TradingPositionSide.Buy, out var reason));
+        Assert.StartsWith("POST_CLOSE_LOCK", reason);
+    }
+
+    [Fact]
+    public void BeginWaitAfterClose_WithPairId_AutoClose_LockExpiresAfterSelectedSeconds()
+    {
+        var (coordinator, adapter) = CreateWithOneLiveSlot(postCloseLockSeconds: 20);
+        Assert.True(coordinator.TryClaimSlotClose("AUTO-0000-aaa", CloseExecutionOwner.Auto, DateTime.UtcNow));
+
+        adapter.BeginWaitAfterClose(
+            DateTime.UtcNow.AddSeconds(-21), startWaitSeconds: 0, endWaitSeconds: 0, closingPairId: "AUTO-0000-aaa");
+
+        coordinator.CanOpenNewSlot(TradingPositionSide.Buy, out var reason);
+        Assert.DoesNotContain("POST_CLOSE_LOCK", reason);
+    }
+
+    [Fact]
+    public void BeginWaitAfterClose_WithPairId_NonAutoOwner_DoesNotAnchorPostCloseLock()
+    {
+        var (coordinator, adapter) = CreateWithOneLiveSlot(postCloseLockSeconds: 20);
+        Assert.True(coordinator.TryClaimSlotClose("AUTO-0000-aaa", CloseExecutionOwner.Recovery, DateTime.UtcNow));
+
+        adapter.BeginWaitAfterClose(DateTime.UtcNow, startWaitSeconds: 0, endWaitSeconds: 0, closingPairId: "AUTO-0000-aaa");
+
+        Assert.Null(coordinator.LastCloseConfirmedAtUtc);
+    }
+
+    [Fact]
+    public void BeginWaitAfterClose_WithoutPairId_LegacyPath_StillClearsCoordinatorAnchor()
+    {
+        var (coordinator, adapter) = CreateWithOneLiveSlot(postCloseLockSeconds: 20);
+        Assert.True(coordinator.TryClaimSlotClose("AUTO-0000-aaa", CloseExecutionOwner.Auto, DateTime.UtcNow));
+
+        adapter.BeginWaitAfterClose(DateTime.UtcNow, startWaitSeconds: 0, endWaitSeconds: 0);
+
+        Assert.Null(coordinator.GetSlotByPairId("AUTO-0000-aaa"));
+        Assert.Null(coordinator.LastCloseConfirmedAtUtc);
+    }
 }

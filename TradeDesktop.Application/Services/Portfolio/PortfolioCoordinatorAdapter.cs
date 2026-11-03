@@ -115,9 +115,11 @@ public sealed class PortfolioCoordinatorAdapter : ITradingFlowEngine
             var keyed = _coordinator.State.GetSlotByPairId(closingPairId);
             if (keyed is not null)
             {
-                // Mark close confirmed in coordinator (also kicks cooldown if configured).
+                // Mark close confirmed in coordinator. Multi-slot path KEEPS the Rule C anchor
+                // (LastCloseConfirmedAtUtc) so CanOpenNewSlot blocks Auto Open for the post-close
+                // duration counted from confirm — not only from dispatch. Clearing it here made a
+                // slow-confirming close (pending retries) allow Open right after confirm.
                 _coordinator.MarkSlotCloseConfirmed(keyed.PairId, closeCompletedAtUtc);
-                ClearCoordinatorPostCloseAnchorForLegacyWait();
 
                 // Remove the slot so adapter's CurrentPhase maps back to WaitingOpen.
                 _coordinator.State.RemoveSlot(keyed);
@@ -286,9 +288,9 @@ public sealed class PortfolioCoordinatorAdapter : ITradingFlowEngine
 
     private void ClearCoordinatorPostCloseAnchorForLegacyWait()
     {
-        // The adapter owns CurrentWaitSeconds/ClosedAtUtc and implements the legacy
-        // post-close gate itself. Keeping the coordinator anchor would apply a second,
-        // unrelated 300-second lock and break the legacy ITradingFlowEngine contract.
+        // Legacy single-slot path only (no pairId): the adapter owns CurrentWaitSeconds/ClosedAtUtc
+        // and implements the legacy post-close gate itself. Keeping the coordinator anchor would
+        // apply a second, unrelated 300-second lock and break the legacy ITradingFlowEngine contract.
         _coordinator.State.LastCloseConfirmedAtUtc = null;
     }
 

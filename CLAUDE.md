@@ -113,6 +113,10 @@ hiện tại là tổng `5`, cận trên Buy `3`, cận trên Sell `3`. `Portfol
 - Close→Open hiện có hai lần bảo vệ dùng cùng duration: transition gate tính từ Auto Close dispatch và
   `CanOpenNewSlot` tính lại từ Close confirm. Hai khoảng không cộng nhau; deadline từ confirm thường muộn
   hơn và quyết định thời điểm Auto Open thực tế.
+  `PortfolioCoordinatorAdapter.BeginWaitAfterClose` nhánh CÓ `closingPairId` (đường production) phải GIỮ
+  `LastCloseConfirmedAtUtc`; chỉ nhánh legacy không pairId mới xoá (`ClearCoordinatorPostCloseAnchorForLegacyWait`).
+  Trước 2026-11-03 cả hai nhánh đều xoá ⇒ close xác nhận trễ (pending retry) được Open ngay sau confirm.
+  Test khoá: `BeginWaitAfterCloseMultiSlotTests.*PostClose*`.
 - Cả hai check nằm trong `CanOpenNewSlot` (chỉ chặn, không tạo open/close → không vi phạm Rule E). Block reason: `OPPOSITE_SIDE_LOCK` / `POST_CLOSE_LOCK`.
 
 ### Rule D — Priority close theo profit cao nhất
