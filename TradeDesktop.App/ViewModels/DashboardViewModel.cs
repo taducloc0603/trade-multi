@@ -86,6 +86,9 @@ public sealed class DashboardViewModel : ObservableObject
     private readonly Dictionary<ulong, PendingCloseRequest> _closeRequestByTicket = [];
     private readonly Dictionary<ulong, string> _pairIdByTicket = [];
     private readonly Dictionary<string, (int Index, ManualHwndColumnConfig Profile)> _hwndProfileByPairId = new(StringComparer.Ordinal);
+    // Giờ Open thật theo pairId, chụp trong ResetTradingLogicState và làm mới ở mỗi ApplyResyncedOpenSlots (chỉ giữ
+    // pair đang mở) — để resync lúc Start / watchdog self-heal khi đã Stop không gán lại "bây giờ".
+    private readonly Dictionary<string, DateTime> _resyncOpenTimeHintByPairId = new(StringComparer.Ordinal);
     private readonly Dictionary<int, OpenConfirmCycleState> _openConfirmBySlot = [];
     private readonly Dictionary<int, CloseConfirmCycleState> _closeConfirmBySlot = [];
     private readonly Dictionary<ulong, double> _openSlippageByTicket = [];
@@ -3947,6 +3950,16 @@ public sealed class DashboardViewModel : ObservableObject
 
     private void ResetTradingLogicState()
     {
+        // Reset bên dưới xoá coordinator (Start/Stop/Reconnect). Chụp giờ Open thật TRƯỚC để mọi rebuild sau đó —
+        // resync lúc Start hay watchdog self-heal khi đã Stop — không gán lại "bây giờ" (lệch Rule B/D).
+        foreach (var slot in _portfolioCoordinator.LiveSlots.Concat(_portfolioCoordinator.PendingCloseSlots))
+        {
+            if (slot.OpenConfirmedAtUtc is { } openAt)
+            {
+                _resyncOpenTimeHintByPairId[slot.PairId] = openAt;
+            }
+        }
+
         _tradingFlowEngine.Reset();
         LogFlowTransitionIfChanged("engine-reset");
         _manualSlot = 0;
@@ -9148,6 +9161,15 @@ public sealed class DashboardViewModel : ObservableObject
         for (var i = 0; i < recovered.Count; i++)
         {
             var existing = _portfolioCoordinator.GetSlotByPairId(recovered[i].PairId);
+            // Giữ giờ Open thật của pair đã biết: slot coordinator đang giữ (watchdog self-heal) hoặc bản chụp lúc
+            // Start (slot nạp từ current_slots). Pair mới thật sự (RESYNC-*) vẫn dùng "bây giờ" như cũ.
+            var knownOpenAt = existing?.OpenConfirmedAtUtc
+                ?? (_resyncOpenTimeHintByPairId.TryGetValue(recovered[i].PairId, out var hintAt) ? hintAt : (DateTime?)null);
+            if (knownOpenAt is { } openAt && openAt <= recovered[i].OpenConfirmedAtUtc)
+            {
+                recovered[i] = recovered[i] with { OpenConfirmedAtUtc = openAt };
+            }
+
             if (existing is not null && !string.IsNullOrWhiteSpace(existing.TradeHwndA) && !string.IsNullOrWhiteSpace(existing.TradeHwndB))
             {
                 recovered[i] = recovered[i] with
@@ -9170,6 +9192,12 @@ public sealed class DashboardViewModel : ObservableObject
                     TradeHwndB = entry.Profile.TradeHwndB
                 };
             }
+        }
+
+        _resyncOpenTimeHintByPairId.Clear();
+        foreach (var recoveredSlot in recovered)
+        {
+            _resyncOpenTimeHintByPairId[recoveredSlot.PairId] = recoveredSlot.OpenConfirmedAtUtc;
         }
 
         _portfolioCoordinator.RecoverSlotsFromPersisted(recovered);

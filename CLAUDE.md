@@ -693,6 +693,13 @@ TradeDesktop.Tests/            # xUnit tests
 - Coordinator under-count drift được watchdog self-heal bằng rebuild từ MMF khi rebuild nằm trong quota
   và không có open/close in-flight; over-count thật vẫn pause. Self-heal throttle 30 giây.
 - DB field `current_slots` là JSON list (Phase 5).
+- **Resync phải giữ giờ Open thật của pair đã biết** (sửa 2026-11-03). `ApplyResyncedOpenSlots` dựng lại MỌI slot
+  qua `RecoverSlotsFromPersisted` (xoá state cũ); trước đây nó gán `OpenConfirmedAtUtc = UtcNow` ⇒ post-open lock,
+  tuổi slot (`max_life_time`, hạn gate `min_profit`) và mốc opposite-side đều bị tính lại. Hai đường gây ra: resync
+  lúc Start (`ResetTradingLogicState` đã xoá coordinator) và **watchdog self-heal chạy cả khi đã Stop** (polling không
+  gate theo `IsTradingLogicEnabled`) — nó persist `watchdog-self-heal` đè giờ sai lên `current_slots`. Nay giờ Open
+  được chụp vào `_resyncOpenTimeHintByPairId` trong `ResetTradingLogicState` và dùng lại khi rebuild; pair mới thật
+  (`RESYNC-*`) vẫn dùng "bây giờ". Đừng gỡ phần chụp khỏi `ResetTradingLogicState` hay chuyển nó sang sau `Reset()`.
 
 ### Closing wrong trade (Phase 4)
 - `SelectCloseCandidateForTicket(slot.Ticket)` resolve RowIndex bằng ticket lookup trong MMF.

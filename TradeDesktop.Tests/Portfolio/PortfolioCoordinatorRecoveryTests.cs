@@ -104,6 +104,22 @@ public sealed class PortfolioCoordinatorRecoveryTests
         Assert.Equal(later, coordinator.LastOpenConfirmedAtUtc);
     }
 
+    // Resync lúc Start / watchdog self-heal truyền lại giờ Open THẬT của pair đã biết (DashboardViewModel
+    // ApplyResyncedOpenSlots). Coordinator phải giữ nguyên giờ đó qua mọi lần rebuild, không gán "bây giờ".
+    [Fact]
+    public void RecoverSlotsFromPersisted_RebuildWithKnownOpenTime_KeepsOriginalOpenTime()
+    {
+        var coordinator = CreateCoordinator();
+        var openedAt = DateTime.UtcNow.AddMinutes(-7);
+        coordinator.RecoverSlotsFromPersisted(new[] { Persisted(1, "AUTO-0005-x", openConfirmedAtUtc: openedAt) });
+
+        var kept = coordinator.GetSlotByPairId("AUTO-0005-x")!.OpenConfirmedAtUtc;
+        coordinator.RecoverSlotsFromPersisted(new[] { Persisted(1, "AUTO-0005-x", openConfirmedAtUtc: kept) });
+
+        Assert.Equal(openedAt, coordinator.GetSlotByPairId("AUTO-0005-x")!.OpenConfirmedAtUtc);
+        Assert.Equal(openedAt, coordinator.LastOpenConfirmedAtUtc);
+    }
+
     [Fact]
     public void RecoverSlotsFromPersisted_EmptyList_NoSlots()
     {
