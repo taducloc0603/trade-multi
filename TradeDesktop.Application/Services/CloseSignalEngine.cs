@@ -268,18 +268,14 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
         int effectiveClose)
     {
         var normalizedHoldMs = Math.Max(0, config.CloseHoldConfirmMs);
-        var diagnosticPolicy = new GapCycleDiagnostics.PolicyContext(
+        // Nhánh TIME: chu kỳ chốt theo hold (ms hoặc tick chân chậm, theo hold_confirm_mode) +
+        // MinStableSamples. Dùng chung cho Normal Close và SOS Close; TP (ProcessTp) luôn theo ms.
+        var normalizedHoldTicks = Math.Max(0, config.CloseHoldConfirmTicks);
+        var diagnosticPolicy = GapCycleDiagnostics.CreateTimeBranchPolicy(
             stabilityConfig,
             normalizedHoldMs,
-            config.LimitMaxGap,
-            config.DiagnosticMaxGap,
-            config.DiagnosticConfigId,
-            config.DiagnosticSymbol,
-            // Nhánh TIME: chu kỳ chốt theo hold-time + MinStableSamples.
-            // SignalCycleSize chỉ đi kèm log để đối chiếu với nhánh TICK.
-            ConfirmationMode: "TIME_AND_MIN_SAMPLES",
-            SignalCycleSize: config.SignalCycleSize,
-            HoldConfirmIgnored: false);
+            config,
+            normalizedHoldTicks);
         _lastDiagnosticPolicy = diagnosticPolicy;
         var sideName = positionSide == GapSignalSide.Buy ? "BUY" : "SELL";
         var update = state.Process(
@@ -289,7 +285,11 @@ public sealed class CloseSignalEngine : ICloseSignalEngine
             confirmSatisfied,
             stabilityConfig,
             normalizedHoldMs,
-            config.LimitMaxGap);
+            config.LimitMaxGap,
+            config.HoldConfirmMode,
+            normalizedHoldTicks,
+            snapshot.IsNewTickA,
+            snapshot.IsNewTickB);
         if (usesSos && positionSide == GapSignalSide.Buy)
         {
             _sosCloseBuyObservation = SignalCycleObservation.ObserveGap(

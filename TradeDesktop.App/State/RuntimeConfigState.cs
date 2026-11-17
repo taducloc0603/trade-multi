@@ -139,6 +139,11 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     // Số âm hợp lệ nên KHÔNG đi qua Update(...) (sentinel -1 không dùng được) — chỉ cập nhật qua UpdateBPriceOffsets.
     public int CurrentBBidOffsetPts { get; private set; }
     public int CurrentBAskOffsetPts { get; private set; }
+    // hold_confirm_mode + open/close_hold_confirm_ticks. Cập nhật qua UpdateHoldConfirmMode (KHÔNG qua Update(...)):
+    // thêm tham số mặc định 0 vào Update(...) sẽ bị mọi caller thiếu tham số âm thầm reset (bẫy sentinel, CLAUDE.md §5).
+    public HoldConfirmMode CurrentHoldConfirmMode { get; private set; } = HoldConfirmMode.Ms;
+    public int CurrentOpenHoldConfirmTicks { get; private set; }
+    public int CurrentCloseHoldConfirmTicks { get; private set; }
     public string CurrentPlatformA { get; private set; } = "mt5";
     public string CurrentPlatformB { get; private set; } = "mt5";
     public string CurrentChartHwndA { get; private set; } = string.Empty;
@@ -720,6 +725,14 @@ public sealed class RuntimeConfigState : IRuntimeConfigProvider, IRuntimeConfigS
     {
         CurrentBBidOffsetPts = bidOffsetPts;
         CurrentBAskOffsetPts = askOffsetPts;
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void UpdateHoldConfirmMode(HoldConfirmMode mode, int openHoldConfirmTicks, int closeHoldConfirmTicks)
+    {
+        CurrentHoldConfirmMode = mode;
+        CurrentOpenHoldConfirmTicks = Math.Max(0, openHoldConfirmTicks);
+        CurrentCloseHoldConfirmTicks = Math.Max(0, closeHoldConfirmTicks);
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 

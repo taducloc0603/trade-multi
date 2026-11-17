@@ -1452,6 +1452,7 @@ public sealed class DashboardViewModel : ObservableObject
         _tradeSessionFileLogger.Log($"[BUILD] version={GetAssemblyVersion()} platform_b={_runtimeConfigState.CurrentPlatformB}");
         LogHedgeVolumeConsistency();
         LogFastLegConfiguration();
+        LogHoldConfirmModeConfiguration();
 
         ResetTradingLogicState();
         // Mỗi phiên Start kiểm tra lại lot của cặp Auto Open MỚI đầu tiên (slot resync không tính).
@@ -7595,7 +7596,10 @@ public sealed class DashboardViewModel : ObservableObject
                     result.CloseConfirmGapPts,
                     result.ClosePts,
                     result.HoldConfirmMs,
-                    result.CloseHoldConfirmMs))
+                    result.CloseHoldConfirmMs,
+                    result.HoldConfirmMode,
+                    result.OpenHoldConfirmTicks,
+                    result.CloseHoldConfirmTicks))
                 {
                     SafeVmLog($"[DB][WARN] {configWarning}");
                 }
@@ -7691,6 +7695,17 @@ public sealed class DashboardViewModel : ObservableObject
                 _runtimeConfigState.UpdatePrimeXbt(result.PrimeXbt);
                 _runtimeConfigState.UpdateTradeLocker(result.TradeLocker);
                 _runtimeConfigState.UpdateBPriceOffsets(result.BBidOffsetPts, result.BAskOffsetPts);
+                // hold_confirm_mode: updater riêng (không qua Update(...)) để không dính bẫy sentinel.
+                _runtimeConfigState.UpdateHoldConfirmMode(
+                    result.HoldConfirmMode,
+                    result.OpenHoldConfirmTicks,
+                    result.CloseHoldConfirmTicks);
+                SafeVmLog(
+                    $"[CONFIG] hold_confirm_mode={HoldConfirmModeParser.ToConfigValue(result.HoldConfirmMode)} " +
+                    $"open_hold_confirm_ticks={result.OpenHoldConfirmTicks} close_hold_confirm_ticks={result.CloseHoldConfirmTicks} " +
+                    (result.HoldConfirmMode == HoldConfirmMode.Ticks
+                        ? "(Open/Normal/SOS Close giu theo tick chan cham; *_hold_confirm_ms bi bo qua; TP van theo ms)"
+                        : "(giu theo *_hold_confirm_ms)"));
                 SafeVmLog(
                     $"[CONFIG] b_bid_offset_pts={result.BBidOffsetPts} b_ask_offset_pts={result.BAskOffsetPts} " +
                     "(cong vao gia B sau khi doi sang point; 0 = khong dich)");
@@ -7717,7 +7732,7 @@ public sealed class DashboardViewModel : ObservableObject
                 if (string.Equals(result.MachineHostName, InlineDbHostName, StringComparison.OrdinalIgnoreCase))
                 {
                     DbInlineData =
-                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | signal_cycle_size={result.SignalCycleSize} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={FormatSameActionRange(result.RdStartSameActionLockSeconds, result.RdEndSameActionLockSeconds)} | close_rd_same_action={FormatSameActionRange(result.CloseRdStartSameActionLockSeconds, result.CloseRdEndSameActionLockSeconds)} |open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | open_max_last_gap_pts={result.OpenMaxLastGapPts?.ToString() ?? "null"} | b_bid_offset_pts={result.BBidOffsetPts} | b_ask_offset_pts={result.BAskOffsetPts} | fast_leg={result.FastLeg?.ToSummary() ?? "disabled"} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | sos_trigger_a_open_distance_pts={result.SosTriggerAOpenDistancePts} | sos_trigger_after_seconds={result.SosTriggerAfterSeconds} | sos_close_confirm_gap_pts={result.SosCloseConfirmGapPts} | sos_close_gap_pts={result.SosCloseGapPts} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={SansJsonHelper.Redact(result.SansJson)}";
+                        $"[DB] id={result.ConfigId} | hostname={result.MachineHostName} | point={result.Point} | signal_cycle_size={result.SignalCycleSize} | open_pts={result.OpenPts} | open_confirm_gap_pts={result.ConfirmGapPts} | opposite_open_min_distance_pts={result.OppositeOpenMinDistancePts} | rd_same_action={FormatSameActionRange(result.RdStartSameActionLockSeconds, result.RdEndSameActionLockSeconds)} | close_rd_same_action={FormatSameActionRange(result.CloseRdStartSameActionLockSeconds, result.CloseRdEndSameActionLockSeconds)} |open_hold_confirm_ms={result.HoldConfirmMs} | open_price_freeze_ms={result.OpenPriceFreezeMs} | open_max_times_tick={result.OpenMaxTimesTick} | open_max_last_gap_pts={result.OpenMaxLastGapPts?.ToString() ?? "null"} | b_bid_offset_pts={result.BBidOffsetPts} | b_ask_offset_pts={result.BAskOffsetPts} | fast_leg={result.FastLeg?.ToSummary() ?? "disabled"} | close_pts={result.ClosePts} | close_confirm_gap_pts={result.CloseConfirmGapPts} | close_tp_profit={result.CloseTpProfit} | close_confirm_tp_profit={result.CloseConfirmTpProfit} | close_hold_confirm_ms={result.CloseHoldConfirmMs} | close_price_freeze_ms={result.ClosePriceFreezeMs} | close_max_times_tick={result.CloseMaxTimesTick} | sos_trigger_a_open_distance_pts={result.SosTriggerAOpenDistancePts} | sos_trigger_after_seconds={result.SosTriggerAfterSeconds} | sos_close_confirm_gap_pts={result.SosCloseConfirmGapPts} | sos_close_gap_pts={result.SosCloseGapPts} | start_time_hold={result.StartTimeHold} | end_time_hold={result.EndTimeHold} | sans={SansJsonHelper.Redact(result.SansJson)} | hold_confirm_mode={HoldConfirmModeParser.ToConfigValue(result.HoldConfirmMode)} | open_hold_confirm_ticks={result.OpenHoldConfirmTicks} | close_hold_confirm_ticks={result.CloseHoldConfirmTicks}";
                     IsDbInlineDataVisible = true;
                 }
                 else
@@ -7739,6 +7754,12 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 DbInlineData = string.Empty;
                 IsDbInlineDataVisible = false;
+            }
+
+            // Failed (Exists=true) mang lý do cụ thể (vd hold_confirm_mode sai); NotFound thì Error rỗng.
+            if (!string.IsNullOrWhiteSpace(result.Error))
+            {
+                SafeVmLog($"[CONFIG][ERROR] {result.Error}");
             }
 
             var warning = string.IsNullOrWhiteSpace(result.MachineHostName)
@@ -7883,7 +7904,10 @@ public sealed class DashboardViewModel : ObservableObject
                     DiagnosticSymbol: $"{metrics.ExchangeA.Symbol}|{metrics.ExchangeB.Symbol}",
                     DiagnosticMaxGap: _runtimeConfigState.CurrentMaxGap,
                     SignalCycleSize: _runtimeConfigState.CurrentSignalCycleSize,
-                    OpenMaxLastGapPts: _runtimeConfigState.CurrentOpenMaxLastGapPts));
+                    OpenMaxLastGapPts: _runtimeConfigState.CurrentOpenMaxLastGapPts,
+                    HoldConfirmMode: _runtimeConfigState.CurrentHoldConfirmMode,
+                    OpenHoldConfirmTicks: _runtimeConfigState.CurrentOpenHoldConfirmTicks,
+                    CloseHoldConfirmTicks: _runtimeConfigState.CurrentCloseHoldConfirmTicks));
 
             if (portfolioResult.UiNotices is { Count: > 0 })
             {
@@ -9917,6 +9941,9 @@ public sealed class DashboardViewModel : ObservableObject
                 SignalCycleSize: _runtimeConfigState.CurrentSignalCycleSize,
                 HoldConfirmMs: _runtimeConfigState.CurrentHoldConfirmMs,
                 CloseHoldConfirmMs: _runtimeConfigState.CurrentCloseHoldConfirmMs,
+                HoldConfirmMode: _runtimeConfigState.CurrentHoldConfirmMode,
+                OpenHoldConfirmTicks: _runtimeConfigState.CurrentOpenHoldConfirmTicks,
+                CloseHoldConfirmTicks: _runtimeConfigState.CurrentCloseHoldConfirmTicks,
                 FastLeg: trigger.FastLeg,
                 FastLegDeferredMs: trigger.FastLegDeferredMs));
 
@@ -10302,6 +10329,20 @@ public sealed class DashboardViewModel : ObservableObject
 
     // Sàn C lúc Start (Phase 5): ghi cấu hình + verdict hiện tại vào log phiên. Chỉ cảnh báo, KHÔNG chặn Start.
     // Filter mà C đang Down ⇒ mọi Open sẽ bị chặn tới khi C có lại, nên báo ERROR + Telegram ngay thay vì chờ 30 s.
+    // hold_confirm_mode được nạp lúc load config, TRƯỚC khi phiên log mở ⇒ ghi lại lúc Start để mỗi phiên tự mô tả
+    // mode đang chạy (đối chiếu log ms vs ticks).
+    private void LogHoldConfirmModeConfiguration()
+    {
+        var mode = _runtimeConfigState.CurrentHoldConfirmMode;
+        _tradeSessionFileLogger.Log(
+            $"[CONFIG] hold_confirm_mode={HoldConfirmModeParser.ToConfigValue(mode)} " +
+            $"open_hold_confirm_ticks={_runtimeConfigState.CurrentOpenHoldConfirmTicks} " +
+            $"close_hold_confirm_ticks={_runtimeConfigState.CurrentCloseHoldConfirmTicks} " +
+            $"open_hold_confirm_ms={_runtimeConfigState.CurrentHoldConfirmMs} " +
+            $"close_hold_confirm_ms={_runtimeConfigState.CurrentCloseHoldConfirmMs} " +
+            $"confirmation_mode={(mode == HoldConfirmMode.Ticks ? "TICKS_AND_MIN_SAMPLES" : "TIME_AND_MIN_SAMPLES")}");
+    }
+
     private void LogFastLegConfiguration()
     {
         try

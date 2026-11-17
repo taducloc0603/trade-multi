@@ -36,6 +36,10 @@ public interface IRuntimeConfigProvider
     // Trần cho GAP CUỐI của Open Cycle. null = tắt gate.
     int? CurrentOpenMaxLastGapPts => null;
     int CurrentCloseMaxTimesTick => 0;
+    // hold_confirm_mode. Default = hành vi cũ (ms) cho các provider tối giản trong test.
+    HoldConfirmMode CurrentHoldConfirmMode => HoldConfirmMode.Ms;
+    int CurrentOpenHoldConfirmTicks => 0;
+    int CurrentCloseHoldConfirmTicks => 0;
     int CurrentSignalCycleSize => 10;
     int CurrentOpenPendingTimeMs { get; }
     int CurrentClosePendingTimeMs { get; }

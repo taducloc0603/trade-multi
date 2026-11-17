@@ -1044,6 +1044,12 @@ public sealed class ConfigViewModel : ObservableObject
             _runtimeConfigState.UpdatePrimeXbt(loadResult.PrimeXbt);
             _runtimeConfigState.UpdateTradeLocker(loadResult.TradeLocker);
             _runtimeConfigState.UpdateBPriceOffsets(loadResult.BBidOffsetPts, loadResult.BAskOffsetPts);
+            // Đường load thứ hai (mở cửa sổ Config): phải forward hold_confirm_mode, nếu không mở Config sẽ giữ giá
+            // trị cũ trong khi phần còn lại của config đã là bản mới.
+            _runtimeConfigState.UpdateHoldConfirmMode(
+                loadResult.HoldConfirmMode,
+                loadResult.OpenHoldConfirmTicks,
+                loadResult.CloseHoldConfirmTicks);
             // Đường load thứ hai (mở cửa sổ Config): phải forward fast_leg, nếu không mở Config sẽ âm thầm tắt F
             // giống bẫy sentinel của min_profit_to_close (CLAUDE.md §5).
             _runtimeConfigState.UpdateFastLeg(loadResult.FastLeg);

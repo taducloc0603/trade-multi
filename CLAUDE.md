@@ -434,6 +434,25 @@ TradeDesktop.Tests/            # xUnit tests
   `open_pts` / `close_pts`, engine trả `null` mà **KHÔNG reset** — Cycle tiếp tục thu mẫu và có thể
   trigger ở mẫu kế tiếp. Đừng thêm `state.Reset(...)` ở nhánh đó.
 - Chế độ TIME **không có khử trùng lặp theo fingerprint**: mỗi snapshot hợp lệ là một mẫu.
+- **`hold_confirm_mode` (`'ms'` mặc định | `'ticks'`)**, docs/plans/hold-confirm-mode. Mode ticks thay điều
+  kiện thời gian của **Open, Normal Close và SOS Close** bằng `*_hold_confirm_ticks` tick của **chân chậm hơn**
+  (`min(tickA, tickB)` trong Cycle, mẫu đầu không đếm). `*_hold_confirm_ms` khi đó bị bỏ qua. **TP luôn theo ms**,
+  và legacy `ProcessSide` cũng vậy.
+  - Tick = (bid, ask) của chân đó khác snapshot trước. Cờ `GapSignalSnapshot.IsNewTickA/B` được
+    `GapTickChangeTracker` đánh ĐÚNG MỘT chỗ: dòng đầu `PortfolioCoordinator.ProcessSnapshot`, TRƯỚC mọi
+    early-return. Đừng chuyển xuống sau early-return (snapshot bị chặn sẽ không còn làm mốc so giá), và đừng
+    đánh dấu riêng trong từng engine (các slot sẽ lệch nhau). Cờ mặc định `true`, mode ms không đọc.
+  - Bộ đếm tick nằm trong `GapCycleState`, xoá ở `Clear()`. **Thêm điểm reset/StartNewCycle mới thì phải
+    đi qua `Clear()`**, nếu không tick của Cycle cũ sẽ lẫn sang Cycle mới.
+  - Trần `TicksModeMaxCollectingSamples = 200`: đủ mẫu mà chân chậm chưa đủ tick ⇒ `NewCycle`. Gỡ trần là
+    quay lại lỗi `_gaps` phình vô hạn khi feed thưa. Trần chỉ áp mode ticks và chỉ khi chưa Stable.
+  - Mode sai (khác ĐÚNG `"ms"`/`"ticks"`, kể cả `"MS"`, `"ms "`, `""`) hoặc ticks âm ⇒ `ConfigLoadResult.Failed`
+    (fail-closed). Runtime cập nhật qua `RuntimeConfigState.UpdateHoldConfirmMode`, **không** qua `Update(...)`
+    (bẫy sentinel).
+  - Log mode ms được khoá từng ký tự bằng golden `TradeDesktop.Tests/HoldConfirm/Golden/ms-*.txt`. Chỉ sinh lại
+    golden (`HOLD_CONFIRM_GOLDEN_UPDATE=1`) khi CHỦ Ý đổi hành vi mode ms.
+  - Triển khai: migration (`docs/HOLD-CONFIRM-MODE-MIGRATION.sql`) ⇒ nâng app ⇒ mới đổi mode. Host chạy bản cũ
+    sẽ lặng lẽ bỏ qua `'ticks'`.
 - `open_hold_confirm_ms`, `close_hold_confirm_ms`, `open_max_times_tick`, `close_max_times_tick`
   đã được **nối lại đầy đủ** vào `ConfigRow` → `ConfigRecord` → `ConfigLoadResult` →
   `RuntimeConfigState` → `GapSignalConfirmationConfig` và log `[DB]`.

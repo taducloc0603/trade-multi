@@ -1,0 +1,23 @@
+# tick t=0 profit=1
+# tick t=500 profit=2.5
+LOG [TP_CYCLE][STARTED] cycle_id=ID1 signal_id=- slot_id=- count=1 hold=0/1000ms profit=2.5 confirmation_mode=TIME_AND_MIN_SAMPLES result=COLLECTING
+# tick t=1000 profit=3
+VERBOSE [TP_CYCLE][PROGRESS] cycle_id=ID1 signal_id=- slot_id=- count=2 hold=500/1000ms profit=3 confirmation_mode=TIME_AND_MIN_SAMPLES result=COLLECTING
+# tick t=1500 profit=6
+LOG [TP_CYCLE][COMPLETED] cycle_id=ID1 signal_id=ID2 slot_id=- count=3 hold=1000/1000ms profit=6 confirmation_mode=TIME_AND_MIN_SAMPLES result=TARGET_REACHED
+LOG [TP_CYCLE][TRIGGERED] cycle_id=ID1 signal_id=ID2 slot_id=- count=3 hold=1000/1000ms profit=6 confirmation_mode=TIME_AND_MIN_SAMPLES result=TRIGGERED
+# TRIGGER type=CloseByGapSell action=Close side=Buy reason=Tp at=2026-11-15T01:00:01.5000000Z buyGaps=[0] sellGaps=[0] lastBuy=0 lastSell=0 mode=Normal effConfirm=null effClose=null effHoldMs=null tp=6 cycle=ID1 signal=ID2
+# tick t=2000 profit=1
+# tick t=2500 profit=3
+LOG [TP_CYCLE][STARTED] cycle_id=ID3 signal_id=- slot_id=- count=1 hold=0/1000ms profit=3 confirmation_mode=TIME_AND_MIN_SAMPLES result=COLLECTING
+# tick t=3000 profit=4
+VERBOSE [TP_CYCLE][PROGRESS] cycle_id=ID3 signal_id=- slot_id=- count=2 hold=500/1000ms profit=4 confirmation_mode=TIME_AND_MIN_SAMPLES result=COLLECTING
+# tick t=3500 profit=5.5
+LOG [TP_CYCLE][COMPLETED] cycle_id=ID3 signal_id=ID4 slot_id=- count=3 hold=1000/1000ms profit=5.5 confirmation_mode=TIME_AND_MIN_SAMPLES result=TARGET_REACHED
+LOG [TP_CYCLE][TRIGGERED] cycle_id=ID3 signal_id=ID4 slot_id=- count=3 hold=1000/1000ms profit=5.5 confirmation_mode=TIME_AND_MIN_SAMPLES result=TRIGGERED
+# TRIGGER type=CloseByGapSell action=Close side=Buy reason=Tp at=2026-11-15T01:00:03.5000000Z buyGaps=[0] sellGaps=[0] lastBuy=0 lastSell=0 mode=Normal effConfirm=null effClose=null effHoldMs=null tp=5.5 cycle=ID3 signal=ID4
+# tick t=4000 profit=6
+LOG [TP_CYCLE][STARTED] cycle_id=ID5 signal_id=- slot_id=- count=1 hold=0/1000ms profit=6 confirmation_mode=TIME_AND_MIN_SAMPLES result=COLLECTING
+# tick t=4500 profit=null
+LOG [TP_CYCLE][RESET] slot_id=- count=1 reason=INCOMPLETE_PROFIT
+## RAW_CONFIG (distinct)

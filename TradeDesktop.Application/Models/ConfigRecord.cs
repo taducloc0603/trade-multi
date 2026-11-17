@@ -84,4 +84,9 @@ public sealed record ConfigRecord(
     int BBidOffsetPts = 0,
     int BAskOffsetPts = 0,
     // Cột JSONB `fast_leg` (sàn C, docs/plans/fast-leg). Rỗng = F tắt. Parse ở ConfigService qua FastLegConfig.TryParse.
-    string FastLegJson = "");
+    string FastLegJson = "",
+    // hold_confirm_mode (chuỗi thô từ DB, null = cột chưa có ⇒ "ms"). Parse strict ở ConfigService qua
+    // HoldConfirmModeParser; sai ⇒ từ chối config. Ticks âm cũng bị từ chối ở ConfigService.
+    string? HoldConfirmModeRaw = null,
+    int OpenHoldConfirmTicks = 0,
+    int CloseHoldConfirmTicks = 0);

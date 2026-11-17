@@ -60,6 +60,10 @@ Confirmation mode là **TIME_AND_MIN_SAMPLES**: một chu kỳ chỉ được c�
 **cả hai** điều kiện — đủ `open_gap_min_stable_samples` mẫu **và** đủ `open_hold_confirm_ms`
 thời gian — rồi mới xét Dispersion/Drift.
 
+Khi `hold_confirm_mode = 'ticks'` thì điều kiện thời gian được thay bằng **số tick của chân chậm hơn**
+(`open_hold_confirm_ticks`), và log ghi `confirmation_mode=TICKS_AND_MIN_SAMPLES`. Xem mục 7.1, phần
+"hold_confirm_mode".
+
 > **Nhánh này là biến thể TIME** dùng để chạy song song và so sánh với nhánh TICK
 > (`FIXED_SIZE` theo `signal_cycle_size`). Khoá đối chiếu giữa hai nhánh trong log là
 > `confirmation_mode=`. Xem mục 7.1.
@@ -365,6 +369,9 @@ những limit còn lại dùng `0` để disable):
 | `close_hold_confirm_ms` | `CurrentCloseHoldConfirmMs` | `int` | Thời gian giữ tối thiểu của **Normal Close, SOS Close và TP** (dùng chung). TP chốt **chỉ** theo cột này. `0` = không yêu cầu; âm normalize về `0` |
 | `open_max_times_tick` | `CurrentOpenMaxTimesTick` | `int` | Chặn Open Cycle dài quá N mẫu: kiểm tra sau khi Cycle đã Stable và mẫu cuối đã đạt `open_pts`, vượt thì reset Cycle. `0` = tắt |
 | `close_max_times_tick` | `CurrentCloseMaxTimesTick` | `int` | Như trên cho Normal Close, SOS Close và TP. `0` = tắt |
+| `hold_confirm_mode` | `CurrentHoldConfirmMode` | `text` → `HoldConfirmMode` | `'ms'` (mặc định, hoặc DB chưa có cột) = giữ Cycle theo `*_hold_confirm_ms` như cũ. `'ticks'` = Open / Normal Close / SOS Close giữ theo `*_hold_confirm_ticks` tick **chân chậm hơn**, bỏ qua `*_hold_confirm_ms`; **TP vẫn theo `close_hold_confirm_ms`**. Một cột cho cả Open và Close. Giá trị khác **đúng** `'ms'`/`'ticks'` ⇒ ConfigService **từ chối** load. Cập nhật qua `UpdateHoldConfirmMode`, không qua `Update(...)`. Migration: `docs/HOLD-CONFIRM-MODE-MIGRATION.sql` |
+| `open_hold_confirm_ticks` | `CurrentOpenHoldConfirmTicks` | `int` | Số tick chân chậm Open Cycle phải giữ khi `hold_confirm_mode='ticks'`. `0` = chỉ còn `open_gap_min_stable_samples`. Âm ⇒ từ chối load |
+| `close_hold_confirm_ticks` | `CurrentCloseHoldConfirmTicks` | `int` | Như trên cho Normal Close và SOS Close (không áp cho TP) |
 | `open_max_last_gap_pts` | `CurrentOpenMaxLastGapPts` | `int?` | **Trần cho GAP CUỐI** của Open Cycle. So sánh **giữ nguyên dấu, đối xứng** và **strict**: Buy cần `lastGap < C`, Sell cần `lastGap > -C`. Kiểm tra sau khi Cycle đã Stable và mẫu cuối đã đạt `open_pts`; vi phạm thì **reset Cycle** (mở chu kỳ mới), không phát trigger. `NULL` (hoặc DB chưa có cột) = tắt gate; `0` và số âm **vẫn hiệu lực**, không bị clamp. Router re-check cùng trần lúc dispatch với reason `LATEST_OPEN_MAX_LAST_GAP_EXCEEDED`. Migration: `docs/OPEN-MAX-LAST-GAP-MIGRATION.sql` |
 | `signal_cycle_size` | `CurrentSignalCycleSize` | `int` | **Không tham gia quyết định signal trên nhánh TIME.** Vẫn được load, validate (`>= 1`, nhỏ hơn thì ConfigService từ chối load) và ghi kèm log để đối chiếu với nhánh TICK |
 | `open_price_freeze_ms` | `CurrentOpenPriceFreezeMs` | `int` | Bảo vệ độ mới của giá khi thực thi **Open**: chặn nếu giá không đổi suốt cửa sổ này. `0` = tắt kiểm tra; giá trị âm normalize về `0` |
@@ -390,6 +397,38 @@ Script DROP chỉ dành cho nhánh TICK. Contract hiện hành được khoá b�
 `TIME_AND_MIN_SAMPLES` (nhánh này) vs `FIXED_SIZE` (nhánh TICK). `-signal-outcome.log` ghi kèm
 cả `open_hold_confirm_ms`, `close_hold_confirm_ms` và `signal_cycle_size` để mỗi dòng tự mô tả
 tham số đã dùng.
+
+#### hold_confirm_mode (`ms` | `ticks`)
+
+Reader poll 50 ms và phát snapshot cả khi giá đứng yên, nên một Cycle đủ `*_hold_confirm_ms` vẫn có
+thể chỉ gồm các mẫu mà chân chậm chưa hề cập nhật. Đó là "gap ảo": chân nhanh đã chạy, chân chậm thì
+chưa. Mode `ticks` đo thời gian giữ bằng số lần chân chậm thực sự đổi giá.
+
+- **Tick của một chân** là snapshot có (bid, ask) của chân đó khác snapshot trước. Việc đánh dấu
+  (`GapTickChangeTracker`) chạy đúng một lần mỗi snapshot, ở dòng đầu
+  `PortfolioCoordinator.ProcessSnapshot` (trước mọi early-return). Nhờ vậy engine Open và engine
+  Close của mọi slot thấy cùng cờ `IsNewTickA/B`.
+- **Tick chân chậm** = `min(tickA, tickB)` đếm trong Cycle hiện tại. Mẫu đầu Cycle (lúc vượt ngưỡng)
+  không đếm. Mọi reset hay Cycle mới đều xoá bộ đếm.
+- **Stable ở mode ticks** khi đủ cả hai điều kiện: `MinStableSamples` mẫu và
+  `slowLegTicks >= *_hold_confirm_ticks`. Sau đó vẫn xét Dispersion/Drift như cũ. Gate `open_pts`,
+  `open_max_last_gap_pts`, `*_max_times_tick` và Fast Leg không đổi.
+- **Trần chờ tick:** đã đủ mẫu mà chân chậm chưa đủ tick sau
+  `GapCycleState.TicksModeMaxCollectingSamples = 200` mẫu (~10 s) ⇒ bỏ Cycle, tạo Cycle mới từ mẫu
+  hiện tại. Trần này chặn `_gaps` phình vô hạn khi feed thưa. Chỉ áp ở mode ticks, và chỉ khi Cycle
+  chưa Stable.
+- **Log mode ticks:**
+  - Ghi `confirmation_mode=TICKS_AND_MIN_SAMPLES`.
+  - `[*_CYCLE]` ghi `count=n/N hold_ticks=t/T` thay cho `hold=…ms`.
+  - `[GAP_STABILITY]` thêm `hold_confirm_ticks=T` và `hold_confirm_ignored=true`.
+  - `-signal-outcome.log` thêm `open/close_hold_confirm_ticks`.
+  - `[TP_CYCLE]` và `[SLOT][TP_CHECK]` vẫn là `TIME_AND_MIN_SAMPLES`, vì TP luôn đo theo ms.
+  - Mode `ms` giữ nguyên từng ký tự log. Golden `TradeDesktop.Tests/HoldConfirm/Golden` khoá điều này.
+- **Cấu hình khuyến nghị:** `confirm_gap_pts = open_pts` và `close_confirm_gap_pts = close_pts`.
+  Khi đó mọi mẫu của Cycle đều đã đạt ngưỡng nên tick chân chậm được đếm đúng lúc gap đủ. App ghi
+  `[DB][WARN]` nếu confirm khác ngưỡng chốt hoặc ticks = 0.
+- **Thứ tự triển khai:** chạy migration ⇒ nâng app ⇒ mới đổi mode. Bản app cũ bỏ qua cột mới, nên
+  đặt `'ticks'` cho host còn chạy bản cũ thì host đó lặng lẽ chạy theo ms.
 
 `GapSignalConfirmationConfig` vẫn còn 4 field cùng tên nhưng mặc định `0` và **không có
 nguồn dữ liệu nào đổ vào**; chúng chỉ phục vụ nhánh legacy `ProcessSide` /

@@ -109,6 +109,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             RdEndPostOpenLockSeconds: row.RdEndPostOpenLockSeconds,
             ScheduleSleepingJson: row.ScheduleSleepingJson,
             FastLegJson: row.FastLegJson,
+            HoldConfirmModeRaw: row.HoldConfirmMode,
+            OpenHoldConfirmTicks: row.OpenHoldConfirmTicks,
+            CloseHoldConfirmTicks: row.CloseHoldConfirmTicks,
             SignalCycleSize: row.SignalCycleSize,
             OpenGapStability: new GapStabilityConfig(
                 row.OpenGapAbsoluteFloor,
@@ -426,6 +429,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         ReadGapStabilityElements(first, out var openGapElements, out var closeGapElements);
         first.TryGetProperty("schedule_sleeping", out var scheduleSleepingElement);
         first.TryGetProperty("fast_leg", out var fastLegElement);
+        first.TryGetProperty("hold_confirm_mode", out var holdConfirmModeElement);
+        first.TryGetProperty("open_hold_confirm_ticks", out var openHoldConfirmTicksElement);
+        first.TryGetProperty("close_hold_confirm_ticks", out var closeHoldConfirmTicksElement);
 
         // DB column name is lowercase: hostname
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
@@ -525,7 +531,17 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             // thay vì coi như chưa cấu hình rồi tắt sàn C im lặng.
             FastLeg = fastLegElement.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null)
                 ? fastLegElement.Clone()
-                : default
+                : default,
+            // hold_confirm_mode: giữ NGUYÊN chuỗi thô (không trim/lower) để ConfigService từ chối giá trị sai.
+            // Thiếu cột / null ⇒ null ⇒ "ms". Kiểu khác string ⇒ raw JSON ⇒ bị từ chối, không lặng lẽ về ms.
+            HoldConfirmMode = holdConfirmModeElement.ValueKind switch
+            {
+                JsonValueKind.Undefined or JsonValueKind.Null => null,
+                JsonValueKind.String => holdConfirmModeElement.GetString(),
+                _ => holdConfirmModeElement.GetRawText()
+            },
+            OpenHoldConfirmTicks = openHoldConfirmTicksElement.ValueKind == JsonValueKind.Number && openHoldConfirmTicksElement.TryGetInt32(out var openHoldConfirmTicks) ? openHoldConfirmTicks : 0,
+            CloseHoldConfirmTicks = closeHoldConfirmTicksElement.ValueKind == JsonValueKind.Number && closeHoldConfirmTicksElement.TryGetInt32(out var closeHoldConfirmTicks) ? closeHoldConfirmTicks : 0
         };
     }
 
@@ -624,6 +640,9 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         ReadGapStabilityElements(first, out var openGapElements, out var closeGapElements);
         first.TryGetProperty("schedule_sleeping", out var scheduleSleepingElement);
         first.TryGetProperty("fast_leg", out var fastLegElement);
+        first.TryGetProperty("hold_confirm_mode", out var holdConfirmModeElement);
+        first.TryGetProperty("open_hold_confirm_ticks", out var openHoldConfirmTicksElement);
+        first.TryGetProperty("close_hold_confirm_ticks", out var closeHoldConfirmTicksElement);
 
         var hasHostName = first.TryGetProperty("hostname", out var hostNameElement);
         if (!hasHostName)
@@ -721,7 +740,17 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
             // thay vì coi như chưa cấu hình rồi tắt sàn C im lặng.
             FastLeg = fastLegElement.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null)
                 ? fastLegElement.Clone()
-                : default
+                : default,
+            // hold_confirm_mode: giữ NGUYÊN chuỗi thô (không trim/lower) để ConfigService từ chối giá trị sai.
+            // Thiếu cột / null ⇒ null ⇒ "ms". Kiểu khác string ⇒ raw JSON ⇒ bị từ chối, không lặng lẽ về ms.
+            HoldConfirmMode = holdConfirmModeElement.ValueKind switch
+            {
+                JsonValueKind.Undefined or JsonValueKind.Null => null,
+                JsonValueKind.String => holdConfirmModeElement.GetString(),
+                _ => holdConfirmModeElement.GetRawText()
+            },
+            OpenHoldConfirmTicks = openHoldConfirmTicksElement.ValueKind == JsonValueKind.Number && openHoldConfirmTicksElement.TryGetInt32(out var openHoldConfirmTicks) ? openHoldConfirmTicks : 0,
+            CloseHoldConfirmTicks = closeHoldConfirmTicksElement.ValueKind == JsonValueKind.Number && closeHoldConfirmTicksElement.TryGetInt32(out var closeHoldConfirmTicks) ? closeHoldConfirmTicks : 0
         };
     }
 
@@ -1077,5 +1106,15 @@ public sealed class SupabaseConfigRepository(HttpClient httpClient, string? supa
         public string FastLegJson => FastLeg.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null)
             ? FastLeg.GetRawText()
             : string.Empty;
+
+        // hold_confirm_mode (docs/HOLD-CONFIRM-MODE-MIGRATION.sql). Chuỗi thô, null = cột chưa có ⇒ "ms".
+        [JsonPropertyName("hold_confirm_mode")]
+        public string? HoldConfirmMode { get; set; }
+
+        [JsonPropertyName("open_hold_confirm_ticks")]
+        public int OpenHoldConfirmTicks { get; set; }
+
+        [JsonPropertyName("close_hold_confirm_ticks")]
+        public int CloseHoldConfirmTicks { get; set; }
     }
 }

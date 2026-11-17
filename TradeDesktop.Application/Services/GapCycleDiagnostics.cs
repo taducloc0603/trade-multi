@@ -55,7 +55,44 @@ public static class GapCycleDiagnostics
         string Symbol,
         string ConfirmationMode = "TIME_AND_MIN_SAMPLES",
         int SignalCycleSize = 0,
-        bool HoldConfirmIgnored = false);
+        bool HoldConfirmIgnored = false,
+        // hold_confirm_mode=ticks: log đổi hold=...ms thành hold_ticks=n/N và thêm hold_confirm_ticks=N.
+        // Mode ms giữ nguyên từng ký tự log.
+        HoldConfirmMode HoldConfirmMode = HoldConfirmMode.Ms,
+        int HoldConfirmTicks = 0);
+
+    internal const string TimeConfirmationMode = "TIME_AND_MIN_SAMPLES";
+    internal const string TicksConfirmationMode = "TICKS_AND_MIN_SAMPLES";
+
+    /// <summary>Nhãn <c>confirmation_mode=</c> cho nhánh TIME theo hold_confirm_mode.</summary>
+    internal static string ResolveConfirmationMode(HoldConfirmMode mode) =>
+        mode == HoldConfirmMode.Ticks ? TicksConfirmationMode : TimeConfirmationMode;
+
+    /// <summary>
+    /// Policy log cho Cycle gap nhánh TIME (Open / Normal Close / SOS Close). Mode ticks đánh dấu
+    /// <c>hold_confirm_ignored=true</c> vì <c>*_hold_confirm_ms</c> không còn tham gia quyết định.
+    /// </summary>
+    internal static PolicyContext CreateTimeBranchPolicy(
+        GapStabilityConfig stability,
+        int holdConfirmMs,
+        GapSignalConfirmationConfig config,
+        int holdConfirmTicks)
+    {
+        var usesTicks = config.HoldConfirmMode == HoldConfirmMode.Ticks;
+        return new PolicyContext(
+            stability,
+            holdConfirmMs,
+            config.LimitMaxGap,
+            config.DiagnosticMaxGap,
+            config.DiagnosticConfigId,
+            config.DiagnosticSymbol,
+            // SignalCycleSize chỉ đi kèm log để đối chiếu với nhánh TICK.
+            ConfirmationMode: ResolveConfirmationMode(config.HoldConfirmMode),
+            SignalCycleSize: config.SignalCycleSize,
+            HoldConfirmIgnored: usesTicks,
+            HoldConfirmMode: config.HoldConfirmMode,
+            HoldConfirmTicks: usesTicks ? holdConfirmTicks : 0);
+    }
 
     internal static void LogTransition(
         ISlotLogger? logger,
@@ -232,8 +269,17 @@ public static class GapCycleDiagnostics
     private static string FormatCycleProgress(GapCycleSnapshot cycle, PolicyContext policy) =>
         policy.ConfirmationMode == "FIXED_SIZE"
             ? $"count={cycle.SampleCount}/{Value(policy.SignalCycleSize)}"
-            : $"count={cycle.SampleCount}/{Value(policy.Stability.MinStableSamples)} " +
-              $"hold={cycle.DurationMs:0.####}/{policy.HoldConfirmMs}ms";
+            : policy.HoldConfirmMode == HoldConfirmMode.Ticks
+                ? $"count={cycle.SampleCount}/{Value(policy.Stability.MinStableSamples)} " +
+                  $"hold_ticks={cycle.TickCount}/{policy.HoldConfirmTicks}"
+                : $"count={cycle.SampleCount}/{Value(policy.Stability.MinStableSamples)} " +
+                  $"hold={cycle.DurationMs:0.####}/{policy.HoldConfirmMs}ms";
+
+    // Chỉ mode ticks mới thêm trường; mode ms trả chuỗi rỗng để dòng log giữ nguyên từng ký tự.
+    private static string HoldTicksField(PolicyContext? policy) =>
+        policy?.HoldConfirmMode == HoldConfirmMode.Ticks
+            ? $"hold_confirm_ticks={policy.HoldConfirmTicks} "
+            : string.Empty;
 
     /// <summary>
     /// Một Cycle đã Stable nhưng mẫu cuối không đạt ngưỡng thì KHÔNG bị reset (đúng logic gốc của
@@ -386,6 +432,7 @@ public static class GapCycleDiagnostics
         $"max_dispersion={Number(policy?.Stability.MaxDispersion)} " +
         $"max_drift={Number(policy?.Stability.MaxDrift)} " +
         $"hold_confirm_ms={Value(policy?.HoldConfirmMs)} " +
+        HoldTicksField(policy) +
         $"confirmation_mode={Text(policy?.ConfirmationMode)} " +
         $"signal_cycle_size={Value(policy?.SignalCycleSize)} " +
         $"hold_confirm_ignored={(policy?.HoldConfirmIgnored ?? false).ToString().ToLowerInvariant()} " +
@@ -440,7 +487,8 @@ public static class GapCycleDiagnostics
         var signature =
             $"{action}|{side}|{policy.ConfigId}|{policy.Symbol}|" +
             $"{policy.Stability}|{policy.HoldConfirmMs}|{policy.LimitMaxGap}|{policy.MaxGap}|" +
-            $"{policy.ConfirmationMode}|{policy.SignalCycleSize}|{policy.HoldConfirmIgnored}";
+            $"{policy.ConfirmationMode}|{policy.SignalCycleSize}|{policy.HoldConfirmIgnored}|" +
+            $"{policy.HoldConfirmMode}|{policy.HoldConfirmTicks}";
         lock (SummarySync)
         {
             if (!RawPolicySignatures.Add(signature))
@@ -459,6 +507,7 @@ public static class GapCycleDiagnostics
             $"max_dispersion={Number(policy?.Stability.MaxDispersion)} " +
             $"max_drift={Number(policy?.Stability.MaxDrift)} " +
             $"hold_confirm_ms={Value(policy?.HoldConfirmMs)} " +
+            HoldTicksField(policy) +
             $"confirmation_mode={Text(policy?.ConfirmationMode)} " +
             $"signal_cycle_size={Value(policy?.SignalCycleSize)} " +
             $"hold_confirm_ignored={(policy?.HoldConfirmIgnored ?? false).ToString().ToLowerInvariant()} " +

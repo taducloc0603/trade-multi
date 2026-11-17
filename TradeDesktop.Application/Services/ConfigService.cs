@@ -85,6 +85,17 @@ public sealed class ConfigService(
                 $"Cấu hình [NORMAL CLOSE GAP STABILITY] không hợp lệ: {closeGapError}");
         }
 
+        // hold_confirm_mode: fail-closed như gap stability. Mode sai mà chạy tiếp thì host lặng lẽ đo hold sai cách.
+        if (!HoldConfirmModeParser.TryValidate(
+                record.HoldConfirmModeRaw,
+                record.OpenHoldConfirmTicks,
+                record.CloseHoldConfirmTicks,
+                out var holdConfirmMode,
+                out var holdConfirmError))
+        {
+            return ConfigLoadResult.Failed(hostName, holdConfirmError);
+        }
+
         SansJsonHelper.TryParseSans(record.SansJson, out var mapName1, out var mapName2, out var manualHwndColumns, out var ctraderFix, out var primeXbt, out var tradeLocker);
         FastLegConfig.TryParse(record.FastLegJson, mapName1, mapName2, out var fastLeg, out var fastLegError);
         return ConfigLoadResult.Success(
@@ -164,7 +175,10 @@ public sealed class ConfigService(
                 TradeLocker = tradeLocker,
                 FastLeg = fastLeg,
                 FastLegError = fastLegError,
-                FastLegJson = record.FastLegJson ?? string.Empty
+                FastLegJson = record.FastLegJson ?? string.Empty,
+                HoldConfirmMode = holdConfirmMode,
+                OpenHoldConfirmTicks = record.OpenHoldConfirmTicks,
+                CloseHoldConfirmTicks = record.CloseHoldConfirmTicks
             };
     }
 
@@ -365,7 +379,12 @@ public sealed record ConfigLoadResult(
     FastLegConfig? FastLeg = null,
     string? FastLegError = null,
     // JSON thô của cột, để cửa sổ Config điền lại cả cấu hình đang TẮT (FastLeg lúc đó là Disabled).
-    string FastLegJson = "")
+    string FastLegJson = "",
+    // hold_confirm_mode (docs/HOLD-CONFIRM-MODE-MIGRATION.sql). Đặt CUỐI để không lệch tham số positional.
+    // Ms/0/0 = hành vi cũ (cũng là giá trị của NotFound / Failed).
+    HoldConfirmMode HoldConfirmMode = HoldConfirmMode.Ms,
+    int OpenHoldConfirmTicks = 0,
+    int CloseHoldConfirmTicks = 0)
 {
     public static ConfigLoadResult Success(
         string machineHostName,

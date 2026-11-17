@@ -40,7 +40,10 @@ public sealed record GapCycleSnapshot(
     double? LateCenter,
     double? Drift,
     double DurationMs,
-    string Reason)
+    string Reason,
+    // Số tick của chân chậm hơn (min A, B) kể từ mẫu đầu Cycle; mẫu đầu không đếm. Được đếm ở
+    // cả hai mode nhưng CHỈ mode ticks dùng để quyết định / ghi log. FIXED_SIZE luôn 0.
+    int TickCount = 0)
 {
     public int SampleCount => Gaps.Count;
 }
@@ -56,7 +59,19 @@ public sealed record GapCycleUpdateResult(
 /// </summary>
 public sealed class GapCycleState
 {
+    /// <summary>
+    /// Trần số mẫu cho Cycle đang CHỜ TICK ở mode ticks (~10 s ở nhịp 50 ms). Chân chậm đứng giá lâu
+    /// (đêm, feed thưa) mà gap vẫn trong vùng confirm thì Cycle Collecting mãi và <c>_gaps</c> phình
+    /// 20 mẫu/giây — đúng lỗi treo UI ở CLAUDE.md §5. Chạm trần ⇒ NewCycle từ mẫu hiện tại.
+    /// Chỉ áp ở mode ticks; mode ms không đổi.
+    /// </summary>
+    public const int TicksModeMaxCollectingSamples = 200;
+
     private readonly List<int> _gaps = [];
+    // hold_confirm_mode=ticks: số lần (bid,ask) của từng chân đổi trong Cycle hiện tại.
+    // Tăng ở nhánh join (mẫu đầu do StartNewCycle không đếm), xoá trong Clear().
+    private int _tickCountA;
+    private int _tickCountB;
     private FixedSizeSignalCycle<int>? _fixedCycle;
     private string _cycleId = string.Empty;
     private DateTime? _startedAtUtc;
@@ -195,7 +210,11 @@ public sealed class GapCycleState
         bool confirmSatisfied,
         GapStabilityConfig config,
         int holdConfirmMs,
-        int limitMaxGap = 0)
+        int limitMaxGap = 0,
+        HoldConfirmMode holdConfirmMode = HoldConfirmMode.Ms,
+        int holdConfirmTicks = 0,
+        bool isNewTickA = true,
+        bool isNewTickB = true)
     {
         ArgumentNullException.ThrowIfNull(config);
         if (!config.TryValidate(out var configError))
@@ -208,6 +227,13 @@ public sealed class GapCycleState
             throw new ArgumentOutOfRangeException(
                 nameof(holdConfirmMs),
                 "Hold Confirm phải >= 0.");
+        }
+
+        if (holdConfirmTicks < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(holdConfirmTicks),
+                "Hold Confirm ticks phải >= 0.");
         }
 
         _lastMinStableSamples = config.MinStableSamples;
@@ -300,20 +326,53 @@ public sealed class GapCycleState
         var previousStatus = _status;
         _gaps.Add(gapValue);
         _lastTickUtc = timestampUtc;
+        if (isNewTickA)
+        {
+            _tickCountA++;
+        }
+
+        if (isNewTickB)
+        {
+            _tickCountB++;
+        }
 
         var metrics = GapStabilityCalculator.Calculate(_gaps, config);
         _metrics = metrics;
         _metricsFromGaps = true;
         var durationMs = CalculateDurationMs();
         var enoughSamples = _gaps.Count >= config.MinStableSamples;
-        var enoughDuration = durationMs >= holdConfirmMs;
+        // hold_confirm_mode=ticks thay điều kiện thời gian bằng số tick của chân chậm hơn: gap ảo là
+        // lúc chân nhanh đã chạy mà chân chậm chưa cập nhật. Mode ms giữ nguyên điều kiện cũ.
+        var usesTicks = holdConfirmMode == HoldConfirmMode.Ticks;
+        var enoughDuration = usesTicks
+            ? SlowLegTickCount >= holdConfirmTicks
+            : durationMs >= holdConfirmMs;
 
         if (!enoughSamples || !enoughDuration)
         {
+            if (usesTicks
+                && enoughSamples
+                && _gaps.Count >= Math.Max(TicksModeMaxCollectingSamples, config.MinStableSamples))
+            {
+                var stalledCompleted = BuildSnapshot(metrics);
+                StartNewCycle(
+                    timestampUtc,
+                    gapValue,
+                    config,
+                    $"Chân chậm chưa đủ tick ({stalledCompleted.TickCount}/{holdConfirmTicks}) sau " +
+                    $"{stalledCompleted.SampleCount} mẫu; tạo Cycle mới.");
+                return new GapCycleUpdateResult(
+                    GapCycleTransition.NewCycle,
+                    BuildSnapshot(),
+                    stalledCompleted);
+            }
+
             _status = GapCycleStatus.Collecting;
             _reason = !enoughSamples
                 ? $"Chưa đủ mẫu: {_gaps.Count}/{config.MinStableSamples}."
-                : $"Chưa đủ Hold Confirm: {durationMs:0.####}/{holdConfirmMs} ms.";
+                : usesTicks
+                    ? $"Chưa đủ Hold Confirm: {SlowLegTickCount}/{holdConfirmTicks} tick."
+                    : $"Chưa đủ Hold Confirm: {durationMs:0.####}/{holdConfirmMs} ms.";
             return new GapCycleUpdateResult(
                 GapCycleTransition.Joined,
                 BuildSnapshot(metrics));
@@ -496,9 +555,13 @@ public sealed class GapCycleState
         _reason = reason;
     }
 
+    private int SlowLegTickCount => Math.Min(_tickCountA, _tickCountB);
+
     private void Clear()
     {
         _gaps.Clear();
+        _tickCountA = 0;
+        _tickCountB = 0;
         _cycleId = string.Empty;
         _startedAtUtc = null;
         _lastTickUtc = null;
@@ -527,7 +590,8 @@ public sealed class GapCycleState
             metrics?.LateCenter,
             metrics?.Drift,
             CalculateDurationMs(),
-            _reason);
+            _reason,
+            SlowLegTickCount);
     }
 
     private double CalculateDurationMs() =>

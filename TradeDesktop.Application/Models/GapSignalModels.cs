@@ -45,6 +45,18 @@ public enum TradingPositionSide
     Sell = 2
 }
 
+/// <summary>
+/// Cách đo "thời gian giữ" của Cycle gap (cột <c>hold_confirm_mode</c>, chung cho Open và Close).
+/// <see cref="Ms"/> = đủ <c>*_hold_confirm_ms</c> (mặc định, hành vi cũ).
+/// <see cref="Ticks"/> = đủ <c>*_hold_confirm_ticks</c> tick của CHÂN CHẬM HƠN; <c>*_hold_confirm_ms</c> bị bỏ qua.
+/// Chỉ áp cho Open / Normal Close / SOS Close; TP luôn đo theo ms.
+/// </summary>
+public enum HoldConfirmMode
+{
+    Ms = 0,
+    Ticks = 1
+}
+
 public sealed record GapSignalSnapshot(
     DateTime TimestampUtc,
     decimal? ExchangeABid,
@@ -55,7 +67,12 @@ public sealed record GapSignalSnapshot(
     int? GapSell,
     int PointMultiplier,
     // Phán quyết sàn C của chính tick này. null = sàn C tắt ⇒ hành vi y hệt khi chưa có sàn C.
-    FastLegVerdict? FastLeg = null);
+    FastLegVerdict? FastLeg = null,
+    // hold_confirm_mode: (bid,ask) của chân A / B khác snapshot trước. Đánh dấu MỘT chỗ ở
+    // PortfolioCoordinator.ProcessSnapshot (GapTickChangeTracker). Mặc định true: caller không đánh
+    // dấu thì mỗi mẫu là một tick. Mode ms không đọc hai cờ này.
+    bool IsNewTickA = true,
+    bool IsNewTickB = true);
 
 /// <summary>
 /// Các giới hạn dùng để phân loại một chu kỳ Gap là ổn định.
@@ -152,7 +169,13 @@ public sealed record GapSignalConfirmationConfig(
     int SignalCycleSize = 10,
     // Trần cho GAP CUỐI của Open Cycle (signed, đối xứng): Buy cần lastGap < C, Sell cần
     // lastGap > -C. null = tắt gate; 0 và số âm vẫn hiệu lực. Vi phạm => reset Cycle.
-    int? OpenMaxLastGapPts = null);
+    int? OpenMaxLastGapPts = null,
+    // hold_confirm_mode: Ms = hành vi cũ. Ticks = Open / Normal Close / SOS Close đo hold bằng
+    // Open/CloseHoldConfirmTicks tick của chân chậm hơn thay cho HoldConfirmMs / CloseHoldConfirmMs.
+    // TP và legacy path (stability null) luôn dùng ms.
+    HoldConfirmMode HoldConfirmMode = HoldConfirmMode.Ms,
+    int OpenHoldConfirmTicks = 0,
+    int CloseHoldConfirmTicks = 0);
 
 public sealed record GapSignalTriggerResult(
     bool Triggered,

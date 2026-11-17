@@ -142,7 +142,11 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             confirmSatisfied: snapshot.GapBuy is int buyGap && buyGap >= signedConfirm,
             stabilityConfig,
             normalizedHoldMs,
-            config.LimitMaxGap);
+            config.LimitMaxGap,
+            config.HoldConfirmMode,
+            Math.Max(0, config.OpenHoldConfirmTicks),
+            snapshot.IsNewTickA,
+            snapshot.IsNewTickB);
         _buyObservation = SignalCycleObservation.ObserveGap(
             _buyObservation, buyUpdate, snapshot.GapBuy, snapshot.TimestampUtc);
         LogOpenTransition(
@@ -178,7 +182,11 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             confirmSatisfied: snapshot.GapSell is int sellGap && sellGap <= -signedConfirm,
             stabilityConfig,
             normalizedHoldMs,
-            config.LimitMaxGap);
+            config.LimitMaxGap,
+            config.HoldConfirmMode,
+            Math.Max(0, config.OpenHoldConfirmTicks),
+            snapshot.IsNewTickA,
+            snapshot.IsNewTickB);
         _sellObservation = SignalCycleObservation.ObserveGap(
             _sellObservation, sellUpdate, snapshot.GapSell, snapshot.TimestampUtc);
         LogOpenTransition(
@@ -358,22 +366,16 @@ public sealed class GapSignalConfirmationEngine : IGapSignalConfirmationEngine, 
             minimumSamplesToLog,
             policy);
 
+    // Nhánh TIME: chu kỳ chốt theo hold (ms hoặc tick chân chậm, theo hold_confirm_mode) + MinStableSamples.
     private static GapCycleDiagnostics.PolicyContext CreateDiagnosticPolicy(
         GapSignalConfirmationConfig config,
         GapStabilityConfig stability,
         int holdConfirmMs) =>
-        new(
+        GapCycleDiagnostics.CreateTimeBranchPolicy(
             stability,
             holdConfirmMs,
-            config.LimitMaxGap,
-            config.DiagnosticMaxGap,
-            config.DiagnosticConfigId,
-            config.DiagnosticSymbol,
-            // Nhánh TIME: chu kỳ chốt theo hold-time + MinStableSamples.
-            // SignalCycleSize chỉ đi kèm log để đối chiếu với nhánh TICK.
-            ConfirmationMode: "TIME_AND_MIN_SAMPLES",
-            SignalCycleSize: config.SignalCycleSize,
-            HoldConfirmIgnored: false);
+            config,
+            Math.Max(0, config.OpenHoldConfirmTicks));
 
     internal static GapSignalTriggerResult? ProcessSide(
         GapSignalTriggerType triggerType,

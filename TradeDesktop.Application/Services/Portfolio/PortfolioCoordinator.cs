@@ -29,6 +29,7 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
     private static readonly TimeSpan SnapshotWallClockTolerance = TimeSpan.FromMinutes(5);
 
     private readonly PortfolioState _state = new();
+    private readonly GapTickChangeTracker _tickChangeTracker = new();
     private readonly IOpenSignalEngine _openSignalEngine;
     private readonly ICloseSignalEngineFactory _closeSignalEngineFactory;
     private readonly ISlotLogger? _logger;
@@ -175,6 +176,10 @@ public sealed class PortfolioCoordinator : IPortfolioCoordinator
         GapSignalSnapshot snapshot,
         GapSignalConfirmationConfig config)
     {
+        // 0. hold_confirm_mode=ticks: đánh dấu tick A/B TRƯỚC mọi early-return, để snapshot bị bỏ qua
+        // (non-auto barrier, slot đang holding...) vẫn làm mốc so giá cho snapshot kế tiếp, và engine
+        // Open lẫn engine Close của mọi slot thấy cùng một bộ cờ. Mode ms không đọc hai cờ này.
+        snapshot = _tickChangeTracker.Mark(snapshot);
 
         // 1. Cache hold range for fallback (CanCheckClose floor protection).
         _lastSeenStartTimeHold = Math.Max(0, config.StartTimeHold);

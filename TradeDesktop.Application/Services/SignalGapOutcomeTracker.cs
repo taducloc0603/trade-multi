@@ -45,7 +45,12 @@ public sealed record SignalOutcomeSignal(
     int CloseHoldConfirmMs = 0,
     // Phán quyết sàn C tại tick signal. null = sàn C tắt ⇒ dòng [SIGNAL] không có trường fast_*.
     FastLegVerdict? FastLeg = null,
-    long FastLegDeferredMs = 0);
+    long FastLegDeferredMs = 0,
+    // hold_confirm_mode. Ms ⇒ dòng [SIGNAL] giữ nguyên từng ký tự; Ticks ⇒ confirmation_mode=TICKS_AND_MIN_SAMPLES
+    // kèm open/close_hold_confirm_ticks.
+    HoldConfirmMode HoldConfirmMode = HoldConfirmMode.Ms,
+    int OpenHoldConfirmTicks = 0,
+    int CloseHoldConfirmTicks = 0);
 
 /// <summary>
 /// Ghi lại gap tại thời điểm signal kèm dãy gap của N tick kế tiếp, phục vụ đánh giá
@@ -551,7 +556,10 @@ public sealed class SignalGapOutcomeTracker
           .Append(" signal_cycle_size=").Append(Value(s.SignalCycleSize))
           .Append(" open_hold_confirm_ms=").Append(Value(s.HoldConfirmMs))
           .Append(" close_hold_confirm_ms=").Append(Value(s.CloseHoldConfirmMs))
-          .Append(" confirmation_mode=TIME_AND_MIN_SAMPLES")
+          .Append(s.HoldConfirmMode == HoldConfirmMode.Ticks
+              ? " confirmation_mode=TICKS_AND_MIN_SAMPLES open_hold_confirm_ticks=" + Value(s.OpenHoldConfirmTicks) +
+                " close_hold_confirm_ticks=" + Value(s.CloseHoldConfirmTicks)
+              : " confirmation_mode=TIME_AND_MIN_SAMPLES")
           .Append(" a_bid=").Append(Price(s.ABid))
           .Append(" a_ask=").Append(Price(s.AAsk))
           .Append(" b_bid=").Append(Price(s.BBid))
