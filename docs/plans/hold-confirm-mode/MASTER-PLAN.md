@@ -292,3 +292,23 @@ Chi tiết từng phase: plan đã duyệt (bản sao nằm trong phiên Claude 
     - DB laptop đã khôi phục (`ms`, 0/0, `fast_leg` như cũ).
     - App đã đóng, không còn `state.json`.
   - Chưa commit gì; user tự commit.
+- 2026-11-17, P7 phát hành **v1.0.124** (user yêu cầu commit + push + phát hành):
+  - Commit `75df93c` (37 file), push `origin/feature/hold-confirm-mode`. Đẩy kèm 7 commit fast-leg/resync chưa từng
+    lên origin.
+  - Gate trước commit: 1880 test, 11 fail, `new_fail=0`; build Release 0 error.
+  - Phát hành bằng `gh workflow run build.yml --ref feature/hold-confirm-mode`, run #124 `success`, đủ 4 asset.
+    - CI: 1880 test, 15 fail. Bốn fail thêm là `TradeSignalLogBuilderTests.BuildLogLines_*`: test kỳ vọng giờ GMT+7
+      nhưng runner CI chạy UTC. Bốn test này cũng fail ở run 1.0.123, nên trên CI baseline thực tế là 15.
+    - Tag `v1.0.124` trỏ `0662196`, là HEAD nhánh mặc định `dev-5-release-111-ctrader`. Đây là hành vi sẵn có của
+      `action-gh-release` (tag 1.0.123 cũng vậy). Binary được build từ `75df93c`.
+  - Giữ v1.0.124 ở pre-release trong lúc test thực tế exe đã phát hành.
+    - SHA256 khớp asset, FileVersion 1.0.124.
+    - `run-smoke.ps1` thêm `-AppExe`.
+  - Lần chạy 15'+15' bị dừng lúc 10:21 theo yêu cầu cần kết quả trước 10:30. DB đã restore và precheck xác nhận.
+  - Chạy lại 3'+3' (`result-20261117_102115.txt`): 4/5 gate True.
+    - `ticks_has_ticks_mode=False` vì trong 3' mode ticks gap đứng ở `gap_buy` −13/−14, `gap_sell` +23, không lần nào
+      chạm confirm 5, nên không có `[OPEN_CYCLE]` nào.
+    - Đây không phải lỗi exe: dòng `[CONFIG]` vẫn ra `TICKS_AND_MIN_SAMPLES`, 0 ERROR, 0 ROUTER.
+  - User chấp nhận kết quả ⇒ v1.0.124 thành **Latest** lúc 10:30.
+  - Sau đó DB laptop là `ms` 0/0, app đóng, không còn `state.json`.
+  - Không deploy VPS/live (Rule 0.0); user tự gửi khách và cập nhật VPS.
